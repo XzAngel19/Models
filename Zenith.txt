@@ -1214,24 +1214,48 @@ local function initializeScript()
 		BackgroundColor3 = ELEMENT_COLOR,
 		BackgroundTransparency = 0.2,
 		BorderSizePixel = 0,
-		PlaceholderText = "Search",
+		PlaceholderText = "Search controls",
 		PlaceholderColor3 = DIM_TEXT_COLOR,
 		Text = "",
 		TextColor3 = TEXT_COLOR,
 		TextSize = 12,
 		Font = TEXT_FONT,
+		TextXAlignment = Enum.TextXAlignment.Left,
 		ClearTextOnFocus = false,
 	}, titleBar)
 
 	create("UICorner", { CornerRadius = UDim.new(0, 5) }, searchBox)
+	create("UIPadding", {
+		PaddingLeft = UDim.new(0, 6),
+		PaddingRight = UDim.new(0, 36),
+	}, searchBox)
 	local searchStroke = addStroke(searchBox, ACCENT_A, 1)
+	local searchFocused = false
+	local clearSearch = create("TextButton", {
+		Name = "ClearSearch",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -72, 0.5, 0),
+		Size = UDim2.fromOffset(34, 20),
+		BackgroundTransparency = 1,
+		Text = "Clear",
+		TextColor3 = OFF_TEXT_COLOR,
+		TextSize = 11,
+		Font = BOLD_FONT,
+		AutoButtonColor = false,
+		Visible = false,
+	}, titleBar)
+	clearSearch.Activated:Connect(function()
+		searchBox.Text = ""
+	end)
 
 	searchBox.Focused:Connect(function()
+		searchFocused = true
 		tween(searchStroke, FAST_TWEEN, { Transparency = 0 })
 	end)
 
 	searchBox.FocusLost:Connect(function()
-		tween(searchStroke, FAST_TWEEN, { Transparency = 1 })
+		searchFocused = false
+		tween(searchStroke, FAST_TWEEN, { Transparency = searchBox.Text == "" and 1 or 0.25 })
 	end)
 
 	local minimizeButton = createTitleButton(titleBar, "-", -60, ACCENT_B)
@@ -1641,13 +1665,13 @@ local function initializeScript()
 
 	searchBox:GetPropertyChangedSignal("Text"):Connect(function()
 		local query = string.lower(searchBox.Text)
+		clearSearch.Visible = query ~= ""
+		tween(searchStroke, FAST_TWEEN, {
+			Transparency = searchFocused and 0 or (query == "" and 1 or 0.25),
+		})
 
 		for _, element in ZenithHub.searchables do
 			element.Visible = (query == "" or string.find(string.lower(element.Name), query, 1, true) ~= nil) and not element:GetAttribute("GroupHidden")
-		end
-
-		for _, section in ZenithHub.sections do
-			section.Visible = query == ""
 		end
 
 		for _, box in ZenithHub.boxes do
@@ -1660,6 +1684,10 @@ local function initializeScript()
 				end
 			end
 
+			-- Keep matching section headings visible so filtered results have context.
+			for _, section in ZenithHub.sections do
+				if section.Parent == box then section.Visible = anyVisible end
+			end
 			box.Visible = anyVisible
 		end
 	end)
