@@ -1,0 +1,1163 @@
+-- Speed Hub X | Version: 3.7.0
+-- Standalone client-sided GUI for script executors (live Roblox client).
+-- Layout, colours and typography are matched to the reference screenshot.
+-- Every feature callback is an empty stub; only UI behaviour is implemented.
+
+-- Services.
+local playersService = game:GetService("Players")
+local userInputService = game:GetService("UserInputService")
+
+-- Constants.
+local WINDOW_WIDTH = 1242
+local WINDOW_HEIGHT = 789
+local GUI_NAME = "SpeedHubX"
+local TITLE_TEXT = "Speed Hub X | Version: 3.7.0"
+
+---@module Menu.Theme
+-- Colour palette sampled directly from the reference screenshot.
+local Theme = {
+	windowBackground = Color3.fromRGB(9, 9, 9),
+	controlBackground = Color3.fromRGB(30, 30, 30),
+	controlStroke = Color3.fromRGB(38, 38, 38),
+	toggleWell = Color3.fromRGB(40, 40, 40),
+	valueBox = Color3.fromRGB(43, 43, 43),
+	tabSelected = Color3.fromRGB(165, 6, 5),
+	toggleOn = Color3.fromRGB(202, 0, 2),
+	accentStrip = Color3.fromRGB(80, 10, 12),
+	windowStroke = Color3.fromRGB(34, 16, 18),
+	text = Color3.fromRGB(255, 255, 255),
+	textMuted = Color3.fromRGB(160, 160, 160),
+}
+
+---@module Menu.Utility
+-- Instance helpers shared by every component.
+local Utility = {}
+
+---Create an Instance, apply properties, then parent it.
+---@param className string
+---@param properties table
+---@param parent Instance?
+---@return Instance
+function Utility.create(className, properties, parent)
+	local instance = Instance.new(className)
+	for propertyName, propertyValue in pairs(properties) do
+		instance[propertyName] = propertyValue
+	end
+	if parent then
+		instance.Parent = parent
+	end
+	return instance
+end
+
+---Round the corners of an instance.
+---@param parent Instance
+---@param radius number
+function Utility.corner(parent, radius)
+	Utility.create("UICorner", {
+		CornerRadius = UDim.new(0, radius),
+	}, parent)
+end
+
+---Draw a border stroke around an instance.
+---@param parent Instance
+---@param color Color3
+---@param thickness number
+function Utility.stroke(parent, color, thickness)
+	Utility.create("UIStroke", {
+		Color = color,
+		Thickness = thickness,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	}, parent)
+end
+
+---Resolve a safe parent for the ScreenGui using an executor fallback chain.
+---@return Instance
+function Utility.getSafeParent()
+	-- Prefer the executor's hidden UI container.
+	if gethui then
+		local success, hiddenGui = pcall(gethui)
+		if success and hiddenGui then
+			return hiddenGui
+		end
+	end
+	-- Fall back to CoreGui.
+	local coreSuccess, coreGui = pcall(function()
+		return game:GetService("CoreGui")
+	end)
+	if coreSuccess and coreGui then
+		return coreGui
+	end
+	-- Fall back to PlayerGui, then Players as a last resort.
+	local localPlayer = playersService.LocalPlayer
+	if localPlayer then
+		local playerGui = localPlayer:FindFirstChildOfClass("PlayerGui")
+		if playerGui then
+			return playerGui
+		end
+	end
+	return playersService
+end
+
+---Visibility scale so the window still fits smaller viewports.
+---@return number
+function Utility.getWindowScale()
+	local camera = workspace.CurrentCamera
+	local viewport = camera and camera.ViewportSize or Vector2.new(1920, 1080)
+	if viewport.Y >= WINDOW_HEIGHT + 40 then
+		return 1
+	end
+	return math.max(0.55, (viewport.Y - 40) / WINDOW_HEIGHT)
+end
+
+---@module Menu.Icons
+-- Outline icons drawn from bars so no external assets are required.
+local Icons = {}
+
+---Draw one bar between two points of a 26x26 icon canvas.
+---@param parent Instance
+---@param x1 number
+---@param y1 number
+---@param x2 number
+---@param y2 number
+---@param thickness number
+---@param color Color3
+---@return Frame
+function Icons.segment(parent, x1, y1, x2, y2, thickness, color)
+	local deltaX = x2 - x1
+	local deltaY = y2 - y1
+	local length = math.sqrt(deltaX * deltaX + deltaY * deltaY)
+	local bar = Utility.create("Frame", {
+		Name = "Segment",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromOffset((x1 + x2) / 2, (y1 + y2) / 2),
+		Size = UDim2.fromOffset(length, thickness),
+		Rotation = math.deg(math.atan2(deltaY, deltaX)),
+		BackgroundColor3 = color,
+		BorderSizePixel = 0,
+	}, parent)
+	Utility.corner(bar, thickness / 2)
+	return bar
+end
+
+---Draw a small filled dot.
+---@param parent Instance
+---@param x number
+---@param y number
+---@param size number
+---@param color Color3
+---@return Frame
+function Icons.dot(parent, x, y, size, color)
+	local dot = Utility.create("Frame", {
+		Name = "Dot",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromOffset(x, y),
+		Size = UDim2.fromOffset(size, size),
+		BackgroundColor3 = color,
+		BorderSizePixel = 0,
+	}, parent)
+	Utility.corner(dot, size / 2)
+	return dot
+end
+
+-- Icon geometry flattened from 24x24 outline paths onto a 33x33 canvas.
+local ICON_SIZE = 33
+local ICON_STROKE = 2.8
+local ICON_DATA = {
+	Home = {
+		stroke = {
+			{4.16, 9.71, 4.19, 6.53}, {4.19, 6.53, 4.98, 4.98}, {4.98, 4.98, 6.53, 4.19},
+			{6.53, 4.19, 9.71, 4.16}, {23.59, 4.16, 26.77, 4.19}, {26.77, 4.19, 28.32, 4.98},
+			{28.32, 4.98, 29.11, 6.53}, {29.11, 6.53, 29.14, 9.71}, {29.14, 23.59, 29.11, 26.77},
+			{29.11, 26.77, 28.32, 28.32}, {28.32, 28.32, 26.77, 29.11}, {26.77, 29.11, 23.59, 29.14},
+			{9.71, 29.14, 6.53, 29.11}, {6.53, 29.11, 4.98, 28.32}, {4.98, 28.32, 4.19, 26.77},
+			{4.19, 26.77, 4.16, 23.59}, {11.1, 19.43, 13.62, 21.45}, {13.62, 21.45, 16.65, 22.2},
+			{16.65, 22.2, 19.68, 21.45}, {19.68, 21.45, 22.19, 19.44},
+		},
+		dots = {
+			{12.49, 12.49, 1.39}, {20.81, 12.49, 1.39},
+		},
+	},
+	Main = {
+		stroke = {
+			{20.81, 29.14, 20.81, 17.9}, {20.81, 17.9, 19.43, 16.65}, {19.43, 16.65, 13.74, 16.66},
+			{13.74, 16.66, 12.65, 17.38}, {12.65, 17.38, 12.49, 29.14}, {4.16, 13.88, 5.05, 11.84},
+			{5.05, 11.84, 14.96, 3.35}, {14.96, 3.35, 18, 3.12}, {18, 3.12, 28.88, 12.71},
+			{28.88, 12.71, 28.81, 27.67}, {28.81, 27.67, 26.5, 29.13}, {26.5, 29.13, 5.63, 28.81},
+			{5.63, 28.81, 4.18, 26.63}, {4.18, 26.63, 4.16, 13.88},
+		},
+	},
+	Farming = {
+		stroke = {
+			{19.43, 18.04, 7.48, 29.94}, {7.48, 29.94, 5.4, 30.51}, {5.4, 30.51, 3.58, 29.62},
+			{3.58, 29.62, 2.78, 27.76}, {2.78, 27.76, 3.36, 25.81}, {3.36, 25.81, 15.26, 13.87},
+			{22.16, 5.59, 14.66, 2.9}, {14.66, 2.9, 10.37, 2.9}, {10.37, 2.9, 7.32, 3.77},
+			{7.32, 3.77, 6.94, 5.04}, {6.94, 5.04, 7.75, 6.45}, {7.75, 6.45, 16.65, 11.1},
+			{22.2, 16.65, 26.85, 25.55}, {26.85, 25.55, 28.26, 26.36}, {28.26, 26.36, 29.53, 25.98},
+			{29.53, 25.98, 30.4, 22.94}, {30.4, 22.94, 30.4, 18.68}, {30.4, 18.68, 27.75, 11.2},
+			{25.46, 4.65, 23.31, 4.47}, {23.31, 4.47, 15.43, 12.45}, {15.43, 12.45, 15.57, 14.15},
+			{15.57, 14.15, 19.38, 17.87}, {19.38, 17.87, 21.2, 17.64}, {21.2, 17.64, 28.97, 9.75},
+			{28.97, 9.75, 28.83, 8.05}, {28.83, 8.05, 25.46, 4.65},
+		},
+	},
+	Killer = {
+		stroke = {
+			{16.7, 23.6, 15.48, 20.66}, {15.48, 20.66, 11.58, 19.29}, {11.58, 19.29, 11.14, 18.21},
+			{11.14, 18.21, 13.84, 15.53}, {13.84, 15.53, 18.43, 14.61}, {18.43, 14.61, 19.38, 12.97},
+			{19.38, 12.97, 19.12, 11.22}, {19.12, 11.22, 16.79, 9.72}, {16.79, 9.72, 12.15, 9.77},
+			{12.15, 9.77, 10.08, 10.75}, {10.08, 10.75, 4.91, 16.36}, {4.91, 16.36, 4.41, 21.76},
+			{4.41, 21.76, 5.65, 24.97}, {5.65, 24.97, 7.92, 27.75}, {7.92, 27.75, 10.95, 29.65},
+			{10.95, 29.65, 14.3, 30.48}, {14.3, 30.48, 21.44, 29.99}, {21.44, 29.99, 26.63, 26.45},
+			{26.63, 26.45, 29.01, 21.08}, {29.01, 21.08, 29.11, 9.3}, {29.11, 9.3, 28.2, 7.63},
+			{28.2, 7.63, 26.43, 6.94}, {26.43, 6.94, 24.63, 7.54}, {24.63, 7.54, 23.64, 9.16},
+			{23.64, 9.16, 23.67, 13.17}, {23.67, 13.17, 24.97, 14.89}, {24.97, 14.89, 27.75, 14.89},
+			{27.75, 14.89, 29.14, 12.49}, {19.27, 13.41, 21.35, 13.82}, {21.35, 13.82, 23.19, 12.53},
+			{23.19, 12.53, 23.53, 6.39}, {23.53, 6.39, 22.43, 4.68}, {22.43, 4.68, 20.47, 4.18},
+			{20.47, 4.18, 18.78, 5.05}, {18.78, 5.05, 18.04, 6.94}, {12.49, 6.94, 11.92, 5.26},
+			{11.92, 5.26, 10.6, 4.31}, {10.6, 4.31, 7.59, 5.15}, {7.59, 5.15, 6.94, 6.8},
+			{6.94, 6.8, 6.94, 13.88}, {12.49, 9.71, 12.71, 4.47}, {12.71, 4.47, 13.76, 3.22},
+			{13.76, 3.22, 15.47, 2.78}, {15.47, 2.78, 17.87, 4.6}, {17.87, 4.6, 18.04, 10.08},
+		},
+	},
+	Misc = {
+		stroke = {
+			{11.1, 4.16, 16.65, 15.26}, {16.65, 15.26, 23.59, 8.32}, {23.59, 8.32, 30.52, 29.14},
+			{30.52, 29.14, 2.77, 29.14}, {2.77, 29.14, 11.1, 4.16}, {5.74, 20.92, 8.99, 19.61},
+			{8.99, 19.61, 12.11, 19.53}, {12.11, 19.53, 19.21, 22.93}, {19.21, 22.93, 22.3, 23.59},
+			{22.3, 23.59, 28.07, 21.77},
+		},
+	},
+}
+
+---Build an icon by name into a parent and return its parts.
+---@param name string
+---@param parent Instance
+---@param color Color3
+---@return table
+function Icons.build(name, parent, color)
+	local canvas = Utility.create("Frame", {
+		Name = name .. "Icon",
+		Size = UDim2.fromOffset(ICON_SIZE, ICON_SIZE),
+		BackgroundTransparency = 1,
+	}, parent)
+	local data = ICON_DATA[name]
+	if not data then
+		return {}
+	end
+	-- Every stroke entry becomes one rounded bar.
+	for _, segmentData in ipairs(data.stroke) do
+		Icons.segment(
+			canvas,
+			segmentData[1],
+			segmentData[2],
+			segmentData[3],
+			segmentData[4],
+			ICON_STROKE,
+			color
+		)
+	end
+	-- Loose dots (eyes of the scan face) are drawn as circles.
+	for _, dotData in ipairs(data.dots or {}) do
+		Icons.dot(canvas, dotData[1], dotData[2], dotData[3], color)
+	end
+	local parts = {}
+	for _, child in ipairs(canvas:GetDescendants()) do
+		if child:IsA("Frame") then
+			table.insert(parts, child)
+		end
+	end
+	return parts
+end
+
+---@module Menu.Window
+-- Core window builder: shell, title bar, close button and dragging.
+local Window = {}
+
+---Build the main window shell.
+---@param screenGui ScreenGui
+---@return Frame, Frame
+function Window.new(screenGui)
+	-- Window shell.
+	local windowFrame = Utility.create("Frame", {
+		Name = "Window",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0.5, 0),
+		Size = UDim2.fromOffset(WINDOW_WIDTH, WINDOW_HEIGHT),
+		BackgroundColor3 = Theme.windowBackground,
+		BorderSizePixel = 0,
+		ClipsDescendants = true,
+	}, screenGui)
+	Utility.corner(windowFrame, 10)
+	Utility.stroke(windowFrame, Theme.windowStroke, 1)
+
+	-- Thin accent strip along the right edge.
+	Utility.create("Frame", {
+		Name = "AccentStrip",
+		Position = UDim2.fromOffset(WINDOW_WIDTH - 3, 78),
+		Size = UDim2.fromOffset(3, WINDOW_HEIGHT - 81),
+		BackgroundColor3 = Theme.accentStrip,
+		BorderSizePixel = 0,
+	}, windowFrame)
+
+	-- Title bar doubles as the drag handle.
+	local titleBar = Utility.create("Frame", {
+		Name = "TitleBar",
+		Size = UDim2.new(1, 0, 0, 64),
+		BackgroundTransparency = 1,
+		Active = true,
+	}, windowFrame)
+
+	Utility.create("TextLabel", {
+		Name = "Title",
+		Position = UDim2.fromOffset(35, 0),
+		Size = UDim2.new(0, 700, 1, 0),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 23,
+		TextColor3 = Theme.text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Center,
+		Text = TITLE_TEXT,
+	}, titleBar)
+
+	-- Close button drawn from two crossing bars.
+	local closeButton = Utility.create("TextButton", {
+		Name = "Close",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromOffset(WINDOW_WIDTH - 37, 31),
+		Size = UDim2.fromOffset(44, 44),
+		BackgroundTransparency = 1,
+		Text = "",
+		AutoButtonColor = false,
+	}, titleBar)
+	local closeCanvas = Utility.create("Frame", {
+		Name = "Canvas",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0.5, 0),
+		Size = UDim2.fromOffset(19, 19),
+		BackgroundTransparency = 1,
+	}, closeButton)
+	Icons.segment(closeCanvas, 0.5, 0.5, 18.5, 18.5, 2.3, Theme.text)
+	Icons.segment(closeCanvas, 18.5, 0.5, 0.5, 18.5, 2.3, Theme.text)
+
+	-- Drag state.
+	local isDragging = false
+	local dragOffset = Vector2.zero
+
+	---@param input InputObject
+	local function isPrimaryPointer(input)
+		return input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+	end
+
+	titleBar.InputBegan:Connect(function(input)
+		if isPrimaryPointer(input) then
+			isDragging = true
+			local mouse = userInputService:GetMouseLocation()
+			local origin = windowFrame.AbsolutePosition
+			dragOffset = Vector2.new(mouse.X - origin.X, mouse.Y - origin.Y)
+		end
+	end)
+
+	userInputService.InputChanged:Connect(function(input)
+		if not isDragging then
+			return
+		end
+		if input.UserInputType ~= Enum.UserInputType.MouseMovement
+			and input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+		local mouse = userInputService:GetMouseLocation()
+		-- dragOffset holds the grab point inside the window, so the target is the new top-left.
+		local target = Vector2.new(mouse.X - dragOffset.X, mouse.Y - dragOffset.Y)
+		local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920, 1080)
+		local windowSize = windowFrame.AbsoluteSize
+		-- Keep the whole window on screen, then convert back to centre-anchored position.
+		local clampedX = math.clamp(target.X, 0, math.max(0, viewport.X - windowSize.X))
+		local clampedY = math.clamp(target.Y, 0, math.max(0, viewport.Y - windowSize.Y))
+		windowFrame.Position = UDim2.fromOffset(clampedX + windowSize.X / 2, clampedY + windowSize.Y / 2)
+	end)
+
+	userInputService.InputEnded:Connect(function(input)
+		if isPrimaryPointer(input) then
+			isDragging = false
+		end
+	end)
+
+	-- Close simply hides the menu.
+	closeButton.MouseButton1Click:Connect(function()
+		screenGui.Enabled = false
+	end)
+
+	return windowFrame, titleBar
+end
+
+---@module Menu.Navigation
+-- Sidebar buttons and page switching.
+local Navigation = {}
+
+---Create the sidebar tab buttons.
+---@param parent Frame
+---@param tabs table
+---@param onSelect function
+---@return table
+function Navigation.new(parent, tabs, onSelect)
+	local buttons = {}
+
+	for index, tab in ipairs(tabs) do
+		-- Tab background.
+		local button = Utility.create("TextButton", {
+			Name = tab.id,
+			Position = UDim2.fromOffset(0, (index - 1) * 66),
+			Size = UDim2.fromOffset(311, 54),
+			BackgroundColor3 = Theme.controlBackground,
+			BorderSizePixel = 0,
+			Text = "",
+			AutoButtonColor = false,
+		}, parent)
+		Utility.corner(button, 12)
+
+		-- Icon sits to the left of the label.
+		local iconHolder = Utility.create("Frame", {
+			Name = "IconHolder",
+			Position = UDim2.fromOffset(14, 11),
+			Size = UDim2.fromOffset(ICON_SIZE, ICON_SIZE),
+			BackgroundTransparency = 1,
+		}, button)
+		local iconParts = Icons.build(tab.icon, iconHolder, Theme.text)
+
+		-- Label text starts with the reference "| " prefix.
+		local label = Utility.create("TextLabel", {
+			Name = "Label",
+			Position = UDim2.fromOffset(57, 0),
+			Size = UDim2.new(1, -67, 1, 0),
+			BackgroundTransparency = 1,
+			Font = Enum.Font.GothamMedium,
+			TextSize = 20,
+			TextColor3 = Theme.text,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Center,
+			Text = tab.label,
+		}, button)
+
+		button.MouseButton1Click:Connect(function()
+			onSelect(tab.id)
+		end)
+
+		buttons[tab.id] = {
+			button = button,
+			label = label,
+			iconParts = iconParts,
+		}
+	end
+
+	return buttons
+end
+
+---Repaint the sidebar for the active tab.
+---@param buttons table
+---@param selectedId string
+function Navigation.refresh(buttons, selectedId)
+	for tabId, entry in pairs(buttons) do
+		local isSelected = tabId == selectedId
+		entry.button.BackgroundColor3 = isSelected and Theme.tabSelected or Theme.controlBackground
+		entry.label.TextTransparency = isSelected and 0.35 or 0
+		for _, part in ipairs(entry.iconParts) do
+			part.BackgroundTransparency = isSelected and 0.35 or 0
+		end
+	end
+end
+
+---@module Menu.Section
+-- Section header used to group controls.
+local Section = {}
+
+---Draw a bold section header.
+---@param parent Instance
+---@param title string
+---@param y number
+---@return TextLabel
+function Section.header(parent, title, y)
+	return Utility.create("TextLabel", {
+		Name = title,
+		Position = UDim2.fromOffset(12, y),
+		Size = UDim2.new(1, -12, 0, 30),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamBold,
+		TextSize = 26,
+		TextColor3 = Theme.text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Center,
+		Text = title,
+	}, parent)
+end
+
+---@module Menu.Controls
+-- Toggle, Dropdown, Slider and Button control builders.
+local Controls = {}
+
+-- Shared row styling.
+local ROW_WIDTH = 835
+local ROW_PADDING = 22
+local TOGGLE_ROW_HEIGHT = 67
+
+---Create a toggle row.
+---@param parent Instance
+---@param config table
+---@return table
+function Controls.Toggle(parent, config)
+	-- Row background.
+	local row = Utility.create("TextButton", {
+		Name = config.title,
+		Size = UDim2.fromOffset(ROW_WIDTH, TOGGLE_ROW_HEIGHT),
+		BackgroundColor3 = Theme.controlBackground,
+		BorderSizePixel = 0,
+		Text = "",
+		AutoButtonColor = false,
+	}, parent)
+	Utility.corner(row, 10)
+	Utility.stroke(row, Theme.controlStroke, 1)
+
+	-- Title and subtitle.
+	Utility.create("TextLabel", {
+		Name = "Title",
+		Position = UDim2.fromOffset(ROW_PADDING, 10),
+		Size = UDim2.new(1, -100, 0, 24),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 21,
+		TextColor3 = Theme.text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Center,
+		Text = config.title,
+	}, row)
+
+	Utility.create("TextLabel", {
+		Name = "Subtitle",
+		Position = UDim2.fromOffset(ROW_PADDING, 36),
+		Size = UDim2.new(1, -100, 0, 21),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham,
+		TextSize = 17,
+		TextColor3 = Theme.textMuted,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Center,
+		Text = config.subtitle or "",
+	}, row)
+
+	-- Toggle well on the right.
+	local well = Utility.create("Frame", {
+		Name = "Well",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -24, 0.5, 0),
+		Size = UDim2.fromOffset(46, 43),
+		BackgroundColor3 = Theme.toggleWell,
+		BorderSizePixel = 0,
+	}, row)
+	Utility.corner(well, 13)
+
+	-- Red dot shown while enabled.
+	local dot = Utility.create("Frame", {
+		Name = "Dot",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0.5, 0),
+		Size = UDim2.fromOffset(27, 27),
+		BackgroundColor3 = Theme.toggleOn,
+		BorderSizePixel = 0,
+		Visible = false,
+	}, well)
+	Utility.corner(dot, 14)
+
+	-- Current state.
+	local currentValue = config.default == true
+
+	-- Repaint from state.
+	local function repaint()
+		dot.Visible = currentValue
+	end
+	repaint()
+
+	-- Whole row is clickable.
+	row.MouseButton1Click:Connect(function()
+		currentValue = not currentValue
+		repaint()
+		if config.callback then
+			config.callback(currentValue)
+		end
+	end)
+
+	-- Hover feedback.
+	row.MouseEnter:Connect(function()
+		row.BackgroundColor3 = Color3.fromRGB(37, 37, 37)
+	end)
+	row.MouseLeave:Connect(function()
+		row.BackgroundColor3 = Theme.controlBackground
+	end)
+
+	return {
+		frame = row,
+		get = function()
+			return currentValue
+		end,
+		set = function(newValue)
+			currentValue = newValue == true
+			repaint()
+		end,
+	}
+end
+
+---Create a dropdown row with an inline value box.
+---@param parent Instance
+---@param config table
+---@return table
+function Controls.Dropdown(parent, config)
+	-- Row background.
+	local row = Utility.create("Frame", {
+		Name = config.title,
+		Size = UDim2.fromOffset(ROW_WIDTH, 56),
+		BackgroundColor3 = Theme.controlBackground,
+		BorderSizePixel = 0,
+		ClipsDescendants = false,
+	}, parent)
+	Utility.corner(row, 10)
+	Utility.stroke(row, Theme.controlStroke, 1)
+
+	-- Left label.
+	Utility.create("TextLabel", {
+		Name = "Title",
+		Position = UDim2.fromOffset(ROW_PADDING, 0),
+		Size = UDim2.new(0, 300, 1, 0),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham,
+		TextSize = 20,
+		TextColor3 = Theme.text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Center,
+		Text = config.title,
+	}, row)
+
+	-- Caret sitting left of the value box.
+	local caret = Utility.create("Frame", {
+		Name = "Caret",
+		Position = UDim2.fromOffset(435, 22),
+		Size = UDim2.fromOffset(20, 11),
+		BackgroundTransparency = 1,
+	}, row)
+	Icons.segment(caret, 0.5, 10.5, 10, 1, 2, Theme.text)
+	Icons.segment(caret, 10, 1, 19.5, 10.5, 2, Theme.text)
+
+	-- Value box on the right.
+	local valueBox = Utility.create("Frame", {
+		Name = "ValueBox",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -24, 0.5, 0),
+		Size = UDim2.fromOffset(335, 39),
+		BackgroundColor3 = Theme.valueBox,
+		BorderSizePixel = 0,
+		Active = true,
+	}, row)
+	Utility.corner(valueBox, 8)
+
+	local valueLabel = Utility.create("TextLabel", {
+		Name = "Value",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamBold,
+		TextSize = 28,
+		TextColor3 = Theme.text,
+		Text = config.default or config.options[1],
+	}, valueBox)
+
+	-- Click area for the row itself.
+	local clickArea = Utility.create("TextButton", {
+		Name = "ClickArea",
+		Position = UDim2.fromOffset(0, 0),
+		Size = UDim2.new(1, -360, 1, 0),
+		BackgroundTransparency = 1,
+		Text = "",
+		AutoButtonColor = false,
+	}, row)
+
+	-- Option list, hidden until opened.
+	local optionList = Utility.create("Frame", {
+		Name = "Options",
+		Position = UDim2.fromOffset(0, 60),
+		Size = UDim2.fromOffset(ROW_WIDTH, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundColor3 = Theme.valueBox,
+		BorderSizePixel = 0,
+		Visible = false,
+		ZIndex = 5,
+	}, row)
+	Utility.corner(optionList, 8)
+	Utility.stroke(optionList, Theme.controlStroke, 1)
+	Utility.create("UIListLayout", {
+		Padding = UDim.new(0, 2),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}, optionList)
+	Utility.create("UIPadding", {
+		PaddingTop = UDim.new(0, 4),
+		PaddingBottom = UDim.new(0, 4),
+	}, optionList)
+
+	local currentValue = config.default or config.options[1]
+	local isOpen = false
+
+	for index, optionName in ipairs(config.options) do
+		local optionButton = Utility.create("TextButton", {
+			Name = optionName,
+			LayoutOrder = index,
+			Size = UDim2.new(1, 0, 0, 34),
+			BackgroundTransparency = 1,
+			Font = Enum.Font.Gotham,
+			TextSize = 18,
+			TextColor3 = Theme.text,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			Text = optionName,
+			AutoButtonColor = false,
+			ZIndex = 6,
+		}, optionList)
+
+		optionButton.MouseButton1Click:Connect(function()
+			currentValue = optionName
+			valueLabel.Text = optionName
+			isOpen = false
+			optionList.Visible = false
+			caret.Rotation = 0
+			if config.callback then
+				config.callback(optionName)
+			end
+		end)
+	end
+
+	-- Toggle the list and flip the caret.
+	clickArea.MouseButton1Click:Connect(function()
+		isOpen = not isOpen
+		optionList.Visible = isOpen
+		caret.Rotation = isOpen and 180 or 0
+	end)
+	valueBox.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			isOpen = not isOpen
+			optionList.Visible = isOpen
+			caret.Rotation = isOpen and 180 or 0
+		end
+	end)
+
+	return {
+		frame = row,
+		get = function()
+			return currentValue
+		end,
+		set = function(newValue)
+			currentValue = newValue
+			valueLabel.Text = newValue
+		end,
+	}
+end
+
+---Create a slider row (library support; unused by the Main tab).
+---@param parent Instance
+---@param config table
+---@return table
+function Controls.Slider(parent, config)
+	local row = Utility.create("Frame", {
+		Name = config.title,
+		Size = UDim2.fromOffset(ROW_WIDTH, 76),
+		BackgroundColor3 = Theme.controlBackground,
+		BorderSizePixel = 0,
+	}, parent)
+	Utility.corner(row, 10)
+	Utility.stroke(row, Theme.controlStroke, 1)
+
+	Utility.create("TextLabel", {
+		Name = "Title",
+		Position = UDim2.fromOffset(ROW_PADDING, 12),
+		Size = UDim2.new(1, -100, 0, 24),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 20,
+		TextColor3 = Theme.text,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Text = config.title,
+	}, row)
+
+	local valueLabel = Utility.create("TextLabel", {
+		Name = "Value",
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -ROW_PADDING, 12),
+		Size = UDim2.fromOffset(80, 24),
+		BackgroundTransparency = 1,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 18,
+		TextColor3 = Theme.textMuted,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		Text = tostring(config.default or config.min or 0),
+	}, row)
+
+	local track = Utility.create("Frame", {
+		Name = "Track",
+		Position = UDim2.fromOffset(ROW_PADDING, 52),
+		Size = UDim2.new(1, -ROW_PADDING * 2, 0, 8),
+		BackgroundColor3 = Theme.toggleWell,
+		BorderSizePixel = 0,
+		Active = true,
+	}, row)
+	Utility.corner(track, 4)
+
+	local fill = Utility.create("Frame", {
+		Name = "Fill",
+		Size = UDim2.fromScale(0.5, 1),
+		BackgroundColor3 = Theme.toggleOn,
+		BorderSizePixel = 0,
+	}, track)
+	Utility.corner(fill, 4)
+
+	local minValue = config.min or 0
+	local maxValue = config.max or 100
+	local currentValue = config.default or minValue
+
+	local function refresh(ratio)
+		ratio = math.clamp(ratio, 0, 1)
+		currentValue = minValue + (maxValue - minValue) * ratio
+		fill.Size = UDim2.fromScale(ratio, 1)
+		valueLabel.Text = tostring(math.floor(currentValue + 0.5))
+	end
+	refresh((currentValue - minValue) / (maxValue - minValue))
+
+	local isSliding = false
+	local function applyInput(input)
+		local ratio = (input.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X
+		refresh(ratio)
+		if config.callback then
+			config.callback(currentValue)
+		end
+	end
+
+	track.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			isSliding = true
+			applyInput(input)
+		end
+	end)
+	userInputService.InputChanged:Connect(function(input)
+		if not isSliding then
+			return
+		end
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch then
+			applyInput(input)
+		end
+	end)
+	userInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			isSliding = false
+		end
+	end)
+
+	return {
+		frame = row,
+		get = function()
+			return currentValue
+		end,
+		set = function(newValue)
+			refresh((newValue - minValue) / (maxValue - minValue))
+		end,
+	}
+end
+
+---Create a full-width button row (library support; unused by the Main tab).
+---@param parent Instance
+---@param config table
+---@return table
+function Controls.Button(parent, config)
+	local button = Utility.create("TextButton", {
+		Name = config.title,
+		Size = UDim2.fromOffset(ROW_WIDTH, 54),
+		BackgroundColor3 = Theme.controlBackground,
+		BorderSizePixel = 0,
+		Font = Enum.Font.GothamMedium,
+		TextSize = 20,
+		TextColor3 = Theme.text,
+		Text = config.title,
+		AutoButtonColor = false,
+	}, parent)
+	Utility.corner(button, 10)
+	Utility.stroke(button, Theme.controlStroke, 1)
+
+	button.MouseButton1Click:Connect(function()
+		if config.callback then
+			config.callback()
+		end
+	end)
+
+	return { frame = button }
+end
+
+---@module Menu.Features
+-- Feature hooks. Every body is intentionally empty.
+local Features = {}
+
+---Auto Ultimate toggle hook.
+---@param enabled boolean
+function Features.autoUltimate(enabled)
+	-- Feature logic intentionally left empty.
+end
+
+---Auto Dash toggle hook.
+---@param enabled boolean
+function Features.autoDash(enabled)
+	-- Feature logic intentionally left empty.
+end
+
+---Aim part selection hook.
+---@param partName string
+function Features.aimPart(partName)
+	-- Feature logic intentionally left empty.
+end
+
+---Aimlock toggle hook.
+---@param enabled boolean
+function Features.aimlock(enabled)
+	-- Feature logic intentionally left empty.
+end
+
+---Anti-Knockback toggle hook.
+---@param enabled boolean
+function Features.antiKnockback(enabled)
+	-- Feature logic intentionally left empty.
+end
+
+---Anti-Stun toggle hook.
+---@param enabled boolean
+function Features.antiStun(enabled)
+	-- Feature logic intentionally left empty.
+end
+
+---Anti-Busy toggle hook.
+---@param enabled boolean
+function Features.antiBusy(enabled)
+	-- Feature logic intentionally left empty.
+end
+
+---Generic slider hook (library support).
+---@param value number
+function Features.slider(value)
+	-- Feature logic intentionally left empty.
+end
+
+---Generic button hook (library support).
+function Features.button()
+	-- Feature logic intentionally left empty.
+end
+
+---@module Menu.Tabs
+-- Tab definitions mirroring the reference sidebar.
+local Tabs = {
+	{ id = "Home", label = "| Home", icon = "Home" },
+	{ id = "Main", label = "| Main", icon = "Main" },
+	{ id = "Farming", label = "| Farming", icon = "Farming" },
+	{ id = "Killer", label = "| Killer", icon = "Killer" },
+	{ id = "Misc", label = "| Misc", icon = "Misc" },
+}
+
+-- Aim part options.
+local AIM_PARTS = { "Head", "Torso", "HumanoidRootPart" }
+
+-- Runtime state for the visible controls.
+local state = {
+	autoUltimate = true,
+	autoDash = true,
+	aimPart = "Head",
+	aimlock = false,
+	antiKnockback = false,
+	antiStun = false,
+	antiBusy = false,
+}
+
+---@module Menu.App
+-- Assembles the window, sidebar and Main page content.
+local App = {}
+
+---Build the whole menu.
+function App.build()
+	local safeParent = Utility.getSafeParent()
+
+	-- Remove a previous instance on re-execution.
+	local existing = safeParent:FindFirstChild(GUI_NAME)
+	if existing then
+		existing:Destroy()
+	end
+
+	-- ScreenGui root.
+	local screenGui = Utility.create("ScreenGui", {
+		Name = GUI_NAME,
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		DisplayOrder = 999,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	}, safeParent)
+
+	-- Window shell.
+	local windowFrame = Window.new(screenGui)
+
+	-- Fit-to-viewport scaling.
+	local scale = Utility.getWindowScale()
+	if scale < 1 then
+		Utility.create("UIScale", { Scale = scale }, windowFrame)
+	end
+
+	-- Sidebar container.
+	local sidebar = Utility.create("Frame", {
+		Name = "Sidebar",
+		Position = UDim2.fromOffset(25, 85),
+		Size = UDim2.fromOffset(311, WINDOW_HEIGHT - 85 - 24),
+		BackgroundTransparency = 1,
+	}, windowFrame)
+
+	-- Content container.
+	local content = Utility.create("Frame", {
+		Name = "Content",
+		Position = UDim2.fromOffset(385, 60),
+		Size = UDim2.fromOffset(ROW_WIDTH, WINDOW_HEIGHT - 60 - 12),
+		BackgroundTransparency = 1,
+	}, windowFrame)
+
+	-- One scrolling page per tab.
+	local pages = {}
+	for _, tab in ipairs(Tabs) do
+		local page = Utility.create("ScrollingFrame", {
+			Name = tab.id .. "Page",
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ScrollBarThickness = 3,
+			ScrollBarImageColor3 = Theme.toggleWell,
+			CanvasSize = UDim2.new(0, 0, 0, 0),
+			ScrollingDirection = Enum.ScrollingDirection.Y,
+			Visible = tab.id == "Main",
+		}, content)
+		pages[tab.id] = page
+	end
+
+	-- Sidebar buttons and tab switching.
+	local sidebarButtons
+
+	local function selectTab(tabId)
+		Navigation.refresh(sidebarButtons, tabId)
+		for pageId, page in pairs(pages) do
+			page.Visible = pageId == tabId
+		end
+	end
+
+	sidebarButtons = Navigation.new(sidebar, Tabs, selectTab)
+	selectTab("Main")
+
+	-- Layout cursor used to stack sections and rows with exact spacing.
+	local cursor = 17
+	local nextGap = 0
+	local function sectionHeader(title)
+		if cursor > 17 then
+			cursor = cursor + 18
+		end
+		Section.header(pages.Main, title, cursor)
+		cursor = cursor + 30
+		nextGap = 20
+	end
+	local function placeRow(control, height)
+		cursor = cursor + nextGap
+		control.frame.Position = UDim2.fromOffset(0, cursor)
+		cursor = cursor + height
+		nextGap = 12
+	end
+
+	-- Skill section.
+	sectionHeader("Skill")
+	placeRow(Controls.Toggle(pages.Main, {
+		title = "Auto Ultimate",
+		subtitle = "This is Meaning Auto Use Ultimate",
+		default = state.autoUltimate,
+		callback = function(enabled)
+			state.autoUltimate = enabled
+			Features.autoUltimate(enabled)
+		end,
+	}), TOGGLE_ROW_HEIGHT)
+	placeRow(Controls.Toggle(pages.Main, {
+		title = "Auto Dash",
+		subtitle = "This is Meaning Auto Use Dash",
+		default = state.autoDash,
+		callback = function(enabled)
+			state.autoDash = enabled
+			Features.autoDash(enabled)
+		end,
+	}), TOGGLE_ROW_HEIGHT)
+
+	-- Aim section.
+	sectionHeader("Aim")
+	placeRow(Controls.Dropdown(pages.Main, {
+		title = "Choose Aim Part",
+		options = AIM_PARTS,
+		default = state.aimPart,
+		callback = function(partName)
+			state.aimPart = partName
+			Features.aimPart(partName)
+		end,
+	}), 56)
+	placeRow(Controls.Toggle(pages.Main, {
+		title = "Aimlock",
+		subtitle = "Aimlock = Lock Camera Player",
+		default = state.aimlock,
+		callback = function(enabled)
+			state.aimlock = enabled
+			Features.aimlock(enabled)
+		end,
+	}), TOGGLE_ROW_HEIGHT)
+
+	-- Body section.
+	sectionHeader("Body")
+	placeRow(Controls.Toggle(pages.Main, {
+		title = "Anti-Knockback",
+		subtitle = "BETA",
+		default = state.antiKnockback,
+		callback = function(enabled)
+			state.antiKnockback = enabled
+			Features.antiKnockback(enabled)
+		end,
+	}), TOGGLE_ROW_HEIGHT)
+	placeRow(Controls.Toggle(pages.Main, {
+		title = "Anti-Stun",
+		subtitle = "BETA",
+		default = state.antiStun,
+		callback = function(enabled)
+			state.antiStun = enabled
+			Features.antiStun(enabled)
+		end,
+	}), TOGGLE_ROW_HEIGHT)
+	placeRow(Controls.Toggle(pages.Main, {
+		title = "Anti-Busy",
+		subtitle = "BETA",
+		default = state.antiBusy,
+		callback = function(enabled)
+			state.antiBusy = enabled
+			Features.antiBusy(enabled)
+		end,
+	}), TOGGLE_ROW_HEIGHT)
+
+	-- Canvas must cover the stacked content.
+	pages.Main.CanvasSize = UDim2.fromOffset(0, cursor + 8)
+
+	-- Home, Farming, Killer and Misc pages stay empty stubs.
+	return screenGui
+end
+
+---Called when initialization errors.
+---@param error string
+local function onInitializeError(error)
+	warn("Failed to initialize Speed Hub X.")
+	warn(error)
+	warn(debug.traceback())
+end
+
+-- Safely build the GUI and report failures without killing the client thread.
+xpcall(App.build, onInitializeError)
