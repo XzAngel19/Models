@@ -141,6 +141,7 @@ local function createCard(className, parent, text, height)
 		local offset = Vector2.new(input.Position.X, input.Position.Y) - card.AbsolutePosition
 
 		local ripple = create("Frame", {
+			Name = "Ripple",
 			AnchorPoint = Vector2.new(0.5, 0.5),
 			Position = UDim2.fromOffset(offset.X, offset.Y),
 			Size = UDim2.fromOffset(0, 0),
@@ -941,8 +942,8 @@ local function switchTab(name)
 		tween(ZenithHub.tabButtons[pageName], FAST_TWEEN, { TextColor3 = selected and TEXT_COLOR or DIM_TEXT_COLOR })
 
 		if selected then
-			page.GroupTransparency = 1
-			tween(page, MEDIUM_TWEEN, { GroupTransparency = 0 })
+			page.Position = UDim2.fromOffset(0, 8)
+			tween(page, MEDIUM_TWEEN, { Position = UDim2.fromOffset(0, 0) })
 		end
 	end
 
@@ -1024,12 +1025,12 @@ local function initializeScript()
 			return
 		end
 
-		local toast = create("CanvasGroup", {
+		local toast = create("Frame", {
 			Size = UDim2.fromOffset(230, 34),
 			BackgroundColor3 = Color3.fromRGB(18, 18, 20),
 			BorderSizePixel = 0,
-			GroupTransparency = 1,
 		}, toastHolder)
+		local toastScale = create("UIScale", { Scale = 0.85 }, toast)
 
 		create("UICorner", { CornerRadius = UDim.new(0, 7) }, toast)
 		addStroke(toast, Color3.new(1, 1, 1), 0.8)
@@ -1064,15 +1065,16 @@ local function initializeScript()
 			TextXAlignment = Enum.TextXAlignment.Right,
 		}, toast)
 
-		tween(toast, FAST_TWEEN, { GroupTransparency = 0 })
+		tween(toastScale, POP_TWEEN, { Scale = 1 })
 
 		task.delay(2, function()
-			tween(toast, MEDIUM_TWEEN, { GroupTransparency = 1 }).Completed:Wait()
+			if not toast.Parent then return end
+			tween(toastScale, FAST_TWEEN, { Scale = 0 }).Completed:Wait()
 			toast:Destroy()
 		end)
 	end
 
-	local window = create("CanvasGroup", {
+	local window = create("Frame", {
 		Size = UDim2.fromOffset(WINDOW_WIDTH, WINDOW_HEIGHT),
 		Position = UDim2.new(0.5, -WINDOW_WIDTH / 2, 0.5, -WINDOW_HEIGHT / 2),
 		BackgroundTransparency = 1,
@@ -1082,18 +1084,81 @@ local function initializeScript()
 
 	create("UICorner", { CornerRadius = UDim.new(0, 8) }, window)
 
-	-- A gradient on a CanvasGroup tints every descendant, including text.
-	-- Keep it on a separate background instead so the content stays readable.
+	-- Keep the background separate from the content; regular Frames avoid
+	-- CanvasGroup rendering artifacts on executor clients and some devices.
 	local background = create("Frame", {
 		Name = "WindowBackground",
 		Size = UDim2.fromScale(1, 1),
 		BackgroundColor3 = Color3.new(1, 1, 1),
 		BorderSizePixel = 0,
 	}, window)
+	create("UICorner", { CornerRadius = UDim.new(0, 8) }, background)
 	create("UIGradient", {
 		Color = ColorSequence.new(BACKGROUND_TOP, BACKGROUND_BOTTOM),
 		Rotation = 90,
 	}, background)
+
+	-- Apply transparency per element instead of flattening the menu into a
+	-- CanvasGroup. Track tweened changes so hover effects retain their opacity.
+	local transparency = 0
+	local applyingTransparency = false
+	local transparencyDefaults = {}
+	local function trackTransparency(instance)
+		if instance.Name == "Ripple" or transparencyDefaults[instance] then return end
+		local properties = {}
+		if instance:IsA("GuiObject") then
+			table.insert(properties, "BackgroundTransparency")
+		end
+		if instance:IsA("TextLabel") or instance:IsA("TextButton") or instance:IsA("TextBox") then
+			table.insert(properties, "TextTransparency")
+			table.insert(properties, "TextStrokeTransparency")
+		end
+		if instance:IsA("ImageLabel") or instance:IsA("ImageButton") then
+			table.insert(properties, "ImageTransparency")
+		end
+		if instance:IsA("ScrollingFrame") then
+			table.insert(properties, "ScrollBarImageTransparency")
+		end
+		if instance:IsA("UIStroke") then
+			table.insert(properties, "Transparency")
+		end
+		if #properties == 0 then return end
+		local defaults = {}
+		transparencyDefaults[instance] = defaults
+		for _, property in properties do
+			defaults[property] = instance[property]
+			connectInput(instance:GetPropertyChangedSignal(property), function()
+				if applyingTransparency then return end
+				local original = instance[property]
+				defaults[property] = original
+				if transparency > 0 then
+					applyingTransparency = true
+					instance[property] = original + (1 - original) * transparency
+					applyingTransparency = false
+				end
+			end)
+			if transparency > 0 then
+				applyingTransparency = true
+				instance[property] = defaults[property] + (1 - defaults[property]) * transparency
+				applyingTransparency = false
+			end
+		end
+	end
+	local function setWindowTransparency(value)
+		transparency = math.clamp(value, 0, 0.9)
+		applyingTransparency = true
+		for instance, defaults in transparencyDefaults do
+			if instance.Parent then
+				for property, original in defaults do
+					instance[property] = original + (1 - original) * transparency
+				end
+			end
+		end
+		applyingTransparency = false
+	end
+	trackTransparency(window)
+	for _, instance in window:GetDescendants() do trackTransparency(instance) end
+	connectInput(window.DescendantAdded, trackTransparency)
 
 	local windowStroke = addStroke(window, Color3.new(1, 1, 1), 0.2, 1.5)
 	addGradient(windowStroke, 45)
@@ -1314,7 +1379,7 @@ local function initializeScript()
 			AutoButtonColor = false,
 		}, tabBar)
 
-		local page = create("CanvasGroup", {
+		local page = create("Frame", {
 			Size = UDim2.fromScale(1, 1),
 			BackgroundTransparency = 1,
 			Visible = false,
@@ -1555,8 +1620,8 @@ local function initializeScript()
 	addSlider(configRight, "UI Size", 0.5, 1.5, 1.08, 2, function(value)
 		tween(windowScale, FAST_TWEEN, { Scale = value })
 	end)
-	addSlider(configRight, "GUI Transparency", 0, 100, 0, 0, function(value)
-		tween(window, FAST_TWEEN, { GroupTransparency = value / 100 })
+	addSlider(configRight, "GUI Transparency", 0, 90, 0, 0, function(value)
+		setWindowTransparency(value / 100)
 	end)
 	addButton(configRight, "Unload", function()
 		tween(windowScale, FAST_TWEEN, { Scale = 0 }).Completed:Connect(function()
