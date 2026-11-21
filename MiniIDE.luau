@@ -1837,7 +1837,7 @@ local function BuildIDE()
 		Font = s.uiFont,
 		TextSize = 11,
 	}, statusBar)
-	s.statusLeft, s.statusCenter, s.statusRight = statusLeft, statusCenter, statusRight
+	s.statusBar, s.statusLeft, s.statusCenter, s.statusRight = statusBar, statusLeft, statusCenter, statusRight
 
 	-- toast bubble (bottom-center)
 	local toast = mk("Frame", {
@@ -1936,6 +1936,9 @@ BuildInterior = function(s, env)
 	local TWEEN_FAST, TWEEN_MED, TWEEN_POP = env.TWEEN_FAST, env.TWEEN_MED, env.TWEEN_POP
 	local TITLE_H, TABS_H, STATUS_H = env.TITLE_H, env.TABS_H, env.STATUS_H
 	local GUTTER_W, MINIMAP_W, SCROLLBAR = env.GUTTER_W, env.MINIMAP_W, env.SCROLLBAR
+	-- services (module-level scope: BuildIDE's locals are not visible here)
+	local UserInputService = game:GetService("UserInputService")
+	local RunService = game:GetService("RunService")
 	local body = s.body
 	local sidebar = s.sidebar
 	local gutter = s.gutter
@@ -1950,7 +1953,7 @@ BuildInterior = function(s, env)
 	end
 
 	bindTheme(window, "BackgroundColor3", "WindowBg")
-	bindTheme(windowStroke, "Color", "Stroke")
+	bindTheme(s.windowStroke, "Color", "Stroke")
 	bindTheme(s.shadow, "BackgroundColor3", "Shadow")
 	bindTheme(s.titleBar, "BackgroundColor3", "TitleBar")
 	bindTheme(s.tabBar, "BackgroundColor3", "TabBar")
