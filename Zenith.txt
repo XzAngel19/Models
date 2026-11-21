@@ -1,4 +1,4 @@
--- Zenith | UI-only menu based on the supplied template.
+-- Zenith | Violence District client menu based on the supplied template.
 -- Services.
 local playersService = game:GetService("Players")
 local userInputService = game:GetService("UserInputService")
@@ -256,6 +256,8 @@ end
 ---Add a toggle row.
 local function addToggle(parent, text, keybind, default, identifier)
 	local valueKey = identifier or text
+	local supported = ZenithHub.supportedToggles[valueKey] == true and game.PlaceId == 93978595733734
+	if not supported then default = false end
 	local holder, stroke = createCard("TextButton", parent, text, 28)
 	holder.Text = ""
 	holder.AutoButtonColor = false
@@ -285,11 +287,12 @@ local function addToggle(parent, text, keybind, default, identifier)
 		Size = UDim2.new(1, -40, 1, 0),
 		Position = UDim2.fromOffset(32, 0),
 		BackgroundTransparency = 1,
-		Text = text,
-		TextColor3 = default and TEXT_COLOR or OFF_TEXT_COLOR,
+		Text = supported and text or ("[N/A] " .. text),
+		TextColor3 = supported and (default and TEXT_COLOR or OFF_TEXT_COLOR) or DIM_TEXT_COLOR,
 		TextSize = 13,
 		Font = TEXT_FONT,
 		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
 	}, holder)
 
 	-- Glowing marker on the left edge while enabled.
@@ -309,6 +312,7 @@ local function addToggle(parent, text, keybind, default, identifier)
 	ZenithHub.defaults[valueKey] = default
 
 	ZenithHub.setters[valueKey] = function(value)
+		if not supported then return end
 		state = value == true
 		ZenithHub.values[valueKey] = state
 
@@ -403,6 +407,10 @@ local function addToggle(parent, text, keybind, default, identifier)
 	end)
 
 	holder.Activated:Connect(function()
+		if not supported then
+			if ZenithHub.notify then ZenithHub.notify(text .. " unavailable", false) end
+			return
+		end
 		ZenithHub.setters[valueKey](not state)
 
 		if ZenithHub.notify then
@@ -748,7 +756,7 @@ local function addTextInput(parent, text, placeholder)
 	return input
 end
 
----A keybind selector stores a key name only; it does not run any game action.
+---Record a key for the corresponding movement toggle.
 local function addKeybind(parent, text)
 	local holder = createCard("Frame", parent, text, 30)
 	create("TextLabel", {
@@ -949,6 +957,519 @@ local function switchTab(name)
 
 	ZenithHub.selected = name
 	tween(ZenithHub.indicator, MEDIUM_TWEEN, { Position = UDim2.new((ZenithHub.tabIndex[name] - 1) / #TAB_NAMES, 6, 0, 3) })
+end
+
+-- Only controls backed by the inspected client source or a standard local
+-- implementation are enabled. Unverified game actions remain unavailable.
+local SUPPORTED_TOGGLES = {
+	["Auto Kill"] = true,
+	["Auto Escape"] = true,
+	["Auto Parry"] = true,
+	["Anti Blind"] = true,
+	["Aimbot"] = true,
+	["Always Active"] = true,
+	["Movement Prediction"] = true,
+	["Visible FOV"] = true,
+	["Walk Speed"] = true,
+	["Noclip"] = true,
+	["Jump Power (+ unlock)"] = true,
+	["Infinite Jump"] = true,
+	["Fly"] = true,
+	["Survivor ESP"] = true,
+	["Killer ESP"] = true,
+	["Name Tags"] = true,
+	["Distance Labels"] = true,
+	["Generator ESP"] = true,
+	["Hook ESP"] = true,
+	["Nearest Hook Only"] = true,
+	["Pallet ESP"] = true,
+	["Window ESP"] = true,
+	["Box ESP (windows)"] = true,
+	["Exit Gate ESP"] = true,
+}
+ZenithHub.supportedToggles = SUPPORTED_TOGGLES
+local TARGET_PLACE_ID = 93978595733734
+
+---Start the independently cleaned-up, client-side feature runtime.
+local function startFeatureRuntime(screenGui)
+	if game.PlaceId ~= TARGET_PLACE_ID then
+		warn("Zenith: gameplay features require Violence District (place 93978595733734).")
+		return nil
+	end
+	local runService = game:GetService("RunService")
+	local replicatedStorage = game:GetService("ReplicatedStorage")
+	local collectionService = game:GetService("CollectionService")
+	local lighting = game:GetService("Lighting")
+	local values = ZenithHub.values
+	local state = {
+		alive = true, markers = {}, collisions = {}, effects = {},
+		character = nil, humanoid = nil, originalSpeed = nil, originalJump = nil,
+		flyVelocity = nil, parryAnimator = nil, parryConnection = nil,
+		lastAttack = 0, lastEscape = 0, lastParry = 0, scanElapsed = 0,
+		visualElapsed = 0, blindElapsed = 0, aimActive = false,
+	}
+
+	local visualFolder = Instance.new("Folder")
+	visualFolder.Name = "ZenithClientVisuals"
+	visualFolder.Parent = workspace
+
+	local aimButton = create("TextButton", {
+		Name = "AimButton", Size = UDim2.fromOffset(64, 36),
+		Position = UDim2.new(1, -82, 0.5, -18),
+		BackgroundColor3 = ELEMENT_COLOR, BorderSizePixel = 0,
+		Text = "AIM", TextColor3 = OFF_TEXT_COLOR, Font = BOLD_FONT,
+		TextSize = 14, Visible = false, AutoButtonColor = false,
+	}, screenGui)
+	create("UICorner", { CornerRadius = UDim.new(0, 8) }, aimButton)
+	addStroke(aimButton, ACCENT_A, 0.5)
+	aimButton.Activated:Connect(function()
+		state.aimActive = not state.aimActive
+		tween(aimButton, FAST_TWEEN, { TextColor3 = state.aimActive and TEXT_COLOR or DIM_TEXT_COLOR })
+	end)
+	makeDraggable(aimButton, aimButton)
+
+	local fov = create("Frame", {
+		Name = "AimFOV", AnchorPoint = Vector2.new(0.5, 0.5),
+		BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false,
+	}, screenGui)
+	create("UICorner", { CornerRadius = UDim.new(1, 0) }, fov)
+	addStroke(fov, Color3.new(1, 1, 1), 0.3, 1)
+
+	local function role(player)
+		return player and player.Team and string.lower(player.Team.Name) or ""
+	end
+	local function inRound()
+		local team = role(localPlayer)
+		return (team == "killer" or team == "survivors") and workspace:FindFirstChild("Map") ~= nil
+	end
+	local function rootOf(character)
+		return character and character:FindFirstChild("HumanoidRootPart")
+	end
+	local function findRemote(group, name)
+		local remotes = replicatedStorage:FindFirstChild("Remotes")
+		local folder = remotes and remotes:FindFirstChild(group)
+		local result = folder and folder:FindFirstChild(name)
+		return result and result:IsA("RemoteEvent") and result or nil
+	end
+	local function enemyPlayers()
+		local team = role(localPlayer)
+		local expected = team == "killer" and "survivors" or team == "survivors" and "killer" or nil
+		local result = {}
+		if not expected then return result end
+		for _, player in ipairs(playersService:GetPlayers()) do
+			if player ~= localPlayer and role(player) == expected then
+				local character = player.Character
+				local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+				if humanoid and humanoid.Health > 0 and rootOf(character) then table.insert(result, player) end
+			end
+		end
+		return result
+	end
+	local function restoreCollisions()
+		for part, original in pairs(state.collisions) do
+			if part.Parent then part.CanCollide = original end
+			state.collisions[part] = nil
+		end
+	end
+	local function restoreEffects()
+		for effect, original in pairs(state.effects) do
+			if effect.Parent then
+				if effect:IsA("PostEffect") then effect.Enabled = original else effect.Visible = original end
+			end
+			state.effects[effect] = nil
+		end
+	end
+	local function restoreMovement()
+		local humanoid = state.humanoid
+		if humanoid and humanoid.Parent then
+			if state.originalSpeed ~= nil then humanoid.WalkSpeed = state.originalSpeed end
+			if state.originalJump then
+				humanoid.UseJumpPower = state.originalJump.useJumpPower
+				humanoid.JumpPower = state.originalJump.jumpPower
+				humanoid.JumpHeight = state.originalJump.jumpHeight
+			end
+		end
+		state.originalSpeed, state.originalJump = nil, nil
+		restoreCollisions()
+		if state.flyVelocity then state.flyVelocity:Destroy() state.flyVelocity = nil end
+	end
+	local function setCharacter()
+		local character = localPlayer.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		if character ~= state.character or humanoid ~= state.humanoid then
+			restoreMovement()
+			state.character, state.humanoid = character, humanoid
+		end
+		return character, humanoid, rootOf(character)
+	end
+	local function updateMovement()
+		local character, humanoid, root = setCharacter()
+		if not character or not humanoid or not root then return end
+		if values["Walk Speed"] then
+			if state.originalSpeed == nil then state.originalSpeed = humanoid.WalkSpeed end
+			humanoid.WalkSpeed = values["Speed Value"] or 32
+		elseif state.originalSpeed ~= nil then
+			humanoid.WalkSpeed, state.originalSpeed = state.originalSpeed, nil
+		end
+		if values["Jump Power (+ unlock)"] then
+			if not state.originalJump then
+				state.originalJump = { useJumpPower = humanoid.UseJumpPower, jumpPower = humanoid.JumpPower, jumpHeight = humanoid.JumpHeight }
+			end
+			humanoid.UseJumpPower = true
+			humanoid.JumpPower = values["Jump Value"] or 60
+		elseif state.originalJump then
+			humanoid.UseJumpPower = state.originalJump.useJumpPower
+			humanoid.JumpPower, humanoid.JumpHeight = state.originalJump.jumpPower, state.originalJump.jumpHeight
+			state.originalJump = nil
+		end
+		if values.Noclip then
+			for _, part in ipairs(character:GetDescendants()) do
+				if part:IsA("BasePart") then
+					if state.collisions[part] == nil then state.collisions[part] = part.CanCollide end
+					part.CanCollide = false
+				end
+			end
+		else
+			restoreCollisions()
+		end
+		if values.Fly then
+			if not state.flyVelocity or state.flyVelocity.Parent ~= root then
+				if state.flyVelocity then state.flyVelocity:Destroy() end
+				state.flyVelocity = Instance.new("BodyVelocity")
+				state.flyVelocity.Name = "ZenithFly"
+				state.flyVelocity.MaxForce = Vector3.new(1e8, 1e8, 1e8)
+				state.flyVelocity.Parent = root
+			end
+			local vertical = (userInputService:IsKeyDown(Enum.KeyCode.Space) and 1 or 0)
+				- (userInputService:IsKeyDown(Enum.KeyCode.LeftControl) and 1 or 0)
+			local direction = humanoid.MoveDirection + Vector3.new(0, vertical, 0)
+			if direction.Magnitude > 1 then direction = direction.Unit end
+			state.flyVelocity.Velocity = direction * (values["Fly Speed"] or 60)
+		elseif state.flyVelocity then
+			state.flyVelocity:Destroy()
+			state.flyVelocity = nil
+		end
+	end
+	local function updateBlind()
+		if not values["Anti Blind"] then restoreEffects() return end
+		for effect in pairs(state.effects) do
+			if not effect.Parent then state.effects[effect] = nil end
+		end
+		local roots = { lighting }
+		local playerGui = localPlayer:FindFirstChildOfClass("PlayerGui")
+		if playerGui then table.insert(roots, playerGui) end
+		for _, parent in ipairs(roots) do
+			for _, effect in ipairs(parent:GetDescendants()) do
+				local name = string.lower(effect.Name)
+				if name:find("blind", 1, true) or name:find("flash", 1, true) or name:find("whiteout", 1, true) then
+					if effect:IsA("PostEffect") then
+						if state.effects[effect] == nil then state.effects[effect] = effect.Enabled end
+						effect.Enabled = false
+					elseif effect:IsA("GuiObject") and not effect:IsDescendantOf(screenGui) then
+						if state.effects[effect] == nil then state.effects[effect] = effect.Visible end
+						effect.Visible = false
+					end
+				end
+			end
+		end
+	end
+	local function disconnectParry()
+		if state.parryConnection then state.parryConnection:Disconnect() end
+		state.parryConnection, state.parryAnimator = nil, nil
+	end
+	local function updateParry()
+		local animator
+		if values["Auto Parry"] and inRound() and role(localPlayer) == "survivors" then
+			for _, player in ipairs(enemyPlayers()) do
+				local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+				animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+				if animator then break end
+			end
+		end
+		if animator == state.parryAnimator then return end
+		disconnectParry()
+		state.parryAnimator = animator
+		if not animator then return end
+		state.parryConnection = animator.AnimationPlayed:Connect(function(track)
+			if not state.alive or not values["Auto Parry"] or not inRound() then return end
+			local name = string.lower(track.Name .. " " .. (track.Animation and track.Animation.AnimationId or ""))
+			for _, ignored in ipairs({ "idle", "walk", "run", "vault", "stun", "carry", "mori", "break" }) do
+				if name:find(ignored, 1, true) then return end
+			end
+			local attack = name:find("attack", 1, true) or name:find("swing", 1, true) or name:find("slash", 1, true) or name:find("lunge", 1, true)
+				or track.Priority == Enum.AnimationPriority.Action or track.Priority == Enum.AnimationPriority.Action2
+				or track.Priority == Enum.AnimationPriority.Action3 or track.Priority == Enum.AnimationPriority.Action4
+			if not attack then return end
+			local character, localRoot = localPlayer.Character, rootOf(localPlayer.Character)
+			local target = animator:FindFirstAncestorOfClass("Model")
+			local targetRoot = rootOf(target)
+			if not character or not character:FindFirstChild("Parrying Dagger") or not localRoot or not targetRoot then return end
+			if (localRoot.Position - targetRoot.Position).Magnitude > 18 or os.clock() - state.lastParry < 0.3 then return end
+			local remotes = replicatedStorage:FindFirstChild("Remotes")
+			local items = remotes and remotes:FindFirstChild("Items")
+			local dagger = items and items:FindFirstChild("Parrying Dagger")
+			local remote = dagger and dagger:FindFirstChild("parry")
+			if remote and remote:IsA("RemoteEvent") then
+				state.lastParry = os.clock()
+				remote:FireServer(character)
+			end
+		end)
+	end
+	local function updateActions(root)
+		if not inRound() then return end
+		local now = os.clock()
+		if values["Auto Kill"] and role(localPlayer) == "killer" and root then
+			local range = values["Kill Range"] or 12
+			for _, player in ipairs(enemyPlayers()) do
+				local target = rootOf(player.Character)
+				if target and (target.Position - root.Position).Magnitude <= range then
+					local remote = findRemote("Attacks", "BasicAttack")
+					if remote and now - state.lastAttack >= math.max(0.15, values["Auto Kill Delay"] or 0.15) then
+						state.lastAttack = now
+						remote:FireServer()
+					end
+					break
+				end
+			end
+		end
+		local character = localPlayer.Character
+		if values["Auto Escape"] and role(localPlayer) == "survivors" and character and character:GetAttribute("IsHooked") and now - state.lastEscape >= 1 then
+			local remote = findRemote("Carry", "SelfUnHookEvent")
+			if remote then state.lastEscape = now remote:FireServer() end
+		end
+	end
+	local function marker(instance, adornee, text, color, distance, showHighlight, showLabel, seen, showBox)
+		if not instance or not adornee then return end
+		seen[instance] = true
+		local record = state.markers[instance]
+		if not record then
+			local highlight = Instance.new("Highlight")
+			highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+			highlight.FillTransparency = 1
+			highlight.OutlineTransparency = 0
+			highlight.Parent = visualFolder
+			local outlineBox = Instance.new("SelectionBox")
+			outlineBox.LineThickness = 0.04
+			outlineBox.SurfaceTransparency = 1
+			outlineBox.Parent = visualFolder
+			local billboard = Instance.new("BillboardGui")
+			billboard.Size = UDim2.fromOffset(160, 36)
+			billboard.StudsOffset = Vector3.new(0, 3, 0)
+			billboard.AlwaysOnTop = true
+			billboard.Parent = visualFolder
+			local textLabel = create("TextLabel", {
+				Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+				TextColor3 = color, TextStrokeTransparency = 0.35,
+				Font = BOLD_FONT, TextSize = 13,
+			}, billboard)
+			record = { highlight = highlight, box = outlineBox, billboard = billboard, label = textLabel }
+			state.markers[instance] = record
+		end
+		record.highlight.Adornee = instance
+		record.highlight.OutlineColor = color
+		record.highlight.Enabled = showHighlight
+		record.box.Adornee = instance
+		record.box.Color3 = color
+		record.box.Visible = showBox == true
+		record.billboard.Adornee = adornee
+		record.billboard.Enabled = showLabel
+		record.label.TextColor3 = color
+		record.label.Text = text .. ((values["Distance Labels"] and distance) and (" [" .. math.floor(distance + 0.5) .. "]") or "")
+	end
+	local function removeMarkers(seen)
+		for instance, record in pairs(state.markers) do
+			if not seen[instance] or not instance.Parent then
+				record.highlight:Destroy()
+				record.box:Destroy()
+				record.billboard:Destroy()
+				state.markers[instance] = nil
+			end
+		end
+	end
+	local function updateVisuals(root)
+		local seen = {}
+		if inRound() and root then
+			local maxDistance = values["ESP Max Distance"] or 1000
+			for _, player in ipairs(playersService:GetPlayers()) do
+				local targetRole, character = role(player), player.Character
+				local target = rootOf(character)
+				local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+				local showHighlight = (targetRole == "killer" and values["Killer ESP"]) or (targetRole == "survivors" and values["Survivor ESP"])
+				if player ~= localPlayer and target and humanoid and humanoid.Health > 0 and (targetRole == "killer" or targetRole == "survivors") then
+					local distance = (target.Position - root.Position).Magnitude
+					if distance <= maxDistance and (showHighlight or values["Name Tags"] or values["Distance Labels"]) then
+						local hex = targetRole == "killer" and values["Killer Color"] or values["Survivor Color"]
+						local text = values["Name Tags"] and player.Name or ""
+						marker(character, target, text, Color3.fromHex(hex), distance, showHighlight == true, values["Name Tags"] or values["Distance Labels"], seen)
+					end
+				end
+			end
+			if values["Generator ESP"] then
+				local map = workspace:FindFirstChild("Map")
+				for _, model in ipairs(map:GetDescendants()) do
+					if model:IsA("Model") and string.lower(model.Name) == "generator" then
+						local body = model:FindFirstChild("GeneratorBody", true)
+						if body and body:IsA("BasePart") then
+							local distance = (body.Position - root.Position).Magnitude
+							if distance <= maxDistance then marker(model, body, "Generator", Color3.fromRGB(255, 190, 88), distance, true, true, seen) end
+						end
+					end
+				end
+			end
+			-- SurvivorProximity and KillerProximity identify interaction points by tag.
+			local map = workspace:FindFirstChild("Map")
+			local categories = {
+				{ tag = "HookPoint", label = "Hook", enabled = values["Hook ESP"], nearest = values["Nearest Hook Only"] },
+				{ tag = "PalletPoint", label = "Pallet", enabled = values["Pallet ESP"] },
+				{ tag = "VaultPoint", label = "Window", enabled = values["Window ESP"] or values["Box ESP (windows)"], window = true },
+				{ tag = "ExitPoint", label = "Exit Gate", enabled = values["Exit Gate ESP"] },
+			}
+			for _, category in ipairs(categories) do
+				if category.enabled then
+					local candidates = {}
+					for _, point in ipairs(collectionService:GetTagged(category.tag)) do
+						if point:IsA("BasePart") and point:IsDescendantOf(map) then
+							local distance = (point.Position - root.Position).Magnitude
+							if distance <= maxDistance then table.insert(candidates, { point = point, distance = distance }) end
+						end
+					end
+					if category.nearest then table.sort(candidates, function(a, b) return a.distance < b.distance end) end
+					for index, candidate in ipairs(candidates) do
+						if category.nearest and index > 1 then break end
+						local point = candidate.point
+						local model = point:FindFirstAncestorOfClass("Model")
+						local object = model and model ~= map and model:IsDescendantOf(map) and model or point
+						local color = category.window and Color3.fromHex(values["Window Color"]) or Color3.fromRGB(255, 190, 88)
+						local highlighted = not category.window or values["Window ESP"] == true
+						marker(object, point, category.label, color, candidate.distance, highlighted, true, seen, category.window and values["Box ESP (windows)"])
+					end
+				end
+			end
+		end
+		removeMarkers(seen)
+	end
+	local function updateAim()
+		local enabled = values.Aimbot == true and inRound()
+		if not enabled and state.aimActive then
+			state.aimActive = false
+			aimButton.TextColor3 = DIM_TEXT_COLOR
+		end
+		aimButton.Visible = enabled
+		fov.Visible = enabled and values["Visible FOV"] == true
+		local radius = values["Aim FOV"] or 90
+		local mouse = userInputService:GetMouseLocation()
+		fov.Position = UDim2.fromOffset(mouse.X, mouse.Y)
+		fov.Size = UDim2.fromOffset(radius * 2, radius * 2)
+		if not enabled or userInputService:GetFocusedTextBox() then return end
+		if not (values["Always Active"] or state.aimActive or userInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)) then return end
+		local camera = workspace.CurrentCamera
+		if not camera then return end
+		local best, bestDistance
+		for _, player in ipairs(enemyPlayers()) do
+			local character = player.Character
+			local target = character and (character:FindFirstChild(values["Target Part"] or "Head") or rootOf(character))
+			if target and target:IsA("BasePart") then
+				local projected, visible = camera:WorldToScreenPoint(target.Position)
+				local distance = (Vector2.new(projected.X, projected.Y) - mouse).Magnitude
+				if visible and distance <= radius and (not bestDistance or distance < bestDistance) then best, bestDistance = target, distance end
+			end
+		end
+		if best then
+			local point = best.Position
+			if values["Movement Prediction"] then point = point + best.AssemblyLinearVelocity * 0.12 end
+			local origin = camera.CFrame.Position
+			if (point - origin).Magnitude > 0.001 then
+				local smoothness = math.clamp(values["Aim Smoothness"] or 0.25, 0, 1)
+				camera.CFrame = camera.CFrame:Lerp(CFrame.lookAt(origin, point), math.max(0.02, 1 - smoothness))
+			end
+		end
+	end
+	connectInput(userInputService.JumpRequest, function()
+		if values["Infinite Jump"] and not userInputService:GetFocusedTextBox() then
+			local humanoid = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
+			if humanoid then humanoid:ChangeState(Enum.HumanoidStateType.Jumping) end
+		end
+	end)
+	connectInput(userInputService.InputBegan, function(input, processed)
+		if processed or ZenithHub.listening or input.UserInputType ~= Enum.UserInputType.Keyboard or userInputService:GetFocusedTextBox() then return end
+		for bind, feature in pairs({ ["Walk Speed Bind"] = "Walk Speed", ["Noclip Bind"] = "Noclip", ["Fly Bind"] = "Fly" }) do
+			if values[bind] ~= "" and values[bind] == input.KeyCode.Name then
+				ZenithHub.setters[feature](not values[feature])
+			end
+		end
+	end)
+	local reportedErrors = {}
+	local function safeStep(name, callback, ...)
+		local ok, err = pcall(callback, ...)
+		if not ok and not reportedErrors[name] then
+			reportedErrors[name] = true
+			warn("Zenith " .. name .. ": " .. tostring(err))
+		end
+	end
+	connectInput(runService.Heartbeat, function(dt)
+		if not state.alive then return end
+		safeStep("movement", updateMovement)
+		state.scanElapsed += dt
+		state.visualElapsed += dt
+		state.blindElapsed += dt
+		if state.scanElapsed >= 0.1 then
+			state.scanElapsed = 0
+			safeStep("parry", updateParry)
+			safeStep("actions", updateActions, rootOf(localPlayer.Character))
+		end
+		if state.visualElapsed >= 0.75 then
+			state.visualElapsed = 0
+			safeStep("visuals", updateVisuals, rootOf(localPlayer.Character))
+		end
+		if state.blindElapsed >= 0.75 then state.blindElapsed = 0 safeStep("anti-blind", updateBlind) end
+	end)
+	connectInput(runService.RenderStepped, function()
+		if not state.alive then return end
+		local ok, err = pcall(updateAim)
+		if not ok and not state.aimReported then state.aimReported = true warn("Zenith aim: " .. tostring(err)) end
+	end)
+	-- Use the interaction-point tags exposed by the inspected game scripts.
+	function state.teleportTo(tag)
+		if state.teleporting then return end
+		local character = localPlayer.Character
+		local root = rootOf(character)
+		local map = inRound() and workspace:FindFirstChild("Map")
+		if not root or not map then return ZenithHub.notify("No active round", false) end
+		local nearest, nearestDistance
+		for _, point in ipairs(collectionService:GetTagged(tag)) do
+			if point:IsA("BasePart") and point:IsDescendantOf(map) then
+				local distance = (point.Position - root.Position).Magnitude
+				if not nearestDistance or distance < nearestDistance then nearest, nearestDistance = point, distance end
+			end
+		end
+		if not nearest then return ZenithHub.notify("No " .. tag .. " found", false) end
+		state.teleporting = true
+		task.spawn(function()
+			local ok, err = pcall(function()
+				local target = nearest.Position + Vector3.new(0, 3, 0)
+				local deadline = os.clock() + 10
+				while state.alive and root.Parent and nearest.Parent and localPlayer.Character == character and inRound() and os.clock() < deadline do
+					local delta = target - root.Position
+					if delta.Magnitude <= 24 then root.CFrame = root.CFrame + delta break end
+					root.CFrame = root.CFrame + delta.Unit * 24
+					task.wait(0.1)
+				end
+			end)
+			state.teleporting = false
+			if not ok then warn("Zenith teleport: " .. tostring(err)) end
+		end)
+	end
+	local function stop()
+		if not state.alive then return end
+		state.alive = false
+		disconnectParry()
+		restoreMovement()
+		restoreEffects()
+		removeMarkers({})
+		visualFolder:Destroy()
+	end
+	screenGui.Destroying:Connect(stop)
+	return state
 end
 
 ---Build the whole interface.
@@ -1488,15 +2009,19 @@ local function initializeScript()
 	addCycle(extraRight, "Target Part", { "Head", "HumanoidRootPart", "Torso" })
 	addSection(extraRight, "Quick Teleport")
 	addNote(extraRight, "Teleports hop in <25-stud steps to dodge net snapback.")
-	addButton(extraRight, "Nearest Generator", function() end)
-	addButton(extraRight, "Nearest Exit Gate", function() end)
-	addButton(extraRight, "Nearest Hook", function() end)
+	local function teleport(tag)
+		if ZenithHub.runtime then ZenithHub.runtime.teleportTo(tag)
+		else ZenithHub.notify("Unavailable in this place", false) end
+	end
+	addButton(extraRight, "Nearest Generator", function() teleport("GeneratorPoint") end)
+	addButton(extraRight, "Nearest Exit Gate", function() teleport("ExitPoint") end)
+	addButton(extraRight, "Nearest Hook", function() teleport("HookPoint") end)
 	addSection(extraRight, "Air")
 	addToggle(extraRight, "Fly", nil, false)
 	addSlider(extraRight, "Fly Speed", 0, 200, 60, 0)
 	addKeybind(extraRight, "Fly Bind")
 
-	-- Visuals: swatches only change stored UI state, not the game world.
+	-- Visuals: local markers are created only while their controls are enabled.
 	local visualsLeft = createColumn(ZenithHub.pages.Visuals, UDim2.fromOffset(0, 0))
 	local visualsRight = createColumn(ZenithHub.pages.Visuals, UDim2.new(0.5, 6, 0, 0))
 	addSection(visualsLeft, "Player ESP")
@@ -1653,6 +2178,7 @@ local function initializeScript()
 		end)
 	end)
 
+	ZenithHub.runtime = startFeatureRuntime(screenGui)
 	refreshConfigs()
 	if readfile and isfile and isfile(autoloadPath) then
 		local ok, name = pcall(readfile, autoloadPath)
