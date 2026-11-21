@@ -2297,7 +2297,6 @@ BuildInterior = function(s, env)
 		tab.finderDirty = tab.finder.query ~= ""
 		s.renderDirty = true
 		if s.updateTabChrome then s.updateTabChrome() end
-		if s.markTabModified then s.markTabModified() end
 	end
 
 	-- ------------------------------------------------------------ tab chrome
@@ -2448,6 +2447,8 @@ BuildInterior = function(s, env)
 			if okWrite then
 				s.toastMsg("Autosaved " .. (tab.name or "untitled") .. " before close")
 				tab.backupPath = backup
+			else
+				s.toastMsg("Could not back up " .. (tab.name or "untitled") .. " — changes lost", true)
 			end
 		end
 		-- remove from list
@@ -3621,6 +3622,31 @@ s.selectAll = selectAll
 		return math.max(1, math.floor((s.textHeight or 400) / s.lineHeight) - 1)
 	end
 
+	-- duplicate the current line (or every line the selection touches) below it
+	local function duplicateLines(tab)
+		local a, b = tab.caretLine, tab.caretLine
+		local selLineA, _, selLineB = getSelection(tab)
+		if selLineA then
+			a, b = selLineA, selLineB
+		end
+		local parts = {}
+		for i = a, b do
+			parts[#parts + 1] = tab.buffer:GetLine(i)
+		end
+		local text = table.concat(parts, "\n")
+		local endOfB = tab.buffer:GetLineLength(b) + 1
+		local inserted = "\n" .. text
+		tab.buffer:InsertText(b, endOfB, inserted)
+		tab.undo:PushBatch({ { sLine = b, sCol = endOfB, oldText = "", newText = inserted } })
+		local lineDelta = b - a + 1
+		tab.caretLine = tab.caretLine + lineDelta
+		tab.anchor = nil
+		tab.goalCol = nil
+		afterEdit(tab, b)
+		tab.scrollToCaret = true
+	end
+	s.duplicateLines = duplicateLines
+
 	local function repeatableKey(keyCode)
 		if keyCode == Enum.KeyCode.Backspace or keyCode == Enum.KeyCode.Delete
 			or keyCode == Enum.KeyCode.Left or keyCode == Enum.KeyCode.Right
@@ -3770,8 +3796,22 @@ s.selectAll = selectAll
 	-- global keyboard entry point ---------------------------------------------
 	local function onInputBegan(input, gameProcessed)
 		if input.UserInputType == Enum.UserInputType.Keyboard then
-			if textEntryFocused() then return end
 			local keyCode = input.KeyCode
+			-- Escape must work even while a text entry box (find, dialogs) has focus
+			if keyCode == Enum.KeyCode.Escape then
+				if s.inputOverlay and s.inputOverlay.Visible then
+					s.inputOverlay.Visible = false
+					pcall(function() s.inputBox:ReleaseFocus() end)
+					s.focused = true
+					s.renderDirty = true
+					return
+				end
+				if s.findOpen or s.acVisible then
+					handleEscape()
+					return
+				end
+			end
+			if textEntryFocused() then return end
 			if keyCode == Enum.KeyCode.Unknown then return end
 
 			-- focus tracking: any click outside the window blurs the editor
@@ -3807,6 +3847,8 @@ s.selectAll = selectAll
 					if tab then s.closeTab(tab) end
 				elseif keyCode == Enum.KeyCode.L and tab then
 					selectCurrentLine(tab)
+				elseif keyCode == Enum.KeyCode.D and tab then
+					duplicateLines(tab)
 				end
 				return
 			end
@@ -3916,10 +3958,27 @@ s.selectAll = selectAll
 	end
 	s.hitTest = hitTest
 
+	-- true when a screen-space point lies inside a GuiObject's absolute bounds
+	local function pointInFrame(frame, pos)
+		if typeof(frame) ~= "Instance" then return false end
+		local ok, absPos, absSize = pcall(function()
+			return frame.AbsolutePosition, frame.AbsoluteSize
+		end)
+		if not ok or not absPos or not absSize then return false end
+		return pos.X >= absPos.X and pos.Y >= absPos.Y
+			and pos.X <= absPos.X + absSize.X and pos.Y <= absPos.Y + absSize.Y
+	end
+
 	-- mouse down inside the text area: position caret / selection / drag
 	local function onTextAreaDown(input)
 		local tab = s.activeTab
 		if not tab then return end
+		-- clicks landing on a visible overlay belong to the overlay, not the caret
+		if (s.acVisible and pointInFrame(s.acPopup, input.Position))
+			or (s.findOpen and pointInFrame(s.findPanel, input.Position))
+			or (s.inputOverlay and s.inputOverlay.Visible and pointInFrame(s.inputOverlay, input.Position)) then
+			return
+		end
 		if s.hideAutocomplete then s.hideAutocomplete() end
 		local shift = isShiftDown()
 		s.focused = true
@@ -4292,6 +4351,10 @@ s.onGlobalMouseMove = onGlobalMouseMove
 			end
 		end)
 		s.renderDirty = true
+		-- release the find box so typing goes back to the editor immediately
+		if s.queryBox then
+			pcall(function() s.queryBox:ReleaseFocus() end)
+		end
 		-- restore focus to the editor
 		s.focused = true
 	end
