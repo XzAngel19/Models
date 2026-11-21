@@ -19,6 +19,7 @@ local Style = {
 	selectedIcon = Color3.fromRGB(225, 63, 63),
 	text = Color3.fromRGB(239, 239, 239),
 	muted = Color3.fromRGB(138, 138, 138),
+	icon = Color3.fromRGB(195, 195, 195),
 	description = Color3.fromRGB(105, 105, 105),
 	toggle = Color3.fromRGB(35, 35, 35),
 	red = Color3.fromRGB(221, 0, 6),
@@ -66,9 +67,68 @@ local function line(parent, x1, y1, x2, y2, color, thickness)
 	return segment
 end
 
--- Draw small monochrome navigation icons without relying on external assets.
+-- Crops from the supplied reference, stored as white alpha masks so they can
+-- be tinted for selected and unselected tabs. No network assets are needed.
+local IconData = {
+	Home = [=[iVBORw0KGgoAAAANSUhEUgAAACIAAAAiCAYAAAA6RwvCAAADS0lEQVR42u2YW4hNYRTHf7M7J7k0cwi55RqNwUiIqBFK8kpeFQ8eKS/KgyIvyqM8mSiKlFLyJHJpkMhIUu5yyy3GZXDO7L+X/6lt+87Ze8aoefDV13dfe33rW///Wuc0SGIglIgBUgaMIoUa843AOGAqsBDoAoYAt4FLHsd15A4D2oASMAboAV4A94HO4AlJ6TpY0ipJV/RnOSGpVVIUOJeszZKOSvqWOv9A0urQmZBFpgAHfZsYeAZ8Bz4Dr4APGdYA+AS8Bu54PAIYBUwDtgMvbd26TzPfh2JgD3Depn0DvAfe5njyV8BuoBXo9vPMBrYBy4AZaUXSJookbbEZz0pqk1TMeIa8tdUyJWlnej2Nmhj44f5436anH8Ex1u3PLPiOS42/5vCH3tJFxf1R9XzkNXANOAXcskVC++MaCkauDR6XU+vHgVlAxx++lnqroZIaJZXcT8O0KGm/ob0o4Adtks5J2ufzaf8b5poJ368Zpp0KLAWagaYaRDgPGARMAu6m/O9LLcENvQx6RUNyMnAm8HQlYAnwBHia42J9ViR58646YaOSaP9Z0KunRBUVjW5LwOD+sEjUS/hGfYV7IWN9SMLBxgKbHUeOmcYJEOIEYD0wEtgZgDB5o2+oFiStlHRPUlnSIUnLA/tWSToiqUfSI0nr8oaAQk4zV4DnwFVgIrDBwbE9EbxagY0ObmWT1tXcT1dDw+mSpqTmSpLmSzog6Z1vXU7kGtX+G0m7LGNEigwnej6XRdb4Zs+AHQmu+AjccPsYWG6/meD158Aj4AJwGnho3klyzFZbtN08VNNZI2A6sNYp3WzgemrPQ2AvcAKYmfhYGbho5y4GYs0gYAUwx+nmb89UqIEUnJV9CKCsGvAeu0YJxBBQoPrB8ZYZmWd+UySUj1QJqMlmT+6pBJwtzuCOOJGDNCUuG2fxyBO3o+0HBftFty3QnRNpLc5VSx4vsEwch+IsZm123tACCLhpZYrAYUOyI4OeWoBNhvhwy5lri3Z6rTMLvkNNRKGfEycltXhfKK+IEvlpldiS9Yqk9aGz9WLNQmBxaq7DOUZ3RuQFWOSUIFkuB1DY5zSgV+H9b9OAoiEWKpUcihbryC30Z2L0/2+Jf15+AYPWRDquiFamAAAAAElFTkSuQmCC]=],
+	Main = [=[iVBORw0KGgoAAAANSUhEUgAAACIAAAAiCAYAAAA6RwvCAAACj0lEQVR42u2YL3ATURDGf+30VVxEKxJTEwQ1FZzBxIBoBJgaEGCq0dSABYFCIYLG1LSmAhSiFWAwNRhqMDHHDIlIxT2xCL43vN5cuEtzk8kM7MxObnLvz/e+/d7uJitmxjLYKktia3PO3wGe6Pkt8HXRQDpAF9iTA4yAY+B8UUB2gB6QCkxgIY3GzAxmpaZYHdDSxj2xkAKfgdcacwDsAhdi5h0wbBpIqnC8AjL5GDgCzjTmDvBY4xK9HwisnxeIUyh2BeYhcAqcCEBRnFti7C5wUwCOgU8CltXViCugdzphCvSBQ8X/bMoNGQpkpvH7mt/WnKwuIwlwqefbWmhP4AbAF+C7vI6uBmInBz4WQlkZGqfNDwTMK0ecCoCf4TKkwCOx46N8c6Lr/sfMrOg9Mzu033ZkZn0zc3Ku4R0ze2pm783sZ7TmlXFrU/JEW6hfXjdBRZYBb4AfEmwQ9RU9ltWakQZmwKSGDoLHWbdoLR0oB+6VXIpSRi4rNr+vmG9orI+ATHTqDxVM+iZSfF8C9CWZsytGN8RoeJ83XWucwuZ16qxEX92oDtVO8VVAfEnVTRSCYVRngj0T0HEhxCF863JXR6xVjNS1ySwLL6pD801rZOYN5tGIn2ED3xTIpWmey4Akkapbi9LMagmI5C8LtKJrl00pD77GIfIqjbR0z8f6bCtJfdMGt5RLXMRcbGN931GHlkWAh2qm8qg0TAUSF7q4OI00ua0NQq/xouQgW1EpeKBm2gHbarbOy+pZ2a25UAvgonK9qZN4lfOQzm9ErPgo44YOL2TjAHCk/nVYt0MLn/taYFtsxA1wIlAh3uuFjLoZsexUe56LjbzIyrQu3jWdsJr6XfPv/BvwH0jRfgHnRCJWXEiUMgAAAABJRU5ErkJggg==]=],
+	Farming = [=[iVBORw0KGgoAAAANSUhEUgAAACIAAAAiCAYAAAA6RwvCAAACgElEQVR42u3X24tNURwH8M+cxuW4d5D7LaQ0uSSUXEIkucSTBy8of5YXrySRELmPEGOGUBJJLrmPezNmvHxPnTSYMedM0qyXvffae6/1Xb/f9/v9rVXX2dnpX2gF/0jrB/Jzq+/h9wPQ9lPfHDRgMIbjA97iI67jUy2AlEGMwDhMDZBpGJbnsXiOxvSdD6iqAimgiGXYnL5iRYpLeW7vzuSVra4b8p2M1ViAs1iZyW5gAqYnEo9wDQ9xGy8wFF/Q0Vsg9diL9RiNloS9NXwpZpKXeIMDtSJrHaYk728qwv4M2xKBZjTlfc1U04YLGIXZuBcC7okiTuFuF0qquo9MwPx815iINOBVAA3DwL4wtLlYjMd4gg34lvuJ2BQiC6iaABmH7TgX9q/HxaRzAY6FQxvyrrNWHFmFSXga12zC8fBleST7Nua2Be/Dl9ZqApmKmRiSFNzDnRC07A27cr2Opdiaf/8KTOE3JlaKP0yJWZ3Ou0+4ioMxrUU4ipHYjYWRe1UiUkwKpocXzV0UvlP4jDVYh1v5b0vGbclCehWRUVlVB45ENWXQ3wOmHZdxMgCKmXw8NkZxpd4CGRwSNuNm+tpz7agwsLb4y/4A34F9kffOFMdSb4C04nX48DGr/V27gRMhb0P2JC1J27IQvEccKWTF90POb+n/8odxypug4dke3I/KSgEzKOTudvWtTwoKmJEB7vRQAFtjeGNxCPMyVhMO/6o41lX5OFFeyEaswNf4yhjMwiWc6QpMtTfPZUI3ZsJpcecrUVsDllRjq9jd9i6mNyiGt6lCjQP6EkgZzLlIfG0U+CC1q+Yc+dXxY2nKRmPctr2vgfQfOfuB/H9AfgBMDKwTR1btMwAAAABJRU5ErkJggg==]=],
+	Killer = [=[iVBORw0KGgoAAAANSUhEUgAAACIAAAAiCAYAAAA6RwvCAAADAUlEQVR42u2YS0iUURTHf45O4+goopVaaZlo0ioxe0BBD4KIokXhooIWbtrlKgiX0b5tj2W0KBDCiJAgoiJqYRBBbaIHpr0bJKnQ5rT5G7frnZnPaRSJDlzm++7j3HPO/Z//Pd+UmBkLQWIsEPnnDSnTb2XUBSVFxEgc+Alk/sbyQmUJsAvoAL4BI8A4cHW2imYTkSRw2OvrAYaAO8BnoBk4CjwBngJVmvdafelCDUnK0xNAN/AYeKCxjRo/pTk4uOgDGoEJRb0NGAYuKGozxczcVqnfLjO7aWb3zeyVmd0zsxZvLmZWH+ibbnHnOWlmF82s39njjxZSsF1G9EsBeVos0BdaV2NmA2bWHFoXSt+9wABw2gt5NskEKKEPqPX608AnZdeMdbEAJt4A1yJkWdx5d/UkgEUCry8twk4kQhtXC8mUt2FnwLsE8C6HI12hfUOGpL0061bzpQpYmSXTPjhH4Eo5sBtoj2LId+99t5ovpYBlYdg4MJkjIsvzMesUUBKIUBSQ5pNa4Kucb4lC8YmIigu5pEaAVAiw810GpIFbQAVQn8uQyTk2JA7cFg478kVkscLnHlUicJSlDn7c+T/kcdzJnBiwVGPDuq/W5cJIDGgAqoWBCdUYIR6p022LQDgtDdI76QF7lfoS2qc9V0SmM2GzjKgRaXXq2ZWdwPoAX+zRfJ/iN4m1v4jqm/JlzUPgGLADeA+0qv84cEXHsVq1SLk8faForQAOqRQYBK7L2RSwBTij9S99B7LVI5U65zrgmTboAXqBZTL2HLAfWKuiZ0IMfEMObpCuUa0fBY7IgFbgPLA1Wz1CxGu/zHk/YGZDZnbWq08azWyfaps1ZlbtjB1UffJbbyE1a8Zj1THgEXAy0D+YhebbgLuFFs8xZ6OkUjGjNKxWOmccOm/SnZKSoSmt2SbgXy7UENdbt2D6KMruFa7KlKKlAnuFDHIxd0mYKdrnRMoJcY2UjwHPgbce78Qdfpmayw8s//hmNV7MSy8Z4WMuMx+fnP//DSiq/AKXgtQu1ATUMwAAAABJRU5ErkJggg==]=],
+	Misc = [=[iVBORw0KGgoAAAANSUhEUgAAACIAAAAiCAYAAAA6RwvCAAADiElEQVR42uWYT2hcVRTGf5nMWIeEwYYmxTIaba2kaUgNNaaLYqwihBZtt6YLcdOdC+mmXaQuRGgVN21FaEFEDKgRRETsRk0bFxUUq23SLiyB0LTSNEk7aUuTyeRz4TdwecxMXv5BxAOX9+6d+8499zvnO+feqZLEapAEq0T+84YkgdRyGlK1wBhJAHOrAZHXgOeB+mW3RFLc9qakvySNS+qWlI7xTUJSMo7+uIg8AjQBm4A64HVgbYzv5oDZ5XTNDmBn0H8R6ALSZean7L42B/ayGbIZ2ALkgrF9QGOZ+RuBt4BjNnjJMZKWlJV0Wv/KeUm9kmbcf6PE/CclfejfC5JOSlovKVNprThB2iGp34o/kdRpgyRp2IsUAzJrQ0MZkLRzvqBNxEhc24FmYBo4B5wFvrCbngD2A2sc0H1At7/NAXm7tA2oWoprspI+MsQXJbV5fFOA0h1JTUH/vqQ+U/yyx07bZYt2TaekX638fUl1Hs9IOhDAXwjeP/YGaiX1OJ6m7OJFuSYJZM2YSeB3YCKA/XPgB/fzbqeAI8A14C4wDtwAaoGnK9C9oiGPAS8AGeCSWyg54DtgzAt+BrxrI4rSD4z4/aVKpaFSsmkAdvn9N6MRFr064AQwCqwHvgb+jugYAs47GT7jzDyyEEMyhrL4YcaKdvv3qzZuFvhynko95E1sM4N+isOaItfrJX0aBOB9SYOSRt0uOz+8Lal9noBvlvStA7pX0uNxWJPys13STZWWvFlQZMOgpMMBo6KtJsjMk5K64rAm74LVFATWMHDUha/RCe4g8I3Z0AwcAgaAvUBNpPg1ONnl/NxiNs6b0B6V9KN38L2hLQf7bp9RZIQKdt2Ak9ofkm5FEP2qVN0ppbzJEErSBxUgD1uPpAvOsvmIG++4PfDYlKRtUR1R1qSBlw3hddeWiRhF/B3gDLAHWAdsML3ngJ+BK641h4AW4FUz7245+q4FXnGBG7GCuHLBVJ1xrBXTQPEM0+rFW4B2b7qsIU85GKeBP4FqBy6AguNf8ZkEHnYJSAX5ozrQWe95VcA9G7bDh6excoY8a0gBOoDjwcJRQ2aBh3wEuB0snowYMh3MyxolgOeAX8oZ0hq8b4173rRRSRYmLZVS/HuOjZQhLgSn8FLIVNvXtwNdUdfkg3k1wBTwwNW77E0v4ZYKdlpYqdtdnCtnIoLCikuywsXo//m3xD+rTHqtBUsEaQAAAABJRU5ErkJggg==]=],
+	Arrow = [=[iVBORw0KGgoAAAANSUhEUgAAABgAAAAQCAYAAAAMJL+VAAABX0lEQVR42tWUvS5EYRCGn7MrZEWUKkHYRoNC3IRCgQQRcRPuQkNBVKIgEnETGpWfaBQkFEJEFP6X4FGYk2w21jmNwiSTr5ifd+ad+SZR+Usp8MfSkGFPgLTFMjACNAJbwGkuBDWPdqgrakX9VJfUTjXJis2TvF1dV1/VJ/XZb1lVB7NAsigqA3PAGHAPFEMTYBZ4C7+9KipzU9SpbkS1FfVcHVcn1Sv1PWwLapfaGFrIQ9GAuhx8P6jXkTy1j6pnAfAR8+kOWxJAdQEGIiDl+lSdUEtVPk3RyWUUkc6kt3YmP9GyXJX8RJ1Ri2Ev1PgPqwdB12eAlOsB9KibsSlG4Kja/MuckihgP2KeYm69tQAtUfldOO6qUxnJUy2p0wFyE93Pq20qhVi5ZqA19BhYAzaA5xx/9QXYBhaBi/jpbfGSxLFrBYaAfmAfOAJufzkb9c7KMNAHHAI7wGPy76/pF7xQlCx3Q5U3AAAAAElFTkSuQmCC]=],
+}
+
+local function decodeBase64(encoded)
+	local alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	local lookup, output = {}, {}
+	for index = 1, #alphabet do lookup[alphabet:sub(index, index)] = index - 1 end
+	local accumulator, bits = 0, 0
+	for index = 1, #encoded do
+		local value = lookup[encoded:sub(index, index)]
+		if value then
+			accumulator = accumulator * 64 + value
+			bits = bits + 6
+			if bits >= 8 then
+				bits = bits - 8
+				local byte = math.floor(accumulator / 2 ^ bits)
+				table.insert(output, string.char(byte % 256))
+				accumulator = accumulator % 2 ^ bits
+			end
+		end
+	end
+	return table.concat(output)
+end
+
+
+local iconAssets = {}
+local function getIconAsset(name)
+	if iconAssets[name] then return iconAssets[name] end
+	if not IconData[name] or type(writefile) ~= "function" or type(getcustomasset) ~= "function" then return nil end
+	local ok, asset = pcall(function()
+		local path = "speed_hub_x_replica_icon_v1_" .. name .. ".png"
+		writefile(path, decodeBase64(IconData[name]))
+		return getcustomasset(path)
+	end)
+	if ok and type(asset) == "string" and asset ~= "" then
+		iconAssets[name] = asset
+		return asset
+	end
+	return nil
+end
+
+-- Use cropped icons when custom assets are supported; otherwise draw a fallback.
 local Icons = {}
 function Icons.draw(parent, kind, color)
+	local asset = getIconAsset(kind)
+	if asset then
+		return create("ImageLabel", {
+			BackgroundTransparency = 1,
+			Size = UDim2.fromOffset(28, 28),
+			Position = UDim2.new(0, 12, 0.5, -14),
+			Image = asset,
+			ImageColor3 = color,
+		}, parent)
+	end
 	local holder = create("Frame", {
 		BackgroundTransparency = 1,
 		Size = UDim2.fromOffset(24, 24),
@@ -222,26 +282,6 @@ end
 -- Captured from the supplied reference; fall back to a text mark if an executor
 -- does not expose a writable filesystem and custom assets.
 local logoBase64 = [=[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]=]
-local function decodeBase64(encoded)
-	local alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-	local lookup, output = {}, {}
-	for index = 1, #alphabet do lookup[alphabet:sub(index, index)] = index - 1 end
-	local accumulator, bits = 0, 0
-	for index = 1, #encoded do
-		local value = lookup[encoded:sub(index, index)]
-		if value then
-			accumulator = accumulator * 64 + value
-			bits = bits + 6
-			if bits >= 8 then
-				bits = bits - 8
-				local byte = math.floor(accumulator / 2 ^ bits)
-				table.insert(output, string.char(byte % 256))
-				accumulator = accumulator % 2 ^ bits
-			end
-		end
-	end
-	return table.concat(output)
-end
 
 local function getLogoAsset()
 	if type(writefile) ~= "function" or type(getcustomasset) ~= "function" then return nil end
@@ -315,7 +355,7 @@ function Navigation.new(parent)
 			LayoutOrder = order,
 		}, sidebar)
 		round(button, 12)
-		local icon = Icons.draw(button, name, Style.muted)
+		local icon = Icons.draw(button, name, Style.icon)
 		local text = label(button, "| " .. name, 16, Style.muted)
 		text.Position = UDim2.fromOffset(45, 0)
 		text.Size = UDim2.new(1, -50, 1, 0)
@@ -329,8 +369,13 @@ function Navigation.new(parent)
 			local selected = tabName == name
 			tab.button.BackgroundColor3 = selected and Style.selected or Style.control
 			tab.text.TextColor3 = selected and Style.selectedIcon or Style.muted
-			for _, segment in ipairs(tab.icon:GetChildren()) do
-				if segment:IsA("Frame") then segment.BackgroundColor3 = selected and Style.selectedIcon or Style.muted end
+			local iconColor = selected and Style.selectedIcon or Style.icon
+			if tab.icon:IsA("ImageLabel") then
+				tab.icon.ImageColor3 = iconColor
+			else
+				for _, segment in ipairs(tab.icon:GetChildren()) do
+					if segment:IsA("Frame") then segment.BackgroundColor3 = iconColor end
+				end
 			end
 		end
 	end
@@ -423,11 +468,22 @@ function Controls.dropdown(parent, title, options, initial, callback, order)
 	local value = label(current, initial, 23, Style.text, Style.bold)
 	value.Size = UDim2.fromScale(1, 1)
 	value.TextXAlignment = Enum.TextXAlignment.Center
-	local arrow = label(row, "⌃", 25, Style.text, Style.bold)
+	local arrowAsset = getIconAsset("Arrow")
+	local arrow
+	if arrowAsset then
+		arrow = create("ImageLabel", {
+			BackgroundTransparency = 1,
+			Image = arrowAsset,
+			ImageColor3 = Style.text,
+			Size = UDim2.fromOffset(20, 13),
+		}, row)
+	else
+		arrow = label(row, "⌃", 25, Style.text, Style.bold)
+		arrow.Size = UDim2.fromOffset(20, 28)
+		arrow.TextXAlignment = Enum.TextXAlignment.Center
+	end
 	arrow.AnchorPoint = Vector2.new(1, 0.5)
-	arrow.Position = UDim2.new(0.59, -10, 0.5, 3)
-	arrow.Size = UDim2.fromOffset(25, 28)
-	arrow.TextXAlignment = Enum.TextXAlignment.Center
+	arrow.Position = UDim2.new(0.59, -25, 0.5, 0)
 	local expanded = false
 	local function setExpanded(state)
 		expanded = state
