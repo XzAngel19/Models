@@ -1,0 +1,1073 @@
+--[[--------------------------------------------------------------------------
+	Speed Hub X | Version: 3.7.0 - standalone client-sided GUI menu.
+
+	Runs directly inside a live Roblox client through a script executor.
+	No Studio-only APIs are used; GUI parenting falls back safely between
+	the executor hidden-UI container, CoreGui and PlayerGui.
+
+	GUI-ONLY REPLICA: every control is fully rendered and interactive, and
+	every feature hook routes into an intentionally empty stub. There is no
+	gameplay, farming, combat, movement, safe mode or automation logic here.
+
+	Usage:
+		- Execute this file, or load it remotely with:
+			loadstring(game:HttpGet("https://raw.githubusercontent.com/XzAngel19/Models/arena/fd3968be-models/Menu.txt"))()
+		- Drag the title bar to move the window.
+		- Click the "X" button to hide it, press RightControl to bring it back.
+		- Re-executing detaches the previous instance automatically.
+----------------------------------------------------------------------------]]
+
+-- Check for table that is shared between executions.
+if not shared then
+	return warn("No shared, no script.")
+end
+
+-- Initialize Luraph globals if they do not exist so dev bundles still run.
+pcall(function()
+	getfenv().LPH_NO_VIRTUALIZE = LPH_NO_VIRTUALIZE or function(...) return ... end
+	getfenv().PP_SCRAMBLE_NUM = PP_SCRAMBLE_NUM or function(...) return ... end
+	getfenv().PP_SCRAMBLE_STR = PP_SCRAMBLE_STR or function(...) return ... end
+	getfenv().PP_SCRAMBLE_RE_NUM = PP_SCRAMBLE_RE_NUM or function(...) return ... end
+end)
+
+-- Detach the previous menu so re-executions never stack old windows.
+if typeof(shared.SpeedHubXMenu) == "table" and typeof(shared.SpeedHubXMenu.destroy) == "function" then
+	pcall(shared.SpeedHubXMenu.destroy)
+end
+
+-- Services.
+local playersService = game:GetService("Players")
+local userInputService = game:GetService("UserInputService")
+local tweenService = game:GetService("TweenService")
+
+-- Constants.
+local MENU_TITLE = "Speed Hub X | Version: 3.7.0"
+
+local THEME = {
+	windowBackground = Color3.fromRGB(12, 12, 12),
+	controlBackground = Color3.fromRGB(30, 30, 30),
+	insetBackground = Color3.fromRGB(40, 40, 40),
+	accent = Color3.fromRGB(165, 5, 5),
+	accentBright = Color3.fromRGB(176, 5, 5),
+	textPrimary = Color3.fromRGB(255, 255, 255),
+	textNavigation = Color3.fromRGB(161, 161, 161),
+	textActiveNavigation = Color3.fromRGB(224, 82, 82),
+	textMuted = Color3.fromRGB(110, 110, 110),
+	sliderKnob = Color3.fromRGB(196, 196, 196),
+	toggleKnob = Color3.fromRGB(237, 237, 237),
+	dropdownPopup = Color3.fromRGB(16, 16, 16),
+	dropdownOptionHover = Color3.fromRGB(30, 30, 30),
+	dropdownOptionText = Color3.fromRGB(208, 208, 208),
+}
+
+local FONT = {
+	title = Enum.Font.GothamBold,
+	heading = Enum.Font.GothamBold,
+	label = Enum.Font.GothamMedium,
+	value = Enum.Font.GothamBold,
+}
+
+-- Geometry measured against the reference capture.
+local LAYOUT = {
+	windowWidth = 708,
+	windowHeight = 455,
+	titleBarHeight = 44,
+	sidebarWidth = 216,
+	navFirstTop = 8,
+	navButtonWidth = 181,
+	navButtonHeight = 30,
+	navButtonStep = 37,
+	contentOffsetX = 218,
+	contentWidth = 477,
+	cornerWindow = 10,
+	cornerControl = 8,
+}
+
+local Utility = {}
+
+---Creates and fully configures one Instance in a single call.
+---@param class string
+---@param props table
+---@param children table?
+---@return Instance
+function Utility.create(class, props, children)
+	local parent = props.Parent
+	props.Parent = nil
+	local instance = Instance.new(class)
+	for property, value in pairs(props) do
+		instance[property] = value
+	end
+	if children then
+		for _, child in ipairs(children) do
+			child.Parent = instance
+		end
+	end
+	instance.Parent = parent
+	return instance
+end
+
+---Applies rounded corners to the given instance.
+---@param instance Instance
+---@param radius number
+---@return Instance
+function Utility.corner(instance, radius)
+	return Utility.create("UICorner", {
+		CornerRadius = UDim.new(0, radius),
+		Parent = instance,
+	})
+end
+
+---Paints one straight line segment used by the vector icon painter.
+function Utility.segment(parent, color, transparency, x1, y1, x2, y2, thickness)
+	local deltaX = x2 - x1
+	local deltaY = y2 - y1
+	local length = math.sqrt(deltaX * deltaX + deltaY * deltaY) + thickness
+	local angle = math.deg(math.atan2(deltaY, deltaX))
+	return Utility.create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromOffset((x1 + x2) / 2, (y1 + y2) / 2),
+		Size = UDim2.fromOffset(math.max(1, length), math.max(1, thickness)),
+		Rotation = angle,
+		BackgroundColor3 = color,
+		BackgroundTransparency = transparency or 0,
+		BorderSizePixel = 0,
+		Parent = parent,
+	})
+end
+
+---Paints one filled dot used by the vector icon painter.
+function Utility.dot(parent, color, transparency, x, y, size, isRound)
+	local frame = Utility.create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromOffset(x, y),
+		Size = UDim2.fromOffset(math.max(1, size), math.max(1, size)),
+		BackgroundColor3 = color,
+		BackgroundTransparency = transparency or 0,
+		BorderSizePixel = 0,
+		Parent = parent,
+	})
+	if isRound then
+		Utility.corner(frame, math.floor(size / 2))
+	end
+	return frame
+end
+
+local Icons = {}
+
+-- Vector icon definitions drawn in a 24x24 design space.
+Icons.definitions = {
+	scanface = {
+		{ type = "line", x1 = 4, y1 = 4.5, x2 = 4, y2 = 9.5 },
+		{ type = "line", x1 = 4, y1 = 4.5, x2 = 9, y2 = 4.5 },
+		{ type = "line", x1 = 20, y1 = 4.5, x2 = 20, y2 = 9.5 },
+		{ type = "line", x1 = 20, y1 = 4.5, x2 = 15, y2 = 4.5 },
+		{ type = "line", x1 = 4, y1 = 19.5, x2 = 4, y2 = 14.5 },
+		{ type = "line", x1 = 4, y1 = 19.5, x2 = 9, y2 = 19.5 },
+		{ type = "line", x1 = 20, y1 = 19.5, x2 = 20, y2 = 14.5 },
+		{ type = "line", x1 = 20, y1 = 19.5, x2 = 15, y2 = 19.5 },
+		{ type = "dot", x = 9, y = 9.8, size = 2.4, round = true },
+		{ type = "dot", x = 15, y = 9.8, size = 2.4, round = true },
+		{ type = "line", x1 = 8, y1 = 13.8, x2 = 9.8, y2 = 15.4 },
+		{ type = "line", x1 = 9.8, y1 = 15.4, x2 = 14.2, y2 = 15.4 },
+		{ type = "line", x1 = 14.2, y1 = 15.4, x2 = 16, y2 = 13.8 },
+	},
+	home = {
+		{ type = "line", x1 = 3.5, y1 = 10.5, x2 = 12, y2 = 3.8 },
+		{ type = "line", x1 = 12, y1 = 3.8, x2 = 20.5, y2 = 10.5 },
+		{ type = "line", x1 = 3.5, y1 = 10.5, x2 = 3.5, y2 = 19.5 },
+		{ type = "line", x1 = 20.5, y1 = 10.5, x2 = 20.5, y2 = 19.5 },
+		{ type = "line", x1 = 3.5, y1 = 19.5, x2 = 20.5, y2 = 19.5 },
+		{ type = "line", x1 = 9.5, y1 = 19.5, x2 = 9.5, y2 = 14 },
+		{ type = "line", x1 = 9.5, y1 = 14, x2 = 14.5, y2 = 14 },
+		{ type = "line", x1 = 14.5, y1 = 14, x2 = 14.5, y2 = 19.5 },
+	},
+	pickaxe = {
+		{ type = "line", x1 = 4, y1 = 8.2, x2 = 6.6, y2 = 5.2 },
+		{ type = "line", x1 = 6.6, y1 = 5.2, x2 = 10.5, y2 = 3.9 },
+		{ type = "line", x1 = 10.5, y1 = 3.9, x2 = 14.6, y2 = 4.9 },
+		{ type = "line", x1 = 14.6, y1 = 4.9, x2 = 17.2, y2 = 7.4 },
+		{ type = "line", x1 = 7.2, y1 = 9.4, x2 = 17.6, y2 = 19.8 },
+	},
+	jail = {
+		{ type = "line", x1 = 4, y1 = 4.5, x2 = 20, y2 = 4.5 },
+		{ type = "line", x1 = 20, y1 = 4.5, x2 = 20, y2 = 19.5 },
+		{ type = "line", x1 = 20, y1 = 19.5, x2 = 4, y2 = 19.5 },
+		{ type = "line", x1 = 4, y1 = 19.5, x2 = 4, y2 = 4.5 },
+		{ type = "line", x1 = 8.7, y1 = 4.5, x2 = 8.7, y2 = 19.5 },
+		{ type = "line", x1 = 12, y1 = 4.5, x2 = 12, y2 = 19.5 },
+		{ type = "line", x1 = 15.3, y1 = 4.5, x2 = 15.3, y2 = 19.5 },
+	},
+	image = {
+		{ type = "line", x1 = 4, y1 = 5, x2 = 20, y2 = 5 },
+		{ type = "line", x1 = 20, y1 = 5, x2 = 20, y2 = 19 },
+		{ type = "line", x1 = 20, y1 = 19, x2 = 4, y2 = 19 },
+		{ type = "line", x1 = 4, y1 = 19, x2 = 4, y2 = 5 },
+		{ type = "dot", x = 8.6, y = 9, size = 2.6, round = true },
+		{ type = "line", x1 = 6.2, y1 = 16.6, x2 = 10.2, y2 = 11.8 },
+		{ type = "line", x1 = 10.2, y1 = 11.8, x2 = 13.4, y2 = 15.6 },
+		{ type = "line", x1 = 13.4, y1 = 15.6, x2 = 15.6, y2 = 12.6 },
+		{ type = "line", x1 = 15.6, y1 = 12.6, x2 = 18.4, y2 = 16.4 },
+	},
+}
+
+---Clears and repaints a named vector icon onto its square canvas frame.
+---@param canvas Instance
+---@param name string
+---@param color Color3
+---@param transparency number?
+function Icons.paint(canvas, name, color, transparency)
+	canvas:ClearAllChildren()
+	local definition = Icons.definitions[name]
+	if not definition then
+		return warn("[SpeedHubX] No icon definition named " .. tostring(name))
+	end
+	local scale = canvas.Size.X.Offset / 24
+	local thickness = math.max(1.2, 1.7 * scale)
+	for _, entry in ipairs(definition) do
+		if entry.type == "dot" then
+			Utility.dot(canvas, color, transparency, entry.x * scale, entry.y * scale, entry.size * scale, entry.round)
+		else
+			Utility.segment(canvas, color, transparency, entry.x1 * scale, entry.y1 * scale, entry.x2 * scale, entry.y2 * scale, thickness)
+		end
+	end
+end
+
+local Library = {}
+Library.__index = Library
+
+---Collects every viable parent candidate for the injected GUI, safest first.
+---@return table
+local function collectGuiParents()
+	local candidates = {}
+
+	-- Executor hidden-UI container hides the menu from most detections.
+	local okHidden, hiddenUi = pcall(function()
+		return gethui and gethui() or nil
+	end)
+	if okHidden and hiddenUi then
+		table.insert(candidates, hiddenUi)
+	end
+
+	-- CoreGui works on the vast majority of script executors.
+	local okCore, coreGui = pcall(function()
+		return game:GetService("CoreGui")
+	end)
+	if okCore and coreGui then
+		table.insert(candidates, coreGui)
+	end
+
+	-- PlayerGui keeps the menu usable in plain Studio play sessions.
+	local localPlayer = playersService.LocalPlayer
+	if localPlayer then
+		local okPlayer, playerGui = pcall(function()
+			return localPlayer:FindFirstChildOfClass("PlayerGui") or localPlayer:WaitForChild("PlayerGui", 5)
+		end)
+		if okPlayer and playerGui then
+			table.insert(candidates, playerGui)
+		end
+	end
+
+	return candidates
+end
+
+---Applies executor GUI protection when the current environment provides it.
+---@param screenGui Instance
+local function protectGui(screenGui)
+	pcall(function()
+		if syn and typeof(syn.protect_gui) == "function" then
+			syn.protect_gui(screenGui)
+		end
+		if typeof(protect_gui) == "function" then
+			protect_gui(screenGui)
+		end
+	end)
+end
+
+---Creates the ScreenGui, main window, title bar and base containers.
+---@return table
+function Library.new()
+	local self = setmetatable({}, Library)
+	self.connections = {}
+
+	-- Root ScreenGui (parent assigned last, after protection and fallbacks).
+	local screenGui = Utility.create("ScreenGui", {
+		Name = "SpeedHubX",
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		DisplayOrder = 999,
+	})
+
+	-- Main window frame.
+	local window = Utility.create("Frame", {
+		Name = "Window",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(LAYOUT.windowWidth, LAYOUT.windowHeight),
+		BackgroundColor3 = THEME.windowBackground,
+		BorderSizePixel = 0,
+		Parent = screenGui,
+	})
+	Utility.corner(window, LAYOUT.cornerWindow)
+
+	-- Title bar doubles as the invisible drag zone.
+	local titleBar = Utility.create("Frame", {
+		Name = "TitleBar",
+		Size = UDim2.new(1, 0, 0, LAYOUT.titleBarHeight),
+		BackgroundTransparency = 1,
+		Parent = window,
+	})
+
+	-- Title text.
+	Utility.create("TextLabel", {
+		Name = "Title",
+		Position = UDim2.fromOffset(18, 0),
+		Size = UDim2.new(1, -70, 1, 0),
+		BackgroundTransparency = 1,
+		Font = FONT.title,
+		TextSize = 15,
+		TextColor3 = THEME.textPrimary,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Text = MENU_TITLE,
+		Parent = titleBar,
+	})
+
+	-- Close button with a vector "X".
+	local closeButton = Utility.create("TextButton", {
+		Name = "Close",
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -33, 0, 8),
+		Size = UDim2.fromOffset(25, 25),
+		BackgroundTransparency = 1,
+		Text = "",
+		AutoButtonColor = false,
+		Parent = titleBar,
+	})
+	Utility.segment(closeButton, THEME.textPrimary, 0, 7, 7, 18, 18, 1.7)
+	Utility.segment(closeButton, THEME.textPrimary, 0, 18, 7, 7, 18, 1.7)
+
+	-- Sidebar hosts the navigation buttons.
+	local sidebar = Utility.create("Frame", {
+		Name = "Sidebar",
+		Position = UDim2.fromOffset(0, LAYOUT.titleBarHeight),
+		Size = UDim2.new(0, LAYOUT.sidebarWidth, 1, -LAYOUT.titleBarHeight),
+		BackgroundTransparency = 1,
+		Parent = window,
+	})
+
+	-- Content hosts one scrolling page per tab.
+	local content = Utility.create("ScrollingFrame", {
+		Name = "Content",
+		Position = UDim2.fromOffset(LAYOUT.contentOffsetX, LAYOUT.titleBarHeight),
+		Size = UDim2.new(0, LAYOUT.contentWidth, 1, -LAYOUT.titleBarHeight),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 0,
+		CanvasSize = UDim2.fromScale(0, 0),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+		Parent = window,
+	})
+
+	-- GUI parenting with executor-safe fallbacks.
+	protectGui(screenGui)
+	for _, candidate in ipairs(collectGuiParents()) do
+		local ok = pcall(function()
+			screenGui.Parent = candidate
+		end)
+		if ok and screenGui.Parent then
+			break
+		end
+	end
+
+	self.gui = screenGui
+	self.window = window
+	self.titleBar = titleBar
+	self.closeButton = closeButton
+	self.sidebar = sidebar
+	self.content = content
+	self.buttonRefs = {}
+	self.pages = {}
+	return self
+end
+
+---Enables title bar dragging for the window.
+function Library:enableDragging()
+	local dragging = false
+	local dragStart, startPosition
+
+	table.insert(self.connections, self.titleBar.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = Vector2.new(input.Position.X, input.Position.Y)
+			startPosition = self.window.Position
+		end
+	end))
+
+	table.insert(self.connections, userInputService.InputChanged:Connect(function(input)
+		if not dragging then
+			return
+		end
+		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+			local delta = Vector2.new(input.Position.X, input.Position.Y) - dragStart
+			self.window.Position = UDim2.new(
+				startPosition.X.Scale, startPosition.X.Offset + delta.X,
+				startPosition.Y.Scale, startPosition.Y.Offset + delta.Y
+			)
+		end
+	end))
+
+	table.insert(self.connections, userInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end))
+end
+
+---Wires the close button and the RightControl visibility shortcut.
+function Library:enableControls()
+	table.insert(self.connections, self.closeButton.MouseButton1Click:Connect(function()
+		self.gui.Enabled = false
+	end))
+
+	table.insert(self.connections, userInputService.InputBegan:Connect(function(input, gameProcessed)
+		if gameProcessed then
+			return
+		end
+		if input.KeyCode == Enum.KeyCode.RightControl then
+			self.gui.Enabled = not self.gui.Enabled
+		end
+	end))
+end
+
+---Stops every connection and removes the GUI from the screen.
+function Library:destroy()
+	for _, connection in ipairs(self.connections) do
+		pcall(function()
+			connection:Disconnect()
+		end)
+	end
+	self.connections = {}
+	if self.gui then
+		self.gui:Destroy()
+		self.gui = nil
+	end
+end
+
+local Navigation = {}
+
+---Creates one sidebar navigation button with its vector icon.
+---@param menu table
+---@param id string
+---@param spec table
+---@param index number
+---@return Instance
+function Navigation.createButton(menu, id, spec, index)
+	local button = Utility.create("TextButton", {
+		Name = id,
+		Position = UDim2.fromOffset(12, LAYOUT.navFirstTop + (index - 1) * LAYOUT.navButtonStep),
+		Size = UDim2.fromOffset(LAYOUT.navButtonWidth, LAYOUT.navButtonHeight),
+		BackgroundColor3 = THEME.controlBackground,
+		BackgroundTransparency = spec.dimmed and 0.2 or 0,
+		BorderSizePixel = 0,
+		Text = "",
+		AutoButtonColor = false,
+		Parent = menu.sidebar,
+	})
+	Utility.corner(button, LAYOUT.cornerControl)
+
+	-- Vector icon canvas.
+	local iconCanvas = Utility.create("Frame", {
+		Name = "Icon",
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 6, 0.5, 0),
+		Size = UDim2.fromOffset(22, 22),
+		BackgroundTransparency = 1,
+		Parent = button,
+	})
+
+	-- "| Label" text next to the icon, matching the reference layout.
+	local label = Utility.create("TextLabel", {
+		Name = "Label",
+		Position = UDim2.fromOffset(31, 0),
+		Size = UDim2.new(1, -36, 1, 0),
+		BackgroundTransparency = 1,
+		Font = FONT.label,
+		TextSize = 13,
+		TextColor3 = THEME.textNavigation,
+		TextTransparency = spec.dimmed and 0.3 or 0,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Text = "| " .. spec.label,
+		Parent = button,
+	})
+
+	Icons.paint(iconCanvas, spec.icon, THEME.textNavigation, spec.dimmed and 0.3 or 0)
+
+	button.MouseButton1Click:Connect(function()
+		Navigation.setActive(menu, id)
+	end)
+
+	menu.buttonRefs[id] = {
+		button = button,
+		label = label,
+		iconCanvas = iconCanvas,
+		spec = spec,
+	}
+	return button
+end
+
+---Creates the content page for one tab and runs its builder.
+---@param menu table
+---@param id string
+---@param spec table
+---@return Instance
+function Navigation.createPage(menu, id, spec)
+	local page = Utility.create("Frame", {
+		Name = id .. "Page",
+		Size = UDim2.new(1, 0, 1, 0),
+		BackgroundTransparency = 1,
+		Visible = false,
+		Parent = menu.content,
+	})
+	if spec.build then
+		local usedHeight = spec.build(page)
+		if usedHeight then
+			page.Size = UDim2.new(1, 0, 0, usedHeight)
+		end
+	end
+	menu.pages[id] = page
+	return page
+end
+
+---Builds every sidebar button and its matching content page.
+function Navigation.build(menu, tabs)
+	for index, id in ipairs(tabs.order) do
+		local spec = tabs.definitions[id]
+		Navigation.createButton(menu, id, spec, index)
+		Navigation.createPage(menu, id, spec)
+	end
+end
+
+---Applies the red active style to one tab and resets the rest.
+function Navigation.setActive(menu, activeId)
+	for id, refs in pairs(menu.buttonRefs) do
+		local isActive = id == activeId
+		local page = menu.pages[id]
+		if page then
+			page.Visible = isActive
+		end
+		local spec = refs.spec
+		refs.button.BackgroundTransparency = (isActive == false and spec.dimmed) and 0.2 or 0
+		refs.button.BackgroundColor3 = isActive and THEME.accent or THEME.controlBackground
+		local textColor = isActive and THEME.textActiveNavigation or THEME.textNavigation
+		refs.label.TextColor3 = textColor
+		refs.label.TextTransparency = (isActive == false and spec.dimmed) and 0.3 or 0
+		Icons.paint(refs.iconCanvas, spec.icon, textColor, (isActive == false and spec.dimmed) and 0.3 or 0)
+	end
+end
+
+local Components = {}
+
+-- Connection registry so slider drags never leak across re-executions.
+local trackedConnections = {}
+
+---Stores a connection for later cleanup.
+---@param connection RBXScriptConnection
+---@return RBXScriptConnection
+local function trackConnection(connection)
+	table.insert(trackedConnections, connection)
+	return connection
+end
+
+---Disconnects every connection registered by the control components.
+function Components.disconnectAll()
+	for _, connection in ipairs(trackedConnections) do
+		pcall(function()
+			connection:Disconnect()
+		end)
+	end
+	trackedConnections = {}
+end
+
+-- Section and control metrics driven by the reference layout.
+local HEADING_TOP_PAD = 8
+local HEADING_HEIGHT = 26
+local GAP_AFTER_HEADING = 7
+local ROW_GAP = 6.5
+local DROPDOWN_ROW_GAP = 6.5
+local TOGGLE_ROW_HEIGHT = 32
+local SLIDER_ROW_HEIGHT = 32
+local SLIDER_ROW_GAP = 10
+local TOGGLE_WIDTH = 26
+local TOGGLE_HEIGHT = 24
+local SLIDER_TRACK_WIDTH = 189
+local SLIDER_TRACK_HEIGHT = 10
+local SLIDER_KNOB_SIZE = 16
+
+---Adds a bold section heading; the first heading pads down, later ones
+---follow the previous control with the standard inter-row gap only.
+---@param page Instance
+---@param cursor number
+---@param title string
+---@return number
+function Components.addHeading(page, cursor, title)
+	local top = cursor > 0 and cursor or HEADING_TOP_PAD
+	Utility.create("TextLabel", {
+		Position = UDim2.fromOffset(6, top),
+		Size = UDim2.new(1, -12, 0, HEADING_HEIGHT),
+		BackgroundTransparency = 1,
+		Font = FONT.heading,
+		TextSize = 18,
+		TextColor3 = THEME.textPrimary,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Text = title,
+		Parent = page,
+	})
+	return top + HEADING_HEIGHT + GAP_AFTER_HEADING
+end
+
+---Adds one toggle row; the visual switch reports into an empty stub hook.
+---@param page Instance
+---@param cursor number
+---@param labelText string
+---@param feature table
+---@return number
+function Components.addToggle(page, cursor, labelText, feature)
+	local row = Utility.create("TextButton", {
+		Position = UDim2.fromOffset(0, cursor),
+		Size = UDim2.new(1, 0, 0, TOGGLE_ROW_HEIGHT),
+		BackgroundColor3 = THEME.controlBackground,
+		BorderSizePixel = 0,
+		Text = "",
+		AutoButtonColor = false,
+		Parent = page,
+	})
+	Utility.corner(row, LAYOUT.cornerControl)
+
+	-- Row label.
+	Utility.create("TextLabel", {
+		Position = UDim2.fromOffset(12, 0),
+		Size = UDim2.new(1, -60, 1, 0),
+		BackgroundTransparency = 1,
+		Font = FONT.label,
+		TextSize = 13,
+		TextColor3 = THEME.textPrimary,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Text = labelText,
+		Parent = row,
+	})
+
+	-- Toggle switch; the OFF state matches the reference capture exactly.
+	local toggleBox = Utility.create("Frame", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -12, 0.5, 0),
+		Size = UDim2.fromOffset(TOGGLE_WIDTH, TOGGLE_HEIGHT),
+		BackgroundColor3 = THEME.insetBackground,
+		BorderSizePixel = 0,
+		Parent = row,
+	})
+	Utility.corner(toggleBox, 8)
+
+	local knob = Utility.create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0, TOGGLE_WIDTH - 12, 0.5, 0),
+		Size = UDim2.fromOffset(SLIDER_KNOB_SIZE, SLIDER_KNOB_SIZE),
+		BackgroundColor3 = THEME.toggleKnob,
+		BorderSizePixel = 0,
+		Visible = false,
+		ZIndex = 2,
+		Parent = toggleBox,
+	})
+	Utility.corner(knob, 8)
+
+	local state = false
+	row.MouseButton1Click:Connect(function()
+		state = not state
+		knob.Visible = state
+		tweenService:Create(toggleBox, TweenInfo.new(0.12), {
+			BackgroundColor3 = state and THEME.accent or THEME.insetBackground,
+		}):Play()
+		feature.onToggled(state)
+	end)
+
+	return cursor + TOGGLE_ROW_HEIGHT + ROW_GAP
+end
+
+---Adds one slider row; dragging is visual only and reports to a stub hook.
+---@param page Instance
+---@param cursor number
+---@param labelText string
+---@param feature table
+---@return number
+function Components.addSlider(page, cursor, labelText, feature)
+	local row = Utility.create("TextButton", {
+		Position = UDim2.fromOffset(0, cursor),
+		Size = UDim2.new(1, 0, 0, SLIDER_ROW_HEIGHT),
+		BackgroundColor3 = THEME.controlBackground,
+		BorderSizePixel = 0,
+		Text = "",
+		AutoButtonColor = false,
+		Parent = page,
+	})
+	Utility.corner(row, LAYOUT.cornerControl)
+
+	-- Row label.
+	Utility.create("TextLabel", {
+		Position = UDim2.fromOffset(12, 0),
+		Size = UDim2.new(0, 200, 1, 0),
+		BackgroundTransparency = 1,
+		Font = FONT.label,
+		TextSize = 13,
+		TextColor3 = THEME.textPrimary,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Text = labelText,
+		Parent = row,
+	})
+
+	-- Value readout, right aligned against the track.
+	local valueLabel = Utility.create("TextLabel", {
+		Position = UDim2.fromOffset(220, 0),
+		Size = UDim2.fromOffset(40, SLIDER_ROW_HEIGHT),
+		BackgroundTransparency = 1,
+		Font = FONT.value,
+		TextSize = 14,
+		TextColor3 = THEME.textPrimary,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		Text = tostring(feature.value),
+		Parent = row,
+	})
+
+	-- Track with red fill.
+	local track = Utility.create("Frame", {
+		Position = UDim2.new(0, 276, 0.5, -SLIDER_TRACK_HEIGHT / 2),
+		Size = UDim2.fromOffset(SLIDER_TRACK_WIDTH, SLIDER_TRACK_HEIGHT),
+		BackgroundColor3 = THEME.insetBackground,
+		BorderSizePixel = 0,
+		Parent = row,
+	})
+	Utility.corner(track, 5)
+
+	local fill = Utility.create("Frame", {
+		Size = UDim2.fromOffset(0, SLIDER_TRACK_HEIGHT),
+		BackgroundColor3 = THEME.accentBright,
+		BorderSizePixel = 0,
+		ZIndex = 2,
+		Parent = track,
+	})
+	Utility.corner(fill, 5)
+
+	-- Round knob riding the track.
+	local knob = Utility.create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.fromOffset(SLIDER_KNOB_SIZE, SLIDER_KNOB_SIZE),
+		BackgroundColor3 = THEME.sliderKnob,
+		BorderSizePixel = 0,
+		ZIndex = 3,
+		Parent = track,
+	})
+	Utility.corner(knob, 8)
+
+	local function render()
+		local span = feature.max - feature.min
+		if span <= 0 then
+			return
+		end
+		local fraction = math.clamp((feature.value - feature.min) / span, 0, 1)
+		local offset = math.floor(SLIDER_TRACK_WIDTH * fraction + 0.5)
+		fill.Size = UDim2.fromOffset(offset, SLIDER_TRACK_HEIGHT)
+		knob.Position = UDim2.new(0, offset, 0.5, 0)
+		valueLabel.Text = tostring(feature.value)
+	end
+
+	local function update(mouseX)
+		local span = feature.max - feature.min
+		if span <= 0 then
+			return
+		end
+		local fraction = math.clamp((mouseX - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+		feature.value = math.floor(feature.min + fraction * span + 0.5)
+		render()
+		feature.onChanged(feature.value)
+	end
+
+	-- Drag handling; only the track starts a drag.
+	local dragging = false
+	trackConnection(track.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			update(input.Position.X)
+		end
+	end))
+	trackConnection(userInputService.InputChanged:Connect(function(input)
+		if not dragging then
+			return
+		end
+		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+			update(input.Position.X)
+		end
+	end))
+	trackConnection(userInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end))
+
+	render()
+	return cursor + SLIDER_ROW_HEIGHT + SLIDER_ROW_GAP
+end
+
+---Adds one dropdown row with a stub option popup.
+---@param page Instance
+---@param cursor number
+---@param labelText string
+---@param feature table
+---@return number
+function Components.addDropdown(page, cursor, labelText, feature)
+	local row = Utility.create("TextButton", {
+		Position = UDim2.fromOffset(0, cursor),
+		Size = UDim2.new(1, 0, 0, TOGGLE_ROW_HEIGHT),
+		BackgroundColor3 = THEME.controlBackground,
+		BorderSizePixel = 0,
+		Text = "",
+		AutoButtonColor = false,
+		Parent = page,
+	})
+	Utility.corner(row, LAYOUT.cornerControl)
+
+	-- Row label.
+	Utility.create("TextLabel", {
+		Position = UDim2.fromOffset(12, 0),
+		Size = UDim2.new(0, 220, 1, 0),
+		BackgroundTransparency = 1,
+		Font = FONT.label,
+		TextSize = 13,
+		TextColor3 = THEME.textPrimary,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Text = labelText,
+		Parent = row,
+	})
+
+	-- Chevron pointing up, drawn as two vector segments.
+	local chevron = Utility.create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0, 255, 0.5, 0),
+		Size = UDim2.fromOffset(16, 16),
+		BackgroundTransparency = 1,
+		Parent = row,
+	})
+	Utility.segment(chevron, THEME.textPrimary, 0, 3, 11, 8, 5, 1.6)
+	Utility.segment(chevron, THEME.textPrimary, 0, 8, 5, 13, 11, 1.6)
+
+	-- Value box.
+	local valueButton = Utility.create("TextButton", {
+		Position = UDim2.new(0, 272, 0, 4),
+		Size = UDim2.fromOffset(193, TOGGLE_ROW_HEIGHT - 8),
+		BackgroundColor3 = THEME.insetBackground,
+		BorderSizePixel = 0,
+		Font = FONT.value,
+		TextSize = 17,
+		TextColor3 = THEME.textPrimary,
+		Text = tostring(feature.value),
+		AutoButtonColor = false,
+		Parent = row,
+	})
+	Utility.corner(valueButton, 7)
+
+	-- Stub option popup.
+	local popup = Utility.create("Frame", {
+		Position = UDim2.new(0, 272, 0, TOGGLE_ROW_HEIGHT + 4),
+		Size = UDim2.fromOffset(193, #feature.values * 26 + 6),
+		BackgroundColor3 = THEME.dropdownPopup,
+		BorderSizePixel = 0,
+		Visible = false,
+		ZIndex = 10,
+		Parent = page,
+	})
+	Utility.corner(popup, 8)
+	Utility.create("UIListLayout", {
+		Padding = UDim.new(0, 2),
+		HorizontalAlignment = Enum.HorizontalAlignment.Center,
+		VerticalAlignment = Enum.VerticalAlignment.Center,
+		Parent = popup,
+	})
+
+	for _, value in ipairs(feature.values) do
+		local optionButton = Utility.create("TextButton", {
+			Size = UDim2.new(1, -6, 0, 24),
+			BackgroundColor3 = THEME.dropdownOptionHover,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Font = FONT.label,
+			TextSize = 13,
+			TextColor3 = THEME.dropdownOptionText,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Text = "  " .. value,
+			AutoButtonColor = false,
+			ZIndex = 11,
+			Parent = popup,
+		})
+		Utility.corner(optionButton, 6)
+		optionButton.MouseEnter:Connect(function()
+			optionButton.BackgroundTransparency = 0
+		end)
+		optionButton.MouseLeave:Connect(function()
+			optionButton.BackgroundTransparency = 1
+		end)
+		optionButton.MouseButton1Click:Connect(function()
+			feature.value = value
+			valueButton.Text = tostring(value)
+			popup.Visible = false
+			feature.onChanged(value)
+		end)
+	end
+
+	valueButton.MouseButton1Click:Connect(function()
+		popup.Visible = not popup.Visible
+	end)
+
+	return cursor + TOGGLE_ROW_HEIGHT + DROPDOWN_ROW_GAP
+end
+
+---Adds a muted placeholder used by tabs without visible controls in the reference.
+function Components.addEmptyState(page)
+	Utility.create("TextLabel", {
+		Size = UDim2.new(1, 0, 1, 0),
+		BackgroundTransparency = 1,
+		Font = FONT.label,
+		TextSize = 13,
+		TextColor3 = THEME.textMuted,
+		Text = "No controls available on this tab yet.",
+		Parent = page,
+	})
+end
+
+-- Features. Every entry below is an intentionally empty stub: the GUI calls
+-- these hooks, but no gameplay, farming, combat, movement, safe mode or
+-- automation logic is implemented anywhere.
+local Features = {}
+
+Features.AutoVoid = {
+	enabled = false,
+	onToggled = function(value) end,
+}
+Features.AutoBlock = {
+	enabled = false,
+	onToggled = function(value) end,
+}
+Features.AntiSlow = {
+	enabled = false,
+	onToggled = function(value) end,
+}
+Features.ChooseEquipCharacter = {
+	values = { "Bald" },
+	value = "Bald",
+	onChanged = function(value) end,
+}
+Features.EquipCharacter = {
+	enabled = false,
+	onToggled = function(value) end,
+}
+Features.SafeModeHealth = {
+	min = 0,
+	max = 100,
+	value = 50,
+	onChanged = function(value) end,
+}
+Features.SafeModeUntilHealth = {
+	min = 0,
+	max = 100,
+	value = 69,
+	onChanged = function(value) end,
+}
+Features.AutoSafeModeAtHealth = {
+	enabled = false,
+	onToggled = function(value) end,
+}
+
+local Tabs = {}
+Tabs.order = { "Home", "Main", "Farming", "Killer", "Misc" }
+
+---Builds the Farming page exactly as shown in the reference capture.
+---@param page Instance
+---@return number
+local function buildFarmingPage(page)
+	-- Player section: three toggle rows.
+	local cursor = Components.addHeading(page, 0, "Player")
+	cursor = Components.addToggle(page, cursor, "Auto Void", Features.AutoVoid)
+	cursor = Components.addToggle(page, cursor, "Auto Block", Features.AutoBlock)
+	cursor = Components.addToggle(page, cursor, "Anti-Slow", Features.AntiSlow)
+
+	-- Character section: dropdown plus one toggle row.
+	cursor = Components.addHeading(page, cursor, "Character")
+	cursor = Components.addDropdown(page, cursor, "Choose Equip Character", Features.ChooseEquipCharacter)
+	cursor = Components.addToggle(page, cursor, "Equip Character", Features.EquipCharacter)
+
+	-- Safe Mode section: two slider rows and one toggle row.
+	cursor = Components.addHeading(page, cursor, "Safe Mode")
+	cursor = Components.addSlider(page, cursor, "Health", Features.SafeModeHealth)
+	cursor = Components.addSlider(page, cursor, "Until Health To back", Features.SafeModeUntilHealth)
+	cursor = Components.addToggle(page, cursor, "Auto To Safe Mode At Health", Features.AutoSafeModeAtHealth)
+
+	return cursor
+end
+
+---Builds placeholder pages for tabs whose content is not visible in the reference.
+---@param page Instance
+---@return number
+local function buildEmptyPage(page)
+	Components.addEmptyState(page)
+	return nil
+end
+
+Tabs.definitions = {
+	Home = { label = "Home", icon = "scanface", build = buildEmptyPage },
+	Main = { label = "Main", icon = "home", build = buildEmptyPage },
+	Farming = { label = "Farming", icon = "pickaxe", build = buildFarmingPage },
+	Killer = { label = "Killer", icon = "jail", dimmed = true, build = buildEmptyPage },
+	Misc = { label = "Misc", icon = "image", build = buildEmptyPage },
+}
+
+local Menu = {}
+Menu.handle = nil
+
+---Builds the entire interface and applies the reference default state.
+---@return table
+function Menu.init()
+	local menu = Library.new()
+	menu:enableDragging()
+	menu:enableControls()
+	Navigation.build(menu, Tabs)
+	Navigation.setActive(menu, "Farming")
+	Menu.handle = menu
+	shared.SpeedHubXMenu = Menu
+	return menu
+end
+
+---Stops the menu completely (used before re-execution).
+function Menu.destroy()
+	if Menu.handle then
+		Menu.handle:destroy()
+		Menu.handle = nil
+	end
+	Components.disconnectAll()
+	if shared.SpeedHubXMenu == Menu then
+		shared.SpeedHubXMenu = nil
+	end
+end
+
+---Called when menu initialization errors.
+---@param message any
+local function onInitializeError(message)
+	warn("Failed to initialize the Speed Hub X menu.")
+	warn(tostring(message))
+	warn(debug.traceback())
+end
+
+-- Safely build the menu and surface any failure through the handler.
+xpcall(function()
+	Menu.init()
+	print("[SpeedHubX] Menu loaded.")
+end, onInitializeError)
+
+return Menu
