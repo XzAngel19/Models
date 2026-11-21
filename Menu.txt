@@ -1,0 +1,504 @@
+-- Speed Hub X menu replica. All feature callbacks intentionally do nothing.
+-- The component tables below are local modules bundled into one executor script.
+
+local playersService = game:GetService("Players")
+local userInputService = game:GetService("UserInputService")
+local localPlayer = playersService.LocalPlayer
+
+local environment = (type(getgenv) == "function" and getgenv()) or shared or _G
+local previousMenu = environment.SpeedHubXMenuReplica
+if previousMenu and type(previousMenu.destroy) == "function" then
+	pcall(previousMenu.destroy)
+end
+
+local Style = {
+	window = Color3.fromRGB(8, 8, 8),
+	control = Color3.fromRGB(28, 28, 28),
+	controlHover = Color3.fromRGB(34, 34, 34),
+	selected = Color3.fromRGB(191, 0, 4),
+	selectedIcon = Color3.fromRGB(225, 63, 63),
+	text = Color3.fromRGB(239, 239, 239),
+	muted = Color3.fromRGB(138, 138, 138),
+	description = Color3.fromRGB(105, 105, 105),
+	toggle = Color3.fromRGB(35, 35, 35),
+	red = Color3.fromRGB(221, 0, 6),
+	font = Enum.Font.Gotham,
+	bold = Enum.Font.GothamBold,
+}
+
+local function create(className, properties, parent)
+	local object = Instance.new(className)
+	for property, value in pairs(properties or {}) do
+		object[property] = value
+	end
+	object.Parent = parent
+	return object
+end
+
+local function round(parent, radius)
+	return create("UICorner", { CornerRadius = UDim.new(0, radius) }, parent)
+end
+
+local function label(parent, text, size, color, font)
+	return create("TextLabel", {
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Text = text,
+		TextColor3 = color or Style.text,
+		Font = font or Style.font,
+		TextSize = size,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Center,
+	}, parent)
+end
+
+local function line(parent, x1, y1, x2, y2, color, thickness)
+	local dx, dy = x2 - x1, y2 - y1
+	local segment = create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromOffset((x1 + x2) / 2, (y1 + y2) / 2),
+		Size = UDim2.fromOffset(math.sqrt(dx * dx + dy * dy), thickness or 2),
+		Rotation = math.deg(math.atan2(dy, dx)),
+		BackgroundColor3 = color,
+		BorderSizePixel = 0,
+	}, parent)
+	round(segment, 2)
+	return segment
+end
+
+-- Draw small monochrome navigation icons without relying on external assets.
+local Icons = {}
+function Icons.draw(parent, kind, color)
+	local holder = create("Frame", {
+		BackgroundTransparency = 1,
+		Size = UDim2.fromOffset(24, 24),
+		Position = UDim2.new(0, 14, 0.5, -12),
+	}, parent)
+	local function stroke(x1, y1, x2, y2, width)
+		line(holder, x1, y1, x2, y2, color, width or 2)
+	end
+	if kind == "Home" then
+		stroke(2, 8, 2, 4) stroke(2, 4, 6, 4)
+		stroke(18, 4, 22, 4) stroke(22, 4, 22, 8)
+		stroke(2, 16, 2, 20) stroke(2, 20, 6, 20)
+		stroke(18, 20, 22, 20) stroke(22, 20, 22, 16)
+		stroke(7, 8, 9, 8) stroke(15, 8, 17, 8)
+		stroke(7, 14, 10, 17) stroke(10, 17, 14, 17) stroke(14, 17, 17, 14)
+	elseif kind == "Main" then
+		stroke(2, 11, 12, 3) stroke(12, 3, 22, 11)
+		stroke(5, 10, 5, 21) stroke(5, 21, 19, 21) stroke(19, 21, 19, 10)
+		stroke(10, 21, 10, 14) stroke(10, 14, 14, 14) stroke(14, 14, 14, 21)
+	elseif kind == "Farming" then
+		stroke(5, 4, 21, 21, 3) stroke(4, 6, 9, 3, 3)
+		stroke(9, 3, 16, 4, 3) stroke(4, 6, 2, 11, 3)
+	elseif kind == "Killer" then
+		stroke(3, 8, 3, 17) stroke(3, 8, 6, 6) stroke(6, 6, 8, 7)
+		stroke(8, 7, 10, 5) stroke(10, 5, 13, 6) stroke(13, 6, 15, 5)
+		stroke(15, 5, 18, 7) stroke(18, 7, 21, 9) stroke(21, 9, 21, 17)
+		stroke(3, 17, 6, 20) stroke(6, 20, 18, 20) stroke(18, 20, 21, 17)
+		stroke(8, 9, 8, 15) stroke(12, 8, 12, 15) stroke(16, 8, 16, 15)
+	else
+		stroke(2, 20, 7, 4) stroke(7, 4, 12, 12) stroke(12, 12, 15, 7)
+		stroke(15, 7, 22, 20) stroke(22, 20, 2, 20) stroke(6, 16, 18, 16)
+	end
+	return holder
+end
+
+-- Only UI state changes; no game feature is implemented.
+local Features = {}
+function Features.autoUltimate(enabled) end
+function Features.autoDash(enabled) end
+function Features.aimPartChanged(value) end
+function Features.aimlock(enabled) end
+function Features.antiKnockback(enabled) end
+function Features.antiStun(enabled) end
+function Features.antiBusy(enabled) end
+
+local screen = create("ScreenGui", {
+	Name = "SpeedHubXMenuReplica",
+	ResetOnSpawn = false,
+	IgnoreGuiInset = true,
+	DisplayOrder = 100,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+})
+
+-- Try executor UI protection, then fall back through common GUI containers.
+if type(syn) == "table" and type(syn.protect_gui) == "function" then
+	pcall(syn.protect_gui, screen)
+elseif type(protectgui) == "function" then
+	pcall(protectgui, screen)
+end
+local parented = false
+if type(gethui) == "function" then
+	local ok, container = pcall(gethui)
+	if ok and container then
+		parented = pcall(function() screen.Parent = container end)
+	end
+end
+if not parented then
+	parented = pcall(function() screen.Parent = game:GetService("CoreGui") end)
+end
+if not parented then
+	local playerGui = localPlayer and localPlayer:FindFirstChildOfClass("PlayerGui")
+	if not playerGui and localPlayer then
+		playerGui = localPlayer:WaitForChild("PlayerGui", 10)
+	end
+	if playerGui then
+		parented = pcall(function() screen.Parent = playerGui end)
+	end
+end
+if not parented then
+	screen:Destroy()
+	warn("Speed Hub X: no accessible GUI container was found.")
+	return
+end
+
+local connections = {}
+local function connect(signal, callback)
+	local connection = signal:Connect(callback)
+	table.insert(connections, connection)
+	return connection
+end
+
+local Window = {}
+function Window.new()
+	local window = create("Frame", {
+		Name = "Window",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.58, 0.495),
+		Size = UDim2.fromOffset(1016, 646),
+		BackgroundColor3 = Style.window,
+		BorderSizePixel = 0,
+		ClipsDescendants = true,
+	}, screen)
+	round(window, 12)
+	local scale = create("UIScale", { Scale = 1 }, window)
+
+	local titleBar = create("Frame", {
+		Name = "TitleBar",
+		Size = UDim2.new(1, 0, 0, 58),
+		BackgroundTransparency = 1,
+		Active = true,
+	}, window)
+	local title = label(titleBar, "Speed Hub X | Version: 3.7.0", 19)
+	title.Position = UDim2.fromOffset(28, 0)
+	title.Size = UDim2.new(1, -90, 1, 0)
+
+	local close = create("TextButton", {
+		Name = "Close",
+		BackgroundTransparency = 1,
+		Position = UDim2.new(1, -50, 0, 4),
+		Size = UDim2.fromOffset(43, 43),
+		Text = "×",
+		TextColor3 = Style.text,
+		TextSize = 31,
+		Font = Enum.Font.Gotham,
+		AutoButtonColor = false,
+	}, titleBar)
+	close.MouseButton1Click:Connect(function() window.Visible = false end)
+
+	local dragging, dragStart, startPosition, dragInput
+	titleBar.InputBegan:Connect(function(input)
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
+		dragging, dragStart, startPosition = true, input.Position, window.Position
+		connect(input.Changed, function()
+			if input.UserInputState == Enum.UserInputState.End then dragging = false end
+		end)
+	end)
+	titleBar.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+			dragInput = input
+		end
+	end)
+	connect(userInputService.InputChanged, function(input)
+		if dragging and input == dragInput then
+			local delta = input.Position - dragStart
+			window.Position = UDim2.new(startPosition.X.Scale, startPosition.X.Offset + delta.X, startPosition.Y.Scale, startPosition.Y.Offset + delta.Y)
+		end
+	end)
+	return window, scale
+end
+
+-- Captured from the supplied reference; fall back to a text mark if an executor
+-- does not expose a writable filesystem and custom assets.
+local logoBase64 = [=[iVBORw0KGgoAAAANSUhEUgAAAFAAAABRCAIAAADKL7ZfAAAABGdBTUEAALGPC/xhBQAAACBjSFJNAAB6JgAAgIQAAPoAAACA6AAAdTAAAOpgAAA6mAAAF3CculE8AAAABmJLR0QA/wD/AP+gvaeTAAAAB3RJTUUH6gsVBTkEZD6PsAAAF9JJREFUeNrVnFtzI8eV538nM6sKBYDgtW/qbkktWbbX9tiey+46PLERuw8bG/td9wvsiyNmd2bCEXsZz87IO7bHF8lqtdRNNpsgUKhL5jnzUAAINskmqZYe5gQDAQKorPznOXnuWfLBt7/PikTMzFQ1JTVTriMTABUFVPp/VWX5lZmJAQqYmbMrx+kvuZbWP7tqqP5zcaIg7vJBQz+hnlLStq2bpqnrulosTNONJgLI+nVjmcwwEAMwWM/Sbjrq5Xe56t/zX03u3ynLIfAa58IG2rSoq2o+n81OifG6Ia+69waarwzs7UmYvnzFHqPBEBygpoDJCnBKabGo5/PZvKpujfYcNrkUq0cAwejv/1Vpk1n9hkp2YbL9+7qbPnsxLfPJZFIURRDXX+7MLKVUVdVsdjqvKrr21mivILfx9/WMeJ76veIRj8jGHwgiy7vO2+mXh/V8YWaAM0KMqa4XVVVV1YLYfY1z2+SGnG1ybqwYrl7Km2yW/jcOjNl06mA4HCoWYuyqqprPZqQE9g1w4vU5vD1tavWL4MVWN1qtsrXx9PQ0z3IJLsQY67omrSVZkOsN0s2RiZzNTuz61exN2XXDyxpbD34F27Eyk8st3qNXNHbmxMCllFLbAoj7Rtn7TdBVC7hctLUtFBCp61pVXdd12GpR3b8ywGtSOfs7h5kVZrXZySs1dSmlc1/8Kyb32hux80qpsdyH0CzqjYW6gdvwFkJgtmGv5XYDnfv1ublt2HVzAKLgVlZClri8AxV8SF0D3/ju3YS6+cltYb/NDABxEq7xC66az9la3ohE5CLmr4nWc3CXz8fOXkUk3GzQ8zgvA7TSfK4fupeZDM3NBjCADHbBQYIIh9CBmgEBPAQwqI0KFkJy9M7oUv1cb670TW7rinOXAb7onZ6hdRkO6FDQ5W8UzFzwKh5zpF5erUBH6EP4EL4r8m4YHTjvTVuvp3n4+cnJEZxChPeEkbENEV648L81/tIgD8QgSZ2ZoGZ6QfP2N784UV0u/WvfCyrcjsMOBHUAmlDV5YcKGhMkgRLn0DvwDuEu7sf3tt5x9q6Uk87Gijdar1UIpYWZuJrKtL03Hm21caeJUcJT8eV0WmO/W0QcnuBFxWzDeL4VXQf43PKp2lKP56t1Vkg4j3YwhDtwF30Cj+AD4h3v7pM3sZ2z+DJ2C1PDoeRN2LZ8z4nzZS6DQcfAyIMLqo+zsDUZ1amt5+1UY0fyGKCyCozO+xuOs0/1Op3i7JYcfo3bq02jGdyFB/A+PBL+/aMHO0077BT4cjr7IjafdvocXkICgRF8GyYwDGGQ5ampnSGmA/iwbPaGwz/NRi/n7VM4xE6hXm/htb94UZDlukDAzji8XpjrVmj1i83f5XAAP4A/gR8Ny3fHI2b1yy79kwx+vah+HhdTqKGFFvoAJYd/hBzaGDVGAQGFLfi3i+4vBt2fbe1/5PK/Ozn+27b9P9B5NOFWk9YNFXade95LQEIdJKfudhzWlZpVITN2MlzHO/DjUf4nMnqkdpAHddkni/o3df2PTH8Hz6DqLwEDjysIij2nY6Wx+92v4rZU51AfV1p1T8aTP79z1x291HrxcbIpUr21aXNyK8ACOO33r6tJjDv+Dfyl8IMw2fLZSdRfJPus4hd1+4x4DO0ZTgZgsIse0JaQYA6HcAKdoOIyDQl9Qfwf8GnT/Xk2+9MYvl/s7w94Z3r8V1p/5pKqmS1dfr08uXIVrwxwIv78x5tx3cbruU89ZjgbmA3hPw78f9m9v5/4oom/rNu/rmf/szn5JfocV7O0sWPYh/vw04Ifjsvv3bnzvbt3Hzs50FTEFGAAI7MByaEKz+EZHLeJZr7nBvdHo/1y2GmXuqafbqK30q+TXcz0rBdFBGx3f9+vvtiwcnLF5hfAsAgJsxyewA/KyRMXpsn+2/zoZ1b/ivQlEDLzTsQGxh14F/4D/NeMv5wUj0rXZpYWrz6qqz/Lsp+Ot36SDx7X9XsgcAIGTQ8J/gCzOD8I/sPx+Mmi/tFo8nDvwRenL2fQuKXsLBHZ2cRX0b+BYas8mjiwnb2D23paAB4K4Y7xDowW7ReL7pPYfIz9Ghb9VkE9LlgY0n2E/3ej0Y/KsJtq16XPjqu/S9UJDEbkKe6ojtv0F3ceHLn0IHRPZqdPZ+lXyT5dabjfwT+cvBievPjx+GBmrg3ZHQZPqW837T7VZU7E3wawrdR0kEkYvlsv/vNW+a28fN753071S1KP1meZAx91YG4ffpJvfUuyWsKvQYbDvzn57K9gCh/P+YD0nTI8Hk+2JJrF7TL/od/9T+O9//v02c+YPoMWavgSPoHveTpH50iiGDgRXWW8bwJ4Fat8BTssWcp2Q3go4V1NZVN9UsvfU5/2X2beZd4lE0sOzeHJZDI7/PSXM47g7vv7HyNfYuT+2A//36L+9eLoweLoAAIUz3kE37mz9yOGLmT/HKfJhbHTj0L4MC9e1rNTn5202Strb50GXCl3MzsP+NpYTR1kA0u+Pvnh/qOt+Rcd6fMkX6wts6om1Zgcmkt5bzB4dnIE/AN8AvLH30yzXNTFjqqdDTCBp/C8vxQ+gQ+PXn57kB+E9NN8qy7CTF1nRV03jFwSPdV2too6xG6WvuwBO4dharfmsEMcNoIyapmPGmLo6pBwkEGXLGnb5wEX1r5qRHZ3ytZ9tz7tOv4pMU2tkjuXiZNu5ak6RHEGOelTnb/vByOx2avjz4N92vIcDL4P2wM3H2/F3mW/XRxtfaLYzPyZt3YTErEQgsYH2I+K7UHTEYpGXZvaE6hX3nU/ZI0F6+757H5W/nhre2d22oJALdKKOaI41KGCLhWs5ZDRPbz7aJEXfzt9+d8T/wt+D1O4B3uTwR9Mf7voZo7k8Lr0JlWWZazNAtY6sbl89QFld2/vloARnCs0PoBvj8ZPZzMrd8rBeJANq6abE+uV87i+27RdjLBvjcYPykHh2xCsanVhqbBzdzYRMN+HzcPtzoe/P33xc/jS4WW8Z/4B8d7O/v+fTT+JNhNM8LrUoZe7X68BBizt7B2cB2wO5BLw/ee9q4XbsnQX7h8MfzZ99du62mX8cG9vsThutXsJ1eqiIRg8h2PtiNWkGGz77H5RFhZPO22gM9RIMMpyRBpVYAClc1vl5On05SGawKwr6H4yfNeRf3x6/AXMHAhBcUjq3elNId80x+uIwgx0f/+2dhhyIwOgKuRQ3KHJ/cW8rPy3JkNXdyfzbg7N8rbWQRP4VWJUdYnT90K+Pxp/Z5IVvPy8ibUPSUIlctSmI40LqGEKryTOfJoT+1FUrDJ+X1fbfvgSIrhE6r3LmxglUcSjCoh7fQ9fJd5nKiJzvrQ0gQd3tv95OjtKsaUqhceZbGe+dnbcpmoZJ0s/ZYMT4zimkySt+VI5sPC+zz+S4gM3eJSPM7XTVB9DBA+7GWWZf3JycgyNXzqcc6tOCvukbU43anQCirO1VF5UZj0g53u53z+4c2vA3jTHRvDO/uT3R9OZMQfX1fcCpWnAp647gg6W+UFDjAhzeKXxsK2qek4bx2WZmRTJ58rWcETTnBI9lHAvxb3B4IvZvIFkiCHCDMTFV9EUshW0xCrnJXa1O4yIWwF+bQ+LXaG91oOpYBlswaPd3VldP+9SA3PQNu4P8/dsNGi6z0gKOfjVXwEOGngFT+F36C+bxefdIlpIUceWHpX5d8vsvaa5Cx8Ufs/CoKn7OnUEB++X2Uj8GDq1VQjhlkLE1QXFvvKEsw3AHuw6Lb0GbEAP+P3tHeu6V3VTQQM1jC0+dOWez4K0D8b548HgvUHxJPDQsY+NDKCFGRzDIbyCmTUJLVwIYlt5fndrGBbVna3h7nBUumJvMNhybmRp5Ew7jSm1ai00yyhalhZBrrYyKw5vAna3ACzW5yt24KPJzoT8ZD6dwRwWkAk73u+W2a7joYR3pHjk8vcoHzr/wNm9jEG0DAxa6GABpzAlvUztkeqR6XFsNe/qrjPVPIQtV+64Yi8b5OIOu/bImAszqKDF6dLwvnH+FwCHa9M6lwxhBHDmRkU+WQUUU3geik/F5WpUjTdtXRNx5lwIMimKceYGebfVNJOYnsHnwVdmqdHncIQWqRktml0YA7BdVTtUe344lHKUFQeqd5mdwMyoIJ4rkfaS566sCpjbENA+43FtAeHCDwpc3WrILIKCx7foH+t2KLLYKt555/FvPv3989QOAurwkVHFyHh/a+9Jnj/O6z+2tavTqxWf5zCHKe4IGZBslfd6T9Oe1R/Y4PHevb3o7p6++EXkDzAF3CrL1TPMrigSLBsdHBgkcP5yT+NNDJYcJshWGMxj93k9P4Qab2SKNWjdcaLpD83iczhRjhyvlBNlDk27yJrubububY2G42KSZ3vJDsw71EOH9brgFCrhFCpSTfQmw8jEmiB6Gtxc/ElSnPQJjuum7ugrWL1I79+9JWAj897MPAZy2NRHGo+RBgPJ8RGtrHvRLHrXOoEkOmUKJzAFw0Zd2gluWGTbYg9F9mJ65PzItE/o9Tm9dTdIDS2NT2kSUlYWxyE77OKJJhOPiWz0N1y9A9eAbX//7q09LREiTOFZbOvUNDj1QkoZmgNIjSl4yMSbpT5fWTtUqJWR573ELOrLk6mGUJD5IPcGI9/WmuquXWZze2HtjKQcw3Pqj0IZY2e4rmv9qrD7FXozAlyx46+wx6pJoIImNQYOtcQEdqAAQRbIHK1gYUlWNQpRnBAdh5HPYTQsPz7uZlEbnQ8i97vZo4P796x9+uK527i7GQ4q+Jx00tXb5SDOuzkEfIfH6VcAfWsOp9XyixJWNnkPPpyMM9UkoXPu2Xx+GLuXK4MZICDRXPKpVhqYh/yTTqcQHaUxMquaptEYWDnQgOFXuzRBneJINThXQtMXH75Sh9utk3i26jQzfKZsw2NXvDvM7mUxT8mrtMbBoPgsuc+kPWytjX36PiggqXOYgoUK5ijKAIaEoLqQ6nS9gY3Mlr5aBhnUHaoxOD+COeL6NMBZIeQCelFsVSmRtdjoLQHLWbeAVx3CLv6drLw/Krv2yFAnmsxyJ3eyUPh8L9SH0+4EajqH9F5CMhKSw1j8wNIEtvKBG+TTpKeC2pK3/nws0IIoBTJGXhCXuQYBZ1dK9RIzq0W5yGFzm9+tya3WT9dfKSX2mOL7W3d2vH9xePSHtDh1RO2AB0N2yB+m7GHKT8bl72fT30CN0S5H71JnMPbpkYU7Lh8Py+f16QvfVYIzvOWOJGjLsv14BDtllpENVUZYBrilFcbOpndukrbC3CP4yiJNQiBThnAvG06ynKaepe4QDh0KQakr7kqr0m5nwzs7u5YVsX35okl1pOxd2WTvllmWZfe0GIifS3yp3cuOhZLhjCUH+1LjEEaBJCH6jBSX5eiv2qJ6O8AZrlALWK9+yyJrU9t09ZQ4hdpwisAMGuOpsZfqj5q6zAaP/cFEZm0brW1HhJFm35YdjdaKvXTx2Xx6aLpQgieamnR4wGjxsAMPBoMON89CZdo06Nr43tSBWAmm3GgPu9f+8as3MbVRxISWJEspkwQdNheSZ6bavPryYb5TTkbDbLQ7LurFwkHaGjfNSdu1h6k+tPrIrBKix/oKgdi6cX0IBxC6ri4zl7u5hdpLm9ZWWK6tl24I5zUcdhffK9pXenvlmQ9HLlnm4/1inKz7rG1eYtVqfCdicASzdjo4qobDYVCNmqLjd8dftl2z6OpqlWqMQnKoiOiyOxIjg31h3zF02fPqdDY93RpPKp912va5H8ytvC17ba5XKbKwUeW+ySq5hClJoYGTdhF8iDQNcXdYZMPBZL6Yxm5qVkHsrIN5HwNbJ/OThKVVTTiuJhcg9I5kQjCXCJA6MrjruJexK7kP2UK6z9s0WVQnXWw94DAvuhE/3Ixu71qu1q+FZ928klBbVTX2/nZ+4PI9yeq2O2njYdd8QWxAocFUSJw1aSyHcngRMRTzyFDMI7mX3DQIpbIf2A95iT+J7UlKR5BSmvWK2QJmG40XNy2/3CIe1mWuYJn7VuNl22hIrdkU9HB6d2twUGwNrcjcoMgGQ9NX9by1LmILw696V3vDab0PZcsN67GBAvbk4EBMHTHTmMc0EB+rehbT3KFQm7UgZ91gt/amz8fDmx71BjfOtYC4JZ+TMTcmTnzAw2fK05N6x9V3h6NdPx65cmw8pEC0M30Vq0VsO4sJumVxaNkH4Vb+6TbsFOVEXK1xqnGu8XjWuNHgIB/tBG3rmUBt+L7HY1ke3jxjoa/NdoN6Ttmt+7Q2M4PLAkcImbokTXREaBOz2XzEfIdikhdjl2+5UIrLsmEbMu+9eNc53zqNSDJTp6IpT1p2XRnVxfjq8PnU7BhqGAhbyNBYJEur+4tz64zjefm7OYe/Eq0zLEkcRpZAMMdMmcJzmkFsdrP8fhxsSZYHl1mWAnhfGN587cSciuCwYOqcC4Jl7nndvYITaGDbGCoBqdRSbxH7jSAKS81sfYj/ulBeyit7K8A9mZw1+nkjsqwvJmMmmHWho5W27EJyMu/aaOoVM2lFWjETJcVCmQiuKCVkCxYLoTUi9AngDOkPpcgyDFbkdn6WpZW0Jz0fD9+yR3Z5yYb3Loa3ZaDqwGMLohpzNDp3EmyeOkt9/lvEOUP7dgRXhCJziLzoUyUer0SRzoVTtVONCc6ino2+bjuvn69K5OEcerEgfj3pqg1u3TpyyWLLxnGlGm0RQZOmaZuSrA2/oWmtFOaqpUlMXQud69fLOZcheSfEZVK2l2Hkiurw1YwyETHkzYA3+pCvGKq3Ms5e9+TTulC8vFgSaqpiuKXf75ZJmrNmBFCxlZ8Y1AVzWXJizlnPIJ8AdNmXs4Zy08K2M1Futocvhtcbfpwh5jYDVxNkQ8gTzoQomEnAPE6Xxs1Wg/f70iVBzQHOXC84IoKT6FAvvUzf8BzqG+g1wBuR5Aa5ZbHxjK99qnfFwrN3aYn5fIAqy2SpmTNsFb56UGXpCqt3KYgmRPAI4hRSkC4Iol1mls4O6sqqf4GVeN+8J/Gm6m7d2Lm5HksnX86YdZE2ebI+ZXKxrJncMn5YjiTJoDWNpq1pa2do35K+olnqXUuF5JxZX8i7kW5fnYfkYmLG5PzBKUlt17VtUKFt2/4rYVNjXliCG7D59oCXpyWW3l2jCYgOU+ztOLCytSS1VQ7futgZmNlaM9+mTHLJzFeAz1kXfdM1K9FKXpy5aV2Lc9G5ZGYCZm/QK/3ec3aWbhSRfveZajJxXjjjkwF1Uy//VWO1oMvq2LIb5kZg197o7eLhTVKsE9XYiYhh5jC7ogx/QwbY60rimzjT9BXj4f5cfZ8MWH4uN1aAF8iBilNxXrzeoED2doBFltN3/txRvOtg23kT1tcr/Q2vX9JZQKdJDczJa/bla8Buru+IFO/MJBRF0dQd4JxXjUs0XGqNYbUZLt2opku7cq5N+9wi9ucPLslOtDE1scO79bbYvGztpqzayTZus26VPn9jWe9wAXWGG5ajZOqGo9HbPYfg7UmAqNZ0cT6f+XN662ujkGXlaCji3Hg0CvkA0Js/tWPlafXr5N52waRXm3XbVk2X0jexg2UwGAyHI+fEFUWR5zmEsw1847KcfH2yYatUZrzJfa9bExFZnltVxVzIi2FZehERCSL+YP/OK5/N5qea0nJLnFkGfc0n8meDnotUlv7taiHWpBt+9flmKrf6RG1j4Vab8cLpko26l8nlYenm+ok40wSGpd3J3SIbYE5Mgpnleb6zswNUi3lcnpDfMM7n7YQi7pw3vZzFW9pM2WxxfdNgbuP1TaQpGeazoizLsixDCObErY8A9JhFbF5VcfOpAJfVE9dM24xR7NzR541H1azkb/1EhnNrtcyueDvLiJ4Tisu456411T1vfVZMJpPRcJgVuZp5585lLfM839raAlaYL67rCtiZOF3mxV+RIbJrmmf6J1K8GcdmP8SbSJw3jWVZDsejvChQnEg/eNjkUlGUWT4YjRdVVb06Pr4EsKyOxMCydL1xuHP9Rjef3bHJrkuE4DauSu+JL7vfz6M+F2YJ8OTD7wBOlklGEZFzwcPZhTIsy6Iotre31+t6TvHIshFInPl+HOdYPV5o6dyLrHfBzU75u/W1G1Kgl//MjI083vKZXmZmaj290V/8F76cV/+YeH0AAAAAJXRFWHRkYXRlOmNyZWF0ZQAyMDI2LTExLTIxVDA1OjU2OjQ4KzAwOjAwYH+psQAAACV0RVh0ZGF0ZTptb2RpZnkAMjAyNi0xMS0yMVQwNTo1Njo0OCswMDowMBEiEQ0AAAAASUVORK5CYII=]=]
+local function decodeBase64(encoded)
+	local alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	local lookup, output = {}, {}
+	for index = 1, #alphabet do lookup[alphabet:sub(index, index)] = index - 1 end
+	local accumulator, bits = 0, 0
+	for index = 1, #encoded do
+		local value = lookup[encoded:sub(index, index)]
+		if value then
+			accumulator = accumulator * 64 + value
+			bits = bits + 6
+			if bits >= 8 then
+				bits = bits - 8
+				local byte = math.floor(accumulator / 2 ^ bits)
+				table.insert(output, string.char(byte % 256))
+				accumulator = accumulator % 2 ^ bits
+			end
+		end
+	end
+	return table.concat(output)
+end
+
+local function getLogoAsset()
+	if type(writefile) ~= "function" or type(getcustomasset) ~= "function" then return nil end
+	local ok, asset = pcall(function()
+		local path = "speed_hub_x_menu_replica_logo.png"
+		writefile(path, decodeBase64(logoBase64))
+		return getcustomasset(path)
+	end)
+	if ok then return asset end
+	return nil
+end
+
+local window, windowScale = Window.new()
+local launcher = create("ImageButton", {
+	Name = "OpenMenu",
+	Size = UDim2.fromOffset(65, 66),
+	BackgroundColor3 = Color3.fromRGB(3, 3, 3),
+	BorderSizePixel = 0,
+	Image = getLogoAsset() or "",
+	AutoButtonColor = false,
+}, screen)
+round(launcher, 8)
+local launcherScale = create("UIScale", { Scale = 1 }, launcher)
+if launcher.Image == "" then
+	local fallback = label(launcher, "S", 38, Style.red, Style.bold)
+	fallback.Size = UDim2.fromScale(1, 1)
+	fallback.TextXAlignment = Enum.TextXAlignment.Center
+end
+launcher.MouseButton1Click:Connect(function() window.Visible = not window.Visible end)
+
+local function updateScale()
+	local camera = workspace.CurrentCamera
+	local viewport = camera and camera.ViewportSize or Vector2.new(1568, 831)
+	if viewport.X < 100 or viewport.Y < 100 then return end
+	local scale = math.min(1, (viewport.X - 24) / 1016, (viewport.Y - 24) / 646)
+	windowScale.Scale = scale
+	launcherScale.Scale = scale
+	-- Align with the reference while keeping both pieces onscreen on small displays.
+	local centerX = math.clamp(viewport.X * 0.58, 508 * scale + 12, viewport.X - 508 * scale - 12)
+	window.Position = UDim2.new(0, centerX, 0.495, 0)
+	launcher.Position = UDim2.fromOffset(math.max(8, centerX - 676 * scale), math.max(8, viewport.Y * 0.495 - 247 * scale))
+end
+local cameraConnection
+local function observeCamera()
+	if cameraConnection then cameraConnection:Disconnect() end
+	local camera = workspace.CurrentCamera
+	if camera then cameraConnection = connect(camera:GetPropertyChangedSignal("ViewportSize"), updateScale) end
+	updateScale()
+end
+connect(workspace:GetPropertyChangedSignal("CurrentCamera"), observeCamera)
+observeCamera()
+
+local Navigation = {}
+function Navigation.new(parent)
+	local sidebar = create("Frame", {
+		Name = "Navigation",
+		BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(19, 71),
+		Size = UDim2.fromOffset(260, 260),
+	}, parent)
+	create("UIListLayout", { Padding = UDim.new(0, 9), SortOrder = Enum.SortOrder.LayoutOrder }, sidebar)
+	local navigation = { buttons = {}, pages = {} }
+	function navigation:add(name, order, page)
+		local button = create("TextButton", {
+			Name = name,
+			Size = UDim2.fromOffset(260, 44),
+			BackgroundColor3 = Style.control,
+			BorderSizePixel = 0,
+			Text = "",
+			AutoButtonColor = false,
+			LayoutOrder = order,
+		}, sidebar)
+		round(button, 12)
+		local icon = Icons.draw(button, name, Style.muted)
+		local text = label(button, "| " .. name, 16, Style.muted)
+		text.Position = UDim2.fromOffset(45, 0)
+		text.Size = UDim2.new(1, -50, 1, 0)
+		self.buttons[name] = { button = button, text = text, icon = icon }
+		self.pages[name] = page
+		button.MouseButton1Click:Connect(function() self:select(name) end)
+	end
+	function navigation:select(name)
+		for pageName, page in pairs(self.pages) do page.Visible = pageName == name end
+		for tabName, tab in pairs(self.buttons) do
+			local selected = tabName == name
+			tab.button.BackgroundColor3 = selected and Style.selected or Style.control
+			tab.text.TextColor3 = selected and Style.selectedIcon or Style.muted
+			for _, segment in ipairs(tab.icon:GetChildren()) do
+				if segment:IsA("Frame") then segment.BackgroundColor3 = selected and Style.selectedIcon or Style.muted end
+			end
+		end
+	end
+	return navigation
+end
+
+local Controls = {}
+function Controls.section(parent, text, order)
+	local heading = label(parent, text, 23, Style.text, Style.bold)
+	heading.Name = text .. "Section"
+	-- The later section headings have a slightly larger gap above them.
+	heading.Size = UDim2.new(1, 0, 0, text == "Skill" and 31 or 41)
+	heading.TextYAlignment = text == "Skill" and Enum.TextYAlignment.Center or Enum.TextYAlignment.Bottom
+	heading.LayoutOrder = order
+	create("UIPadding", { PaddingLeft = UDim.new(0, 8) }, heading)
+	return heading
+end
+
+function Controls.toggle(parent, title, description, initial, callback, order)
+	local row = create("TextButton", {
+		Name = title,
+		Size = UDim2.new(1, 0, 0, 55),
+		BackgroundColor3 = Style.control,
+		BorderSizePixel = 0,
+		Text = "",
+		AutoButtonColor = false,
+		LayoutOrder = order,
+	}, parent)
+	round(row, 10)
+	local name = label(row, title, 16)
+	name.Position = UDim2.fromOffset(18, 7)
+	name.Size = UDim2.new(1, -75, 0, 20)
+	local detail = label(row, description, 13, Style.description)
+	detail.Position = UDim2.fromOffset(18, 29)
+	detail.Size = UDim2.new(1, -75, 0, 17)
+	local box = create("Frame", {
+		Name = "Toggle",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -18, 0.5, 0),
+		Size = UDim2.fromOffset(37, 37),
+		BackgroundColor3 = Style.toggle,
+		BorderSizePixel = 0,
+	}, row)
+	round(box, 9)
+	local dot = create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(24, 24),
+		BackgroundColor3 = Style.red,
+		BorderSizePixel = 0,
+		Visible = initial,
+	}, box)
+	round(dot, 99)
+	local enabled = initial
+	row.MouseButton1Click:Connect(function()
+		enabled = not enabled
+		dot.Visible = enabled
+		callback(enabled)
+	end)
+	return row
+end
+
+function Controls.dropdown(parent, title, options, initial, callback, order)
+	local holder = create("Frame", {
+		Name = title,
+		BackgroundTransparency = 1,
+		Size = UDim2.new(1, 0, 0, 46),
+		ClipsDescendants = true,
+		LayoutOrder = order,
+	}, parent)
+	local row = create("TextButton", {
+		Size = UDim2.new(1, 0, 0, 46),
+		BackgroundColor3 = Style.control,
+		BorderSizePixel = 0,
+		Text = "",
+		AutoButtonColor = false,
+	}, holder)
+	round(row, 10)
+	local name = label(row, title, 16)
+	name.Position = UDim2.fromOffset(18, 0)
+	name.Size = UDim2.new(0.5, -30, 1, 0)
+	local current = create("Frame", {
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -18, 0.5, 0),
+		Size = UDim2.new(0.41, 0, 0, 34),
+		BackgroundColor3 = Color3.fromRGB(37, 37, 37),
+		BorderSizePixel = 0,
+	}, row)
+	round(current, 6)
+	local value = label(current, initial, 23, Style.text, Style.bold)
+	value.Size = UDim2.fromScale(1, 1)
+	value.TextXAlignment = Enum.TextXAlignment.Center
+	local arrow = label(row, "⌃", 25, Style.text, Style.bold)
+	arrow.AnchorPoint = Vector2.new(1, 0.5)
+	arrow.Position = UDim2.new(0.59, -10, 0.5, 3)
+	arrow.Size = UDim2.fromOffset(25, 28)
+	arrow.TextXAlignment = Enum.TextXAlignment.Center
+	local expanded = false
+	local function setExpanded(state)
+		expanded = state
+		holder.Size = UDim2.new(1, 0, 0, 46 + (state and (#options * 37 + 5) or 0))
+		arrow.Rotation = state and 180 or 0
+	end
+	row.MouseButton1Click:Connect(function() setExpanded(not expanded) end)
+	for index, option in ipairs(options) do
+		local optionButton = create("TextButton", {
+			Position = UDim2.new(0, 0, 0, 46 + (index - 1) * 37 + 5),
+			Size = UDim2.new(1, 0, 0, 35),
+			BackgroundColor3 = Style.controlHover,
+			BorderSizePixel = 0,
+			Text = option,
+			TextSize = 15,
+			TextColor3 = Style.text,
+			Font = Style.font,
+			AutoButtonColor = true,
+		}, holder)
+		round(optionButton, 7)
+		optionButton.MouseButton1Click:Connect(function()
+			value.Text = option
+			setExpanded(false)
+			callback(option)
+		end)
+	end
+	return holder
+end
+
+local function createPage(name)
+	local page = create("ScrollingFrame", {
+		Name = name .. "Page",
+		Position = UDim2.fromOffset(315, 66),
+		Size = UDim2.new(1, -333, 1, -78),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		CanvasSize = UDim2.fromOffset(0, 0),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollBarThickness = 0,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+		Visible = false,
+	}, window)
+	create("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, page)
+	return page
+end
+
+local navigation = Navigation.new(window)
+local names = { "Home", "Main", "Farming", "Killer", "Misc" }
+local pages = {}
+for index, name in ipairs(names) do
+	pages[name] = createPage(name)
+	navigation:add(name, index, pages[name])
+end
+
+-- The screenshot shows Main only; the other tabs intentionally have no invented content.
+local main = pages.Main
+Controls.section(main, "Skill", 1)
+Controls.toggle(main, "Auto Ultimate", "This is Meaning Auto Use Ultimate", true, Features.autoUltimate, 2)
+Controls.toggle(main, "Auto Dash", "This is Meaning Auto Use Dash", true, Features.autoDash, 3)
+Controls.section(main, "Aim", 4)
+Controls.dropdown(main, "Choose Aim Part", { "Head", "HumanoidRootPart", "Torso" }, "Head", Features.aimPartChanged, 5)
+Controls.toggle(main, "Aimlock", "Aimlock = Lock Camera Player", false, Features.aimlock, 6)
+Controls.section(main, "Body", 7)
+Controls.toggle(main, "Anti-Knockback", "BETA", false, Features.antiKnockback, 8)
+Controls.toggle(main, "Anti-Stun", "BETA", false, Features.antiStun, 9)
+Controls.toggle(main, "Anti-Busy", "BETA", false, Features.antiBusy, 10)
+navigation:select("Main")
+
+environment.SpeedHubXMenuReplica = {
+	destroy = function()
+		for _, connection in ipairs(connections) do connection:Disconnect() end
+		screen:Destroy()
+	end,
+}
