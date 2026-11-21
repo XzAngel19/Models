@@ -22,6 +22,7 @@ local Theme = {
 	toggleWell = Color3.fromRGB(40, 40, 40),
 	valueBox = Color3.fromRGB(43, 43, 43),
 	tabSelected = Color3.fromRGB(165, 6, 5),
+	tabSelectedGlyph = Color3.fromRGB(205, 45, 45),
 	toggleOn = Color3.fromRGB(202, 0, 2),
 	accentStrip = Color3.fromRGB(80, 10, 12),
 	windowStroke = Color3.fromRGB(34, 16, 18),
@@ -228,22 +229,82 @@ local ICON_DATA = {
 	},
 }
 
----Build an icon by name into a parent and return its parts.
+-- Cropped icon bitmaps taken straight from the reference screenshot.
+local ICON_FOLDER = "SpeedHubX"
+local ICON_RECTS = {
+	Home = { 18, 14, 27, 26 },
+	Main = { 18, 12, 26, 29 },
+	Farming = { 19, 14, 24, 24 },
+	Killer = { 17, 14, 29, 24 },
+	Misc = { 16, 13, 30, 26 },
+}
+local ICON_ASSETS = {
+	Home = "iVBORw0KGgoAAAANSUhEUgAAABsAAAAaCAYAAABGiCfwAAAC4klEQVR4nK3W22ucZRAG8F+STTygtSFxa+MJRWusVotiWxEFEYpF8cKbCt7qheJfIV6JNyqCCCKCN4KCoFIQRFE8UFsPeGrtjbU1tqGpsYKtBjNezGyzu2x2F8kDLx/vN/PN4Z35nnlHIgKmcQkux834E+fjR+zFvP6YwjasQxP/4hh+xpdntSJifUTsjIg9EXE8OvFKRGyNCAPWjRHxUkQcjoiT9e2JiNgbEfe29BqVzdMVVVQkZ/BXZfTHgKzgVOn+VPuLKttr8Fhl+XUDW0qwjOfxaR3DyVpzQzj7Bc9htgJt4jo8igfwasvZelyAD/AxPhrCeC/M66ztUdyBSWyCUfxTDjdUVGuJJsax1HLWigpOr7GzESsJzDTwFd7DD9Y+s3fkEe7HnIiYjohmREyu0tbP1G+xo4fsroh4KyKeWuX7qVpnW/9En8g241bZwut6yC/EDZjAZfi9S77QvhkpBumH23ApPsRil6xZwRyt1e2sA8M4I+ms3wkMhdHBKkM5mq5nU/5GPTFsZmuCRtd+ykpRr8DDkvfelpTUC1fhfskUT/b11ofJ74mIzyJiLiJeiIi7e+jsjIgXI+JYROyLiAf7TYfuzNrxm5wAM3hcEvZmHCj5LHbjTknW+yRBrIpWzWYl0x9qkzVxJR7CfbLwyziv5KcxJifDa3hTtv7xNhtXy3/wAFmzXRXhnJxri6XYYvFTOILbK4CNbZkfwed4Hwe7EpnBI/V8HXsassC7JDdukteAdhys9a5kkvF6v1S6C3rjnArw+pbNRh3LhBw1/abyIZ3HPAgbyuaEnJdGca6VAbpxtS//B5bK5qS8PGlITlvAxTLtMVmnM7Imi0Ma3yKDbhH2TWVzvnxoyFnzPa7FE/iuHI7jDdn+nwzhaHebw2VslR37bdnQwK94Vl5OtkuWb+GwZHs62aUbY5Ift7e9+xvf4OWy08GN23BLl5H9sikWB2QGO+S4accX2rr7P9DUpRSBXs9XAAAAAElFTkSuQmCC",
+	Main = "iVBORw0KGgoAAAANSUhEUgAAABoAAAAdCAYAAAC0T3x2AAACM0lEQVR4nL2WLXDbQBCFv2gsIhIiImJiEiISYhJiEhJiEhJcXFJeUFRQFByQkuAQk5ASE5OSkBITE5MQEZMDLti3o6sS6yfjZmduRrrd27e3u/fuTvb7PR8ho4H258Anfd8Bv48NNNa40gCogBRYHQvoHJgCpcD+aL6MbDrBTlpqVMjxFNtFKYe30n8G5lj6HoEHYD0UaArkwDfgRaOSwyfZXALXssukv4v0nUBTYKYd3GjhAljyuvgT2V/oOyiYlYA3btisUa5RCuwn8HwABCxVa+14psDcxzIGind0IcMrRebtu6FugC65l58A/CJKtQPdYMXNIpCldjNEpljdZvKDfC1GmpzL6NEVAwFcVsCWOpWX+t+OgDMspwvgOz0PYIts5Mc7FaBI9FNIsXuH4/EbcwWW9oClMh31cD7H0nAq24BRD/qvsIK3ZSL0oaCZogpYvmMZC+gUy4gzQ2jY9eK6Qguf5CyWM4E5Dx6koCZQM5IJ1vI7bDe3Df0XBVLxbwleFISnOE0Ob8QMOvSxtNa6C+hoMvSGbdaotyRYXV51yTuk1ceHpS7BuirVyP4TTnCgQ+JBBN6uT0XNFG1+QiIjf9Hk2GPEpdTcIUeV5nPszMW8t8XusQdgF3PddRS9H8AYuAR+NIAy7MBCfd2s5Weitc8OtMauiFSLUoy7vBudVpxu/BAHasYgCsgfK84YK2AbX+U5dtMWiiaXodcm07e3cczgKDhkkyqor9KHtnfdUeUvhHepLgcXgtIAAAAASUVORK5CYII=",
+	Farming = "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAACQElEQVR4nK3V2UtUcRQH8I+T1KCtVmolLRJSSQ+FrZRUtEBFT/0F/X099NpCRAuGmkqZFdFCG2lRttpm9nDOwDg4NYZfuHgv9/o757ucM3VTU1NmgU3oQBEN+Irx/Duc99NQX8OhK7Acq9CO1WjM5ya8xUAW7Me72RRYim04lM8LUCh7V8SvZDAj6iokWo9d2IxedOUhI8mkLTt/iTt4jof5vNQMElUWOIN9+fEDvMFnwbSI30KCjzhXretyVEpU0nVcyDGZRY5kx/eSzVgth89UoA+LhFSPhXGncRc3cLvWg0solN23Ce0LIhVFEcn3WahRSPffBTZiK17hNfbjR9434yB257dNsy2wBsdEchqE0bcwL1ldRR26cViYXRNKHuxEC0aFuSO4JvzoEuZ/wEIxEx+FR29rYbABa4XmLSLbQ8lgSJjbglZhdn2yaBez8c8CrVgi8t0qPLiS78fRg/PZbWe+WyTStUWsjqqoF5IsFinqF1mvxEVMYA/2iiEsCrlKPr6qxmCxSMVvXMaTKs1cz6uY130h0QGRwOZqDIrCvPt5/Q09IlndOImzYoWfEukbUDHlBbFr3ouNOG3VVsFIMvkmBvFLNrYH21UMYwFPs7PHNRwumxjOIhuF4c/wKYt0l39c2qYdmJ//OBucEIPYhAtCrjbB8hLGKtf1/+AoduA7HmEZ1ok5ulnLT+a/MCgSeFz42SdYdGBiLhjASsGiE1MiUZMYnAsGxI9SL34KoyeE8aNzxaAcO8XKGcCLPwiolys9g1neAAAAAElFTkSuQmCC",
+	Killer = "iVBORw0KGgoAAAANSUhEUgAAAB0AAAAYCAYAAAAGXva8AAACj0lEQVR4nL3WS29VVRQH8F/b2wegyYX0FrTVgpAABRsSCAkOIAYnDjSGOJCBgQ8ggQF8g4YxxikDhxKnEo0DSIwDY2BQBk18xhAwXoogFl+NYTtYu7mn23PpLSj/ZOfkrLPO+u/12GvtvpSSVeJZvIQX8Bd+wn1c7NVAXw+kbxfvr+JzXME9PIMj+BrfY23W+xHfYH41pO/gRXyFa1k2jRGcLXSbOI4x/I4GJjGHD/FDSdrEL9iLM1iDjSJsp/FtQTCOm912WuA9fIf3M0cgpSSldCil9EFK6VR+/69WK6V0PqW0pSrvz9wv41Oc69GDOpwU4a1iPns4WBUukbZx+TEIZcO3auQTGK0jvZ/XStiAfTXyFm53+WcAu+tIFywv7X1djK8VOy8xjDtdSIdxEFMl6Z+F4sG8SjTwoEY+mL/VoYFdKvleUuwvFH/tYqCO8GEYw2/ow3Ml6VCPRlZLSpz3dSLv+LeH/wcW8IVoOuNPirSBL8Vw2FolbYrjsIQh9SFv6OS7qr+o0+irGM3f5jCLHVXSFp7K5ETu6vLXFKON5UekpT5q4/g7O9CHLQrFPaJltcSZmlJJfsYBMXlKHMr6ZRvcI7rdvWx7E53qncXRbPRnPJ/lx/CJCOmEmKVD2C5GHmzGa2LkXRI9nAjtXjFh5vN/gyyfp02Rl6bIweZM8qYYdbO4gFewTQztP7Lnn2UHprOtW9mrNk5k2RRmcKSXm0MdXsdbuIF3debrRCZui6ZwW6cnv4HDONGtda2EeRGNmUJ+I686TOIq3fvlStgpqr2KMVHZY6IDzeXnIvbjaXz8OKR3s/HjotMMiEIZEIU4IupgBOvFleUjUQePRLpBDlPefVvk7briAtYN/wCG2txkDxqynAAAAABJRU5ErkJggg==",
+	Misc = "iVBORw0KGgoAAAANSUhEUgAAAB4AAAAaCAYAAACgoey0AAADQklEQVR4nL3WS2jcVRTH8U8mSdX0ocY0xmjTNokapC2lYsVWS1XwUUEQwa0uRDcKIi5EFJe6KuhCXbhWceOrVKjiC1SsQURUUPuyhvpomsSmvmI64+Kcv/lnOkknVj0w/Gfu/977Pb9zzzl3Wmq1mibsNhzCvnyeslWamHMn7sVT2PRvQJsBL8cA+tCDW/L7fw5ej0txRjpxBbacZE0vNpwqeCX6cRhHcuxaXDLH/CHcgQdwwz8Fr8qNFmMvXkAV14tI1NsgbsfdIhe24Hx0LRTcLRS3i2x+EV/idNyTm5advA8PYhGWpdMrMbpQ8JpUMY5hvIed+D6hN+MscfZP4Fb8gLH89Jv7SOYEr8JFOBvfCqXwVn5vFap7RZldhkm8ikdxUIR4KJ1vGtyHdZhKpSM5PobXcDzV7BTJVsUOPJbO7cDv2IbOhYB7xPlMpMKfcnw0YR+KI/gznXkOT+JA/p7IuYuxulnwIDbiPHyDr+vej+IdcQTjIrxPJ7Sw3aK19onaPwHe1gDcicvF+X6Bo3Xvu/EMfsQ5eLMOCp/j0xQwlA7snw/cld4N4iMsyYVFtzqYzsBLDZwu2x4R9o2i7b47H3gRNqNFlEOhfmm+PybO7wMR7uF5wJ/hE1HTG/C2kup6cC+uwrSo1eW5sJLQJSJsQ7hRnO/zZpKvbCMiHzqwFa/MBx7AClEe7+N1vCF69VLRKjfjJtE8ekQj2Z7zJ0p7deWawyJyAyJZD0BL6Y/ABbnBVuzC4yJJGtl1eAQXZiTaUvVIglaLJOzBuTn2Mh7KKMxSvEw0hSmRGI3CV9iu/NyfTqxIhf0i0/fjN3GjTYojujLFnQDelIu+w8cnARe2XXS2q0X5deNM1ETi7RP5cZfocNeIyhgrwH05eExcAnubgBY2LCI0URrrMnMrrUvYONaK200ZvEaE+ascL26Waj5rpWclN/hZXJvEWbaW4J05r4JfU9B6Ee5DBXitSIRKevjwHECi1NpFzU+aabttZrfgqdK8Ismmcv/dBfhiUbPEddjRAFg4cry04dGSytY6xWXwtMifI7n/36F+VjT1dtG1qjm5keJqAk5LxQWsCGth06V5HfgFf4grc1Yd/6/2F42uzMAAoUMBAAAAAElFTkSuQmCC",
+	Caret = "iVBORw0KGgoAAAANSUhEUgAAABYAAAAPCAYAAADgbT9oAAABCElEQVR4nLWUPUoEQRBG38iqgYGKiGBgJDiKE2i2CJ5C0HAN/AEv4FUUTARx2WwjF8QTiCamhq6Z4A2eSS8Obe/OIMwHlXRXvfqqoTpTaUJTjVCBVs28AjgAZoE74K2yQq2KDbXnr+7VvKquCrquPvhXfXX/v+AichqrNwk+Dpqrgwh0rJ5GZ7fqZl1wW+0moKP7TsL5VhW4nRj/RF2I8mLnfXV3HDhPOL1IjRniUB1G8CIGb6uPpaRhGHlxApjQ+KNUNxg5R12KnL6rZzWghCc6j+A36loLmAPmw758AdfAVc2N/Aa6wDRwCawCK8BMpi4De8AO8Ay8Ap81wWUdBcYL8JTZ0O/2A06Ip+JxiWDEAAAAAElFTkSuQmCC",
+}
+
+---Write the cropped bitmaps to the executor workspace and resolve them.
+---@return table?
+local function loadIconAssets()
+	if not (writefile and base64decode and getcustomasset and isfile and isfolder and makefolder) then
+		return nil
+	end
+	local success, result = pcall(function()
+		if not isfolder(ICON_FOLDER) then
+			makefolder(ICON_FOLDER)
+		end
+		local ids = {}
+		for iconName, encoded in pairs(ICON_ASSETS) do
+			local path = ICON_FOLDER .. "/" .. iconName .. ".png"
+			if not isfile(path) then
+				writefile(path, base64decode(encoded))
+			end
+			ids[iconName] = getcustomasset(path)
+		end
+		return ids
+	end)
+	if success and type(result) == "table" then
+		return result
+	end
+	return nil
+end
+
+local ICON_IDS = loadIconAssets()
+
+---Build an icon by name into a parent and return its drawable parts.
 ---@param name string
 ---@param parent Instance
 ---@param color Color3
 ---@return table
 function Icons.build(name, parent, color)
+	local rect = ICON_RECTS[name]
+	-- Prefer the cropped reference bitmap when the executor can host it.
+	if ICON_IDS and ICON_IDS[name] and rect then
+		local image = Utility.create("ImageLabel", {
+			Name = name .. "Icon",
+			Position = UDim2.fromOffset(rect[1], rect[2]),
+			Size = UDim2.fromOffset(rect[3], rect[4]),
+			BackgroundTransparency = 1,
+			Image = ICON_IDS[name],
+			ImageColor3 = color,
+		}, parent)
+		return { images = { image }, bars = {} }
+	end
+	-- Vector fallback keeps the menu usable without file access.
 	local canvas = Utility.create("Frame", {
 		Name = name .. "Icon",
+		Position = UDim2.fromOffset(14, 11),
 		Size = UDim2.fromOffset(ICON_SIZE, ICON_SIZE),
 		BackgroundTransparency = 1,
 	}, parent)
 	local data = ICON_DATA[name]
 	if not data then
-		return {}
+		return { images = {}, bars = {} }
 	end
-	-- Every stroke entry becomes one rounded bar.
 	for _, segmentData in ipairs(data.stroke) do
 		Icons.segment(
 			canvas,
@@ -255,7 +316,6 @@ function Icons.build(name, parent, color)
 			color
 		)
 	end
-	-- Loose dots (eyes of the scan face) are drawn as circles.
 	for _, dotData in ipairs(data.dots or {}) do
 		Icons.dot(canvas, dotData[1], dotData[2], dotData[3], color)
 	end
@@ -265,7 +325,7 @@ function Icons.build(name, parent, color)
 			table.insert(parts, child)
 		end
 	end
-	return parts
+	return { images = {}, bars = parts }
 end
 
 ---@module Menu.Window
@@ -417,13 +477,7 @@ function Navigation.new(parent, tabs, onSelect)
 		Utility.corner(button, 12)
 
 		-- Icon sits to the left of the label.
-		local iconHolder = Utility.create("Frame", {
-			Name = "IconHolder",
-			Position = UDim2.fromOffset(14, 11),
-			Size = UDim2.fromOffset(ICON_SIZE, ICON_SIZE),
-			BackgroundTransparency = 1,
-		}, button)
-		local iconParts = Icons.build(tab.icon, iconHolder, Theme.text)
+		local icons = Icons.build(tab.icon, button, Theme.text)
 
 		-- Label text starts with the reference "| " prefix.
 		local label = Utility.create("TextLabel", {
@@ -446,7 +500,7 @@ function Navigation.new(parent, tabs, onSelect)
 		buttons[tab.id] = {
 			button = button,
 			label = label,
-			iconParts = iconParts,
+			icons = icons,
 		}
 	end
 
@@ -459,10 +513,16 @@ end
 function Navigation.refresh(buttons, selectedId)
 	for tabId, entry in pairs(buttons) do
 		local isSelected = tabId == selectedId
+		local glyphColor = isSelected and Theme.tabSelectedGlyph or Theme.text
 		entry.button.BackgroundColor3 = isSelected and Theme.tabSelected or Theme.controlBackground
-		entry.label.TextTransparency = isSelected and 0.35 or 0
-		for _, part in ipairs(entry.iconParts) do
-			part.BackgroundTransparency = isSelected and 0.35 or 0
+		entry.label.TextColor3 = glyphColor
+		entry.label.TextTransparency = 0
+		for _, image in ipairs(entry.icons.images) do
+			image.ImageColor3 = glyphColor
+		end
+		for _, bar in ipairs(entry.icons.bars) do
+			bar.BackgroundColor3 = glyphColor
+			bar.BackgroundTransparency = 0
 		end
 	end
 end
@@ -638,12 +698,22 @@ function Controls.Dropdown(parent, config)
 	-- Caret sitting left of the value box.
 	local caret = Utility.create("Frame", {
 		Name = "Caret",
-		Position = UDim2.fromOffset(435, 22),
-		Size = UDim2.fromOffset(20, 11),
+		Position = UDim2.fromOffset(435, 20),
+		Size = UDim2.fromOffset(22, 15),
 		BackgroundTransparency = 1,
 	}, row)
-	Icons.segment(caret, 0.5, 10.5, 10, 1, 2, Theme.text)
-	Icons.segment(caret, 10, 1, 19.5, 10.5, 2, Theme.text)
+	if ICON_IDS and ICON_IDS.Caret then
+		Utility.create("ImageLabel", {
+			Name = "CaretImage",
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			Image = ICON_IDS.Caret,
+			ImageColor3 = Theme.text,
+		}, caret)
+	else
+		Icons.segment(caret, 1.5, 12, 11, 3.5, 2, Theme.text)
+		Icons.segment(caret, 11, 3.5, 20.5, 12, 2, Theme.text)
+	end
 
 	-- Value box on the right.
 	local valueBox = Utility.create("Frame", {
