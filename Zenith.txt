@@ -1075,17 +1075,25 @@ local function initializeScript()
 	local window = create("CanvasGroup", {
 		Size = UDim2.fromOffset(WINDOW_WIDTH, WINDOW_HEIGHT),
 		Position = UDim2.new(0.5, -WINDOW_WIDTH / 2, 0.5, -WINDOW_HEIGHT / 2),
-		BackgroundColor3 = Color3.new(1, 1, 1),
+		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		ClipsDescendants = true,
 	}, screenGui)
 
 	create("UICorner", { CornerRadius = UDim.new(0, 8) }, window)
 
+	-- A gradient on a CanvasGroup tints every descendant, including text.
+	-- Keep it on a separate background instead so the content stays readable.
+	local background = create("Frame", {
+		Name = "WindowBackground",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0,
+	}, window)
 	create("UIGradient", {
 		Color = ColorSequence.new(BACKGROUND_TOP, BACKGROUND_BOTTOM),
 		Rotation = 90,
-	}, window)
+	}, background)
 
 	local windowStroke = addStroke(window, Color3.new(1, 1, 1), 0.2, 1.5)
 	addGradient(windowStroke, 45)
@@ -1547,7 +1555,7 @@ local function initializeScript()
 	addSlider(configRight, "UI Size", 0.5, 1.5, 1.08, 2, function(value)
 		tween(windowScale, FAST_TWEEN, { Scale = value })
 	end)
-	addSlider(configRight, "GUI Transparency", 0, 100, 5, 0, function(value)
+	addSlider(configRight, "GUI Transparency", 0, 100, 0, 0, function(value)
 		tween(window, FAST_TWEEN, { GroupTransparency = value / 100 })
 	end)
 	addButton(configRight, "Unload", function()
