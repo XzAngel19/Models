@@ -850,6 +850,7 @@ local prepareThanksgivingIndex
 local patchedMeterEntries = {}
 local patchedArcEntries = {}
 local patchedRevealEntries = {}
+local patchedScreenFXEntries = {}
 local originalInvokeServer, invokeHookInstalled = nil, false
 
 ---Find a captured remote without loading game modules.
@@ -941,6 +942,13 @@ local function isRevealSequenceTable(t)
 		end
 	end
 	return false
+end
+
+local function isScreenFXTable(t)
+	return type(rawget(t, "FadeOut")) == "function"
+		and type(rawget(t, "FadeIn")) == "function"
+		and type(rawget(t, "Cover")) == "function"
+		and type(rawget(t, "Reset")) == "function"
 end
 
 ---Character & world location helpers derived from PlotController, ThrowController, TrainingController, ThanksgivingController.
@@ -1102,7 +1110,7 @@ local function setPerfect(enabled)
 	return true
 end
 
----Run the throw sequence with proper StarterArea positioning, cooldown waiting, and training support.
+---Run the throw sequence with proper StarterArea positioning, cooldown waiting, retry handling, and training support.
 local function setFarm(enabled)
 	if not enabled then return true end
 	if farmWorker then return false, "Previous farm call is still finishing" end
@@ -1122,7 +1130,7 @@ local function setFarm(enabled)
 				TemplateHub.setters["Farm Animals"](false)
 				return false
 			end
-			return true
+			return true, result
 		end
 		local throwCount, training, throwPending = 0, false, false
 		local ok, errorMessage = xpcall(function()
@@ -1136,61 +1144,91 @@ local function setFarm(enabled)
 				end
 				if localPlayer:GetAttribute("Training") == true then
 					callRemote("Training_Stop", true)
-					task.wait(0.2)
+					if not waitEnabled("Farm Animals", 0.2) then break end
 				end
+
+				-- Prepare Auto Thanksgiving Index / Auto Index target throw power.
 				local sandwichToUse = nil
 				if TemplateHub.values["Auto Thanksgiving Index"] then
 					local tgOk, tgChoice = pcall(prepareThanksgivingIndex)
 					if tgOk and type(tgChoice) == "string" then
 						sandwichToUse = tgChoice
-					elseif not tgOk and TemplateHub.values["Auto Index"] then
-						prepareIndex()
-					elseif not tgOk then
-						error(tgChoice)
+					else
+						TemplateHub.report("Thanksgiving Index: " .. tostring(tgChoice), true)
+						TemplateHub.setters["Auto Thanksgiving Index"](false)
+						if TemplateHub.values["Auto Index"] then
+							prepareIndex()
+						end
 					end
 				elseif TemplateHub.values["Auto Index"] then
 					prepareIndex()
 				end
 				if not TemplateHub.active or not TemplateHub.values["Farm Animals"] then break end
 
-				-- Stand at StarterArea CrossLine (just in front so ThrowController.pollLine won't hijack camera).
+				-- Start throw at StarterArea CrossLine (just in front first; cross line with ClientState.Busy guard if TooFar).
 				local lineCF, lineErr = getThrowLineCFrame(false)
 				if not lineCF then error(lineErr) end
-				local moveOk, startOk, startResult = withCharacterAt(lineCF, function()
-					return callRemote("Throw_Start", false)
-				end)
-				if not moveOk then error(startOk) end
-				if not startOk and tostring(startResult):find("TooFar", 1, true) then
-					local crossCF = getThrowLineCFrame(true)
-					if crossCF then
-						local prevBusy = clientStateOk and clientState.Busy or nil
-						if clientStateOk then clientState.Busy = "HubFarm" end
-						local m2, sOk2, sRes2 = withCharacterAt(crossCF, function()
-							return callRemote("Throw_Start", false)
-						end)
-						if clientStateOk and clientState.Busy == "HubFarm" then clientState.Busy = prevBusy end
-						if m2 then startOk, startResult = sOk2, sRes2 end
+				local startOk, startResult = false, nil
+				for attempt = 1, 2 do
+					local moveOk, sOk, sRes = withCharacterAt(lineCF, function()
+						return callRemote("Throw_Start", false)
+					end)
+					if not moveOk then error(sRes and tostring(sRes) or tostring(sOk)) end
+					startOk, startResult = sOk, sRes
+					if not startOk and tostring(startResult):find("TooFar", 1, true) then
+						local crossCF = getThrowLineCFrame(true)
+						if crossCF then
+							local prevBusy = clientStateOk and clientState.Busy or nil
+							if clientStateOk then clientState.Busy = "HubFarm" end
+							local m2, sOk2, sRes2 = withCharacterAt(crossCF, function()
+								return callRemote("Throw_Start", false)
+							end)
+							if clientStateOk and clientState.Busy == "HubFarm" then clientState.Busy = prevBusy end
+							if m2 then startOk, startResult = sOk2, sRes2 end
+						end
+					end
+					if startOk and type(startResult) == "table" and startResult.Ok == true then
+						break
+					end
+					local reasonStr = tostring(startResult)
+					if reasonStr:find("Cooldown", 1, true) or reasonStr:find("Wait", 1, true) then
+						local rAt = localPlayer:GetAttribute("ThrowReadyAt")
+						local waitFor = (type(rAt) == "number" and math.max(0.25, rAt - workspace:GetServerTimeNow() + 0.1)) or 0.75
+						if not waitEnabled("Farm Animals", waitFor) then break end
+					elseif attempt == 1 and (reasonStr:find("Already", 1, true) or reasonStr:find("InProgress", 1, true)) then
+						callRemote("Throw_Cancel", true, "Reset")
+						if not waitEnabled("Farm Animals", 0.25) then break end
+					else
+						break
 					end
 				end
-				if startOk and type(startResult) == "table" and startResult.Ok == true then throwPending = true end
 				if not TemplateHub.active or not TemplateHub.values["Farm Animals"] then break end
+				if startOk and type(startResult) == "table" and startResult.Ok == true then throwPending = true end
 				if not startOk or not throwPending then
 					TemplateHub.report(startOk and "Throw_Start returned an unexpected response" or tostring(startResult), true)
 					TemplateHub.setters["Farm Animals"](false)
 					break
 				end
+
 				if not step("Throw_MeterStarted") then break end
 				if sandwichToUse then
 					callRemote("Throw_UseSandwich", false, sandwichToUse)
 				end
 				if not waitEnabled("Farm Animals", TemplateHub.values["Meter Delay"]) then break end
-				if not step("Throw_Resolve", TemplateHub.values["Auto Perfect"] and 1 or TemplateHub.values["Throw Power"]) then break end
-				if not waitEnabled("Farm Animals", TemplateHub.values["Reveal Delay"]) then break end
+				-- Power meter always resolves to 1 (+20 bonus studs).
+				local resolvedOk, resolvedResult = step("Throw_Resolve", 1)
+				if not resolvedOk then break end
+				local revealWait = TemplateHub.values["Reveal Delay"]
+				if not TemplateHub.values["Instant Throw"] and type(resolvedResult) == "table" and type(resolvedResult.FlightTime) == "number" then
+					revealWait = math.max(revealWait, resolvedResult.FlightTime + 0.25)
+				end
+				if not waitEnabled("Farm Animals", revealWait) then break end
 				if not step("Throw_Revealed") then break end
 				if not waitEnabled("Farm Animals", TemplateHub.values["Complete Delay"]) then break end
 				if not step("Throw_Complete") then break end
 				throwPending = false
 				throwCount += 1
+
 				if TemplateHub.values["Train Between Farms"] and throwCount >= TemplateHub.values["Train After Throws"] then
 					local data = playerData()
 					if (tonumber(data.Stand) or 0) >= 1 then
@@ -1410,7 +1448,7 @@ local function periodic(name, interval, callback, setup)
 	end
 end
 
--- Instant Throw auto-taps the meter, collapses flight arc duration, and skips RevealSequence POV/zoom/tap-to-continue.
+-- Instant Throw auto-taps the meter, collapses flight arc duration, skips RevealSequence, and suppresses ScreenFX white/black fades.
 local instantMeterEntries = {}
 local function restoreInstant()
 	for _, entry in ipairs(instantMeterEntries) do
@@ -1425,6 +1463,12 @@ local function restoreInstant()
 		if entry.mod and entry.mod.Run == entry.patched then entry.mod.Run = entry.original end
 	end
 	table.clear(patchedRevealEntries)
+	for _, entry in ipairs(patchedScreenFXEntries) do
+		if entry.mod and entry.mod[entry.key] == entry.patched then
+			entry.mod[entry.key] = entry.original
+		end
+	end
+	table.clear(patchedScreenFXEntries)
 end
 TemplateHub.restoreInstant = restoreInstant
 
@@ -1450,11 +1494,30 @@ TemplateHub.featureCallbacks["Instant Throw"] = function(enabled)
 		pm.CreateArc = patched
 		table.insert(patchedArcEntries, { mod = pm, original = orig, patched = patched })
 	end
+	local screenFXList = collectModuleTables(clientModule, "ScreenFX", isScreenFXTable)
+	for _, sf in ipairs(screenFXList) do
+		pcall(sf.Reset)
+		for _, fnName in ipairs({ "FadeOut", "FadeIn", "Cover", "Flash" }) do
+			local orig = sf[fnName]
+			if type(orig) == "function" then
+				local patched = function(...)
+					if TemplateHub.active and TemplateHub.values["Instant Throw"] then
+						pcall(sf.Reset)
+						return nil
+					end
+					return orig(...)
+				end
+				sf[fnName] = patched
+				table.insert(patchedScreenFXEntries, { mod = sf, key = fnName, original = orig, patched = patched })
+			end
+		end
+	end
 	local reveals = collectModuleTables(clientModule, "RevealSequence", isRevealSequenceTable)
 	for _, rs in ipairs(reveals) do
 		local orig = rs.Run
 		local patched = function(...)
 			if TemplateHub.active and TemplateHub.values["Instant Throw"] then
+				for _, sf in ipairs(screenFXList) do pcall(sf.Reset) end
 				return nil
 			end
 			return orig(...)
@@ -1513,8 +1576,7 @@ prepareIndex = function()
 	if type(collections) ~= "table" then error("Index collections unavailable") end
 	local max = levels.ThrowPowerForLevel(tonumber(data.Level) or 1)
 	local min = math.min(levels.MinThrowPower, max)
-	local meter = TemplateHub.values["Auto Perfect"] and 1 or TemplateHub.values["Throw Power"]
-	local bonus = (gameConfig.Throw.MeterBonusStuds or 0) * meter
+	local bonus = gameConfig.Throw.MeterBonusStuds or 20
 	local selected, desired, selectedProgress
 	for i = 1, areaUtil.Count() do
 		local area = areas.Get(i)
@@ -1568,8 +1630,7 @@ prepareThanksgivingIndex = function()
 	local gameConfig = configModule("GameConfig")
 	local max = levels.ThrowPowerForLevel(tonumber(data.Level) or 1)
 	local min = math.min(levels.MinThrowPower, max)
-	local meter = TemplateHub.values["Auto Perfect"] and 1 or TemplateHub.values["Throw Power"]
-	local bonus = (gameConfig.Throw.MeterBonusStuds or 0) * meter
+	local bonus = gameConfig.Throw.MeterBonusStuds or 20
 	local launchZ = areaUtil.GetLaunchPosition().Z
 	local targetPower = nil
 	for _, animal in ipairs(tgCfg.Animals) do
@@ -1717,7 +1778,7 @@ periodic("Auto Cook Sandwich", 5, function()
 	end
 end)
 
--- Visuals: Throw Distance Indicator, Area Rank Overlay, and Animal ESP (all local-only & cleaned up on toggle off / unload).
+-- Visuals: Throw Distance Indicator and Animal ESP (all local-only & cleaned up on toggle off / unload).
 local throwIndicatorFolder, throwIndicatorConn
 local function cleanupThrowIndicator()
 	if throwIndicatorConn then throwIndicatorConn:Disconnect(); throwIndicatorConn = nil end
@@ -1762,10 +1823,9 @@ local function setThrowDistanceIndicator(enabled)
 
 	local targetRing = makeMarker("TargetMarker", Color3.fromRGB(90, 235, 140), Vector3.new(0.2, 6, 6), 0.25)
 	targetRing.Shape = Enum.PartType.Cylinder
-	local rangeStrip = makeMarker("RangeStrip", Color3.fromRGB(255, 220, 90), Vector3.new(1.5, 0.12, 1), 0.55)
 
 	local bb = Instance.new("BillboardGui")
-	bb.Size = UDim2.fromOffset(220, 66)
+	bb.Size = UDim2.fromOffset(230, 66)
 	bb.StudsOffset = Vector3.new(0, 4.5, 0)
 	bb.AlwaysOnTop = true
 	bb.MaxDistance = 4000
@@ -1789,6 +1849,7 @@ local function setThrowDistanceIndicator(enabled)
 	titleLbl.BackgroundTransparency = 1
 	titleLbl.Font = BOLD_FONT
 	titleLbl.TextSize = 13
+	titleLbl.Text = "Loading..."
 	titleLbl.TextColor3 = Color3.fromRGB(245, 245, 245)
 	titleLbl.TextXAlignment = Enum.TextXAlignment.Center
 	titleLbl.Parent = bg
@@ -1799,6 +1860,7 @@ local function setThrowDistanceIndicator(enabled)
 	subLbl.BackgroundTransparency = 1
 	subLbl.Font = TEXT_FONT
 	subLbl.TextSize = 12
+	subLbl.Text = ""
 	subLbl.TextColor3 = Color3.fromRGB(205, 225, 210)
 	subLbl.TextWrapped = true
 	subLbl.TextXAlignment = Enum.TextXAlignment.Center
@@ -1812,196 +1874,50 @@ local function setThrowDistanceIndicator(enabled)
 		if acc < 0.08 then return end
 		acc = 0
 		if not folder.Parent then cleanupThrowIndicator(); return end
-		local data = dataCtrl:GetPlayerData()
-		if type(data) ~= "table" then return end
-		local basePower = levels.EffectiveThrowPower(tonumber(data.Level) or 1, data.ThrowPower)
-		local bonusMax = gameCfg.Throw and gameCfg.Throw.MeterBonusStuds or 20
-		local meter = TemplateHub.values["Auto Perfect"] and 1 or (TemplateHub.values["Throw Power"] or 1)
-		local targetDist = basePower + bonusMax * meter
-		local minPos = areaUtil.ComputeLanding(basePower, 0)
-		local maxPos = areaUtil.ComputeLanding(basePower + bonusMax, 0)
-		local landPos, areaIdx = areaUtil.ComputeLanding(targetDist, 0)
-		local area = areas.Get(areaIdx)
-		local subIdx = areaUtil.SubAreaForZ(areaIdx, landPos.Z)
-		local areaColor = area and area.Color or Color3.fromRGB(90, 235, 140)
+		pcall(function()
+			local data = dataCtrl:GetPlayerData()
+			if type(data) ~= "table" then return end
+			local basePower = levels.EffectiveThrowPower(tonumber(data.Level) or 1, data.ThrowPower)
+			local bonusMax = gameCfg.Throw and gameCfg.Throw.MeterBonusStuds or 20
+			local targetDist = basePower + bonusMax
+			local landPos, areaIdx = areaUtil.ComputeLanding(targetDist, 0)
+			local area = areas.Get(areaIdx)
+			local subIdx = areaUtil.SubAreaForZ(areaIdx, landPos.Z)
+			local areaColor = area and area.Color or Color3.fromRGB(90, 235, 140)
 
-		targetRing.Color = areaColor
-		stroke.Color = areaColor
-		targetRing.CFrame = CFrame.new(landPos + Vector3.new(0, 0.14, 0)) * CFrame.Angles(0, 0, math.pi / 2)
+			targetRing.Color = areaColor
+			stroke.Color = areaColor
+			targetRing.CFrame = CFrame.new(landPos + Vector3.new(0, 0.14, 0)) * CFrame.Angles(0, 0, math.pi / 2)
 
-		local stripLen = math.max(1, math.abs(minPos.Z - maxPos.Z))
-		local stripMidZ = (minPos.Z + maxPos.Z) / 2
-		rangeStrip.Visible = not TemplateHub.values["Auto Perfect"]
-		rangeStrip.Size = Vector3.new(2, 0.1, stripLen)
-		rangeStrip.CFrame = CFrame.new(landPos.X, landPos.Y + 0.08, stripMidZ)
-
-		local key = tostring(areaIdx) .. ":" .. tostring(subIdx) .. ":" .. tostring(math.floor(targetDist + 0.5)) .. ":" .. tostring(data.EquippedFood)
-		if key ~= lastKey then
-			lastKey = key
-			titleLbl.Text = string.format("%s · %s (%d studs)", area and area.Name or ("Area " .. tostring(areaIdx)), sectionNames[subIdx] or tostring(subIdx), math.floor(targetDist + 0.5))
-			local topLine = ""
-			if okRoll and okFoods and okAnimals and area and type(animalsData[area.Key]) == "table" then
-				local food = foodsCfg.Get(tonumber(data.EquippedFood) or 1) or foodsCfg.Get(1)
-				local depth = areaUtil.DepthInArea(areaIdx, landPos.Z)
-				local weights = food and animalRoll.Weights(food.Bait, areaIdx, depth)
-				if type(weights) == "table" then
-					local list = animalsData[area.Key]
-					local ranked = {}
-					for r = 1, #list do
-						if (weights[r] or 0) > 0.01 then
-							table.insert(ranked, { r = r, name = list[r].Name or list[r].ModelName, w = weights[r] })
+			local key = tostring(areaIdx) .. ":" .. tostring(subIdx) .. ":" .. tostring(math.floor(targetDist + 0.5)) .. ":" .. tostring(data.EquippedFood)
+			if key ~= lastKey then
+				lastKey = key
+				titleLbl.Text = string.format("%s · %s (%d studs)", area and area.Name or ("Area " .. tostring(areaIdx)), sectionNames[subIdx] or tostring(subIdx), math.floor(targetDist + 0.5))
+				local topLine = ""
+				if okRoll and okFoods and okAnimals and area and type(animalsData[area.Key]) == "table" then
+					local food = foodsCfg.Get(tonumber(data.EquippedFood) or 1) or foodsCfg.Get(1)
+					local depth = areaUtil.DepthInArea(areaIdx, landPos.Z)
+					local weights = food and animalRoll.Weights(food.Bait, areaIdx, depth)
+					if type(weights) == "table" then
+						local list = animalsData[area.Key]
+						local ranked = {}
+						for r = 1, #list do
+							if (weights[r] or 0) > 0.01 then
+								table.insert(ranked, { r = r, name = list[r].Name or list[r].ModelName, w = weights[r] })
+							end
 						end
+						table.sort(ranked, function(a, b) return a.w > b.w end)
+						local parts = {}
+						for k = 1, math.min(3, #ranked) do
+							table.insert(parts, string.format("#%d %s (%.0f%%)", ranked[k].r, ranked[k].name, ranked[k].w * 100))
+						end
+						topLine = table.concat(parts, " · ")
 					end
-					table.sort(ranked, function(a, b) return a.w > b.w end)
-					local parts = {}
-					for k = 1, math.min(3, #ranked) do
-						table.insert(parts, string.format("#%d %s (%.0f%%)", ranked[k].r, ranked[k].name, ranked[k].w * 100))
-					end
-					topLine = table.concat(parts, " · ")
 				end
+				subLbl.Text = topLine ~= "" and topLine or string.format("Target: %d studs (+%d bonus)", math.floor(targetDist + 0.5), math.floor(bonusMax + 0.5))
 			end
-			subLbl.Text = topLine ~= "" and topLine or string.format("Range: %d–%d studs", math.floor(basePower + 0.5), math.floor(basePower + bonusMax + 0.5))
-		end
+		end)
 	end)
-	return true
-end
-
-local areaOverlayFolder
-local function cleanupAreaOverlay()
-	if areaOverlayFolder then areaOverlayFolder:Destroy(); areaOverlayFolder = nil end
-end
-local function setAreaRankOverlay(enabled)
-	cleanupAreaOverlay()
-	if not enabled then return true end
-	if game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
-	local okAreas, areas = pcall(configModule, "AreasConfig")
-	local okUtil, areaUtil = pcall(sharedModule, "AreaUtil")
-	local okRoll, animalRoll = pcall(sharedModule, "AnimalRoll")
-	local okFoods, foodsCfg = pcall(configModule, "FoodsConfig")
-	local okData, dataCtrl = pcall(clientModule, "DataController")
-	local okRarity, rarityCfg = pcall(configModule, "RarityConfig")
-	local okAnimals, animalsData = pcall(require, replicatedStorage:WaitForChild("AnimalsData"))
-	if not (okAreas and okUtil and okRoll and okAnimals) then
-		return false, "Area modules unavailable"
-	end
-
-	local folder = Instance.new("Folder")
-	folder.Name = "Hub_AreaRankOverlay"
-	folder.Parent = workspace
-	areaOverlayFolder = folder
-
-	local data = okData and dataCtrl:GetPlayerData() or {}
-	local food = okFoods and (foodsCfg.Get(tonumber(type(data) == "table" and data.EquippedFood) or 1) or foodsCfg.Get(1))
-	local bait = food and food.Bait or 1
-	local launchX = areaUtil.GetLaunchPosition().X
-	local subNames = { "Front (1/3)", "Mid (2/3)", "Back (3/3)" }
-	local subColors = {
-		Color3.fromRGB(130, 230, 140),
-		Color3.fromRGB(255, 200, 90),
-		Color3.fromRGB(255, 105, 130),
-	}
-
-	for i = 1, areaUtil.Count() do
-		local area = areas.Get(i)
-		if area then
-			local width = math.min(area.Width or 60, 70)
-			local floorY = (area.FloorY or 0) + 0.1
-			local lines = areaUtil.SubAreaLines(i)
-			local bounds = { area.ZStart, lines[1], lines[2], area.ZEnd }
-
-			-- Divider stripes at 1/3 and 2/3.
-			for li, zLine in ipairs(lines) do
-				local bar = Instance.new("Part")
-				bar.Name = area.Key .. "_Div" .. li
-				bar.Anchored = true
-				bar.CanCollide = false
-				bar.CanQuery = false
-				bar.CanTouch = false
-				bar.CastShadow = false
-				bar.Material = Enum.Material.Neon
-				bar.Color = subColors[li + 1] or Color3.new(1, 1, 1)
-				bar.Transparency = 0.35
-				bar.Size = Vector3.new(width, 0.12, 0.7)
-				bar.Position = Vector3.new(launchX, floorY, zLine)
-				bar.Parent = folder
-			end
-
-			local list = animalsData[area.Key] or {}
-			for s = 1, 3 do
-				local zMid = (bounds[s] + bounds[s + 1]) / 2
-				local depth = (s - 0.5) / 3
-				local weights = animalRoll.Weights(bait, i, depth)
-				local minRank, maxRank = #list, 1
-				local items = {}
-				for r = 1, #list do
-					local w = weights and weights[r] or 0
-					if w > 0.005 then
-						if r < minRank then minRank = r end
-						if r > maxRank then maxRank = r end
-						table.insert(items, { r = r, name = list[r].Name or list[r].ModelName, w = w })
-					end
-				end
-				if minRank > maxRank then minRank, maxRank = 1, #list end
-				table.sort(items, function(a, b) return a.w > b.w end)
-				local topStrs = {}
-				for k = 1, math.min(3, #items) do
-					table.insert(topStrs, string.format("#%d %s %.0f%%", items[k].r, items[k].name, items[k].w * 100))
-				end
-				local rarityName = area.RarityPattern and area.RarityPattern[maxRank] or ""
-				local rarityCol = (okRarity and rarityName ~= "" and rarityCfg.Get(rarityName).Color) or subColors[s]
-
-				local anchor = Instance.new("Part")
-				anchor.Name = area.Key .. "_Sub" .. s
-				anchor.Anchored = true
-				anchor.CanCollide = false
-				anchor.CanQuery = false
-				anchor.CanTouch = false
-				anchor.Transparency = 1
-				anchor.Size = Vector3.new(1, 1, 1)
-				anchor.Position = Vector3.new(launchX, floorY + 3.5, zMid)
-				anchor.Parent = folder
-
-				local bb = Instance.new("BillboardGui")
-				bb.Size = UDim2.fromOffset(230, 56)
-				bb.AlwaysOnTop = false
-				bb.MaxDistance = 320
-				bb.Adornee = anchor
-				bb.Parent = anchor
-
-				local frame = Instance.new("Frame")
-				frame.Size = UDim2.fromScale(1, 1)
-				frame.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
-				frame.BackgroundTransparency = 0.25
-				frame.BorderSizePixel = 0
-				frame.Parent = bb
-				Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
-				local st = Instance.new("UIStroke", frame)
-				st.Color = rarityCol
-				st.Thickness = 1.5
-
-				local lbl1 = Instance.new("TextLabel")
-				lbl1.Size = UDim2.new(1, -8, 0, 20)
-				lbl1.Position = UDim2.fromOffset(4, 2)
-				lbl1.BackgroundTransparency = 1
-				lbl1.Font = BOLD_FONT
-				lbl1.TextSize = 12
-				lbl1.TextColor3 = rarityCol
-				lbl1.Text = string.format("%s · %s (Ranks %d–%d)", area.Name, subNames[s], minRank, maxRank)
-				lbl1.Parent = frame
-
-				local lbl2 = Instance.new("TextLabel")
-				lbl2.Size = UDim2.new(1, -8, 0, 32)
-				lbl2.Position = UDim2.fromOffset(4, 21)
-				lbl2.BackgroundTransparency = 1
-				lbl2.Font = TEXT_FONT
-				lbl2.TextSize = 11
-				lbl2.TextColor3 = Color3.fromRGB(235, 235, 235)
-				lbl2.TextWrapped = true
-				lbl2.Text = table.concat(topStrs, " · ")
-				lbl2.Parent = frame
-			end
-		end
-	end
 	return true
 end
 
@@ -2044,21 +1960,24 @@ local function setAnimalEsp(enabled)
 
 		local bb = Instance.new("BillboardGui")
 		bb.Adornee = adornee
-		bb.Size = UDim2.fromOffset(150, 26)
+		bb.Size = UDim2.fromOffset(170, 24)
 		bb.StudsOffset = Vector3.new(0, 3.5, 0)
 		bb.AlwaysOnTop = true
 		bb.MaxDistance = 220
 		bb.Parent = folder
 		local lbl = Instance.new("TextLabel")
 		lbl.Size = UDim2.fromScale(1, 1)
-		lbl.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
-		lbl.BackgroundTransparency = 0.35
+		lbl.BackgroundTransparency = 1
 		lbl.TextColor3 = col
 		lbl.Font = BOLD_FONT
-		lbl.TextSize = 12
+		lbl.TextSize = 13
 		lbl.Text = (mutation and mutation ~= "" and (mutation .. " ") or "") .. tostring(modelName)
 		lbl.Parent = bb
-		Instance.new("UICorner", lbl).CornerRadius = UDim.new(0, 4)
+		local textStroke = Instance.new("UIStroke")
+		textStroke.Color = Color3.new(0, 0, 0)
+		textStroke.Thickness = 1.6
+		textStroke.Transparency = 0.15
+		textStroke.Parent = lbl
 
 		obj.AncestryChanged:Connect(function(_, parent)
 			if not parent then
@@ -2078,93 +1997,348 @@ end
 
 TemplateHub.restoreVisuals = function()
 	cleanupThrowIndicator()
-	cleanupAreaOverlay()
 	cleanupAnimalEsp()
 end
 TemplateHub.featureCallbacks["Throw Distance Indicator"] = setThrowDistanceIndicator
-TemplateHub.featureCallbacks["Area Rank Overlay"] = setAreaRankOverlay
 TemplateHub.featureCallbacks["Animal ESP"] = setAnimalEsp
 
--- A text box uses template styling. The webhook URL is deliberately session-only.
-local secretWebhook = ""
-local function addInput(parent, text, initial, private)
-	local holder = createCard("Frame", parent, text, 56)
+-- Multi-select dropdown using template styling.
+local function addMultiDropdown(parent, text, optionsProvider)
+	local holder = createCard("Frame", parent, text, 30)
+	local headerBtn = create("TextButton", {
+		Size = UDim2.new(1, 0, 0, 30),
+		BackgroundTransparency = 1,
+		Text = "",
+		AutoButtonColor = false,
+	}, holder)
 	create("TextLabel", {
-		Size = UDim2.new(1, -20, 0, 20), Position = UDim2.fromOffset(10, 3), BackgroundTransparency = 1,
-		Text = text, TextColor3 = TEXT_COLOR, TextSize = 13, Font = TEXT_FONT, TextXAlignment = Enum.TextXAlignment.Left,
+		Size = UDim2.new(0.45, -8, 1, 0),
+		Position = UDim2.fromOffset(10, 0),
+		BackgroundTransparency = 1,
+		Text = text,
+		TextColor3 = TEXT_COLOR,
+		TextSize = 13,
+		Font = TEXT_FONT,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, headerBtn)
+	local summaryLbl = create("TextLabel", {
+		Size = UDim2.new(0.55, -12, 1, 0),
+		Position = UDim2.new(0.45, 0, 0, 0),
+		BackgroundTransparency = 1,
+		Text = "Any ▾",
+		TextColor3 = DIM_TEXT_COLOR,
+		TextSize = 12,
+		Font = TEXT_FONT,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+	}, headerBtn)
+
+	local panel = create("Frame", {
+		Size = UDim2.new(1, -12, 0, 166),
+		Position = UDim2.fromOffset(6, 32),
+		BackgroundColor3 = ELEMENT_COLOR,
+		BorderSizePixel = 0,
+		Visible = false,
 	}, holder)
-	local box = create("TextBox", {
-		Size = UDim2.new(1, -20, 0, 24), Position = UDim2.fromOffset(10, 26), BackgroundColor3 = ELEMENT_COLOR,
-		BorderSizePixel = 0, Text = initial, PlaceholderText = private and "Discord webhook URL (not saved)" or initial,
-		TextColor3 = TEXT_COLOR, PlaceholderColor3 = DIM_TEXT_COLOR, TextSize = 13, Font = TEXT_FONT, ClearTextOnFocus = false,
-	}, holder)
-	create("UICorner", { CornerRadius = UDim.new(0, 4) }, box)
-	addStroke(box, DIM_TEXT_COLOR, 0.6)
-	if private then
-		box.FocusLost:Connect(function() secretWebhook = box.Text end)
-	else
-		TemplateHub.values[text] = initial
-		TemplateHub.defaults[text] = initial
-		TemplateHub.setters[text] = function(value)
-			if type(value) ~= "string" or #value > 200 then return end
-			TemplateHub.values[text] = value
-			box.Text = value
+	create("UICorner", { CornerRadius = UDim.new(0, 4) }, panel)
+	addStroke(panel, DIM_TEXT_COLOR, 0.5)
+
+	local searchInput = create("TextBox", {
+		Size = UDim2.new(1, -58, 0, 22),
+		Position = UDim2.fromOffset(4, 4),
+		BackgroundColor3 = ROW_COLOR,
+		BorderSizePixel = 0,
+		Text = "",
+		PlaceholderText = "Search...",
+		TextColor3 = TEXT_COLOR,
+		PlaceholderColor3 = DIM_TEXT_COLOR,
+		TextSize = 12,
+		Font = TEXT_FONT,
+		ClearTextOnFocus = false,
+	}, panel)
+	create("UICorner", { CornerRadius = UDim.new(0, 4) }, searchInput)
+
+	local clearBtn = create("TextButton", {
+		Size = UDim2.fromOffset(46, 22),
+		Position = UDim2.new(1, -50, 0, 4),
+		BackgroundColor3 = ROW_COLOR,
+		BorderSizePixel = 0,
+		Text = "Clear",
+		TextColor3 = OFF_TEXT_COLOR,
+		TextSize = 11,
+		Font = BOLD_FONT,
+		AutoButtonColor = false,
+	}, panel)
+	create("UICorner", { CornerRadius = UDim.new(0, 4) }, clearBtn)
+
+	local scroll = create("ScrollingFrame", {
+		Size = UDim2.new(1, -8, 1, -34),
+		Position = UDim2.fromOffset(4, 30),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 4,
+		ScrollBarImageColor3 = ACCENT_B,
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	}, panel)
+	create("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, scroll)
+
+	local selected = {}
+	local expanded = false
+	local rowButtons = {}
+	TemplateHub.values[text] = selected
+	TemplateHub.defaults[text] = {}
+
+	local function updateSummary()
+		local count, firstLabel = 0, nil
+		for k, v in pairs(selected) do
+			if v == true then
+				count += 1
+				if not firstLabel then firstLabel = k end
+			end
 		end
-		box.FocusLost:Connect(function() TemplateHub.setters[text](box.Text) end)
+		local arrow = expanded and " ▴" or " ▾"
+		if count == 0 then
+			summaryLbl.Text = "Any" .. arrow
+			summaryLbl.TextColor3 = DIM_TEXT_COLOR
+		elseif count == 1 then
+			summaryLbl.Text = tostring(firstLabel) .. arrow
+			summaryLbl.TextColor3 = ACCENT_A
+		else
+			summaryLbl.Text = tostring(count) .. " selected" .. arrow
+			summaryLbl.TextColor3 = ACCENT_A
+		end
+		for key, info in pairs(rowButtons) do
+			local on = selected[key] == true
+			info.check.Visible = on
+			info.label.TextColor3 = on and TEXT_COLOR or OFF_TEXT_COLOR
+		end
 	end
+
+	local function buildList()
+		for _, c in ipairs(scroll:GetChildren()) do
+			if c:IsA("GuiObject") then c:Destroy() end
+		end
+		table.clear(rowButtons)
+		local opts = type(optionsProvider) == "function" and optionsProvider() or optionsProvider
+		local query = string.lower((searchInput.Text or ""):match("^%s*(.-)%s*$"))
+		for i, item in ipairs(opts) do
+			local key = type(item) == "table" and item.key or tostring(item)
+			local labelText = type(item) == "table" and item.label or tostring(item)
+			if query == "" or string.find(string.lower(labelText), query, 1, true) or string.find(string.lower(key), query, 1, true) then
+				local row = create("TextButton", {
+					Size = UDim2.new(1, -4, 0, 22),
+					BackgroundColor3 = ROW_COLOR,
+					BackgroundTransparency = 0.45,
+					BorderSizePixel = 0,
+					Text = "",
+					LayoutOrder = i,
+					AutoButtonColor = false,
+				}, scroll)
+				create("UICorner", { CornerRadius = UDim.new(0, 3) }, row)
+				local box = create("Frame", {
+					Size = UDim2.fromOffset(12, 12),
+					Position = UDim2.new(0, 6, 0.5, -6),
+					BackgroundColor3 = ELEMENT_COLOR,
+					BorderSizePixel = 0,
+				}, row)
+				create("UICorner", { CornerRadius = UDim.new(0, 3) }, box)
+				addStroke(box, DIM_TEXT_COLOR, 0.4)
+				local chk = create("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.fromScale(0.5, 0.5),
+					Size = UDim2.fromOffset(8, 8),
+					BackgroundColor3 = ACCENT_A,
+					BorderSizePixel = 0,
+					Visible = selected[key] == true,
+				}, box)
+				create("UICorner", { CornerRadius = UDim.new(0, 2) }, chk)
+				local lbl = create("TextLabel", {
+					Size = UDim2.new(1, -26, 1, 0),
+					Position = UDim2.fromOffset(24, 0),
+					BackgroundTransparency = 1,
+					Text = labelText,
+					TextColor3 = selected[key] == true and TEXT_COLOR or OFF_TEXT_COLOR,
+					TextSize = 12,
+					Font = TEXT_FONT,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+				}, row)
+				rowButtons[key] = { check = chk, label = lbl }
+				row.MouseButton1Click:Connect(function()
+					if selected[key] then selected[key] = nil else selected[key] = true end
+					updateSummary()
+				end)
+			end
+		end
+	end
+
+	TemplateHub.setters[text] = function(value)
+		table.clear(selected)
+		if type(value) == "table" then
+			for k, v in pairs(value) do
+				if v == true and type(k) == "string" then selected[k] = true end
+			end
+		elseif type(value) == "string" and value ~= "" and string.lower(value) ~= "any" then
+			for term in value:gmatch("[^,]+") do
+				local trimmed = term:match("^%s*(.-)%s*$")
+				if trimmed ~= "" then selected[trimmed] = true end
+			end
+		end
+		updateSummary()
+	end
+
+	headerBtn.MouseButton1Click:Connect(function()
+		expanded = not expanded
+		if expanded then
+			buildList()
+		end
+		panel.Visible = expanded
+		tween(holder, FAST_TWEEN, { Size = UDim2.new(1, 0, 0, expanded and 204 or 30) })
+		updateSummary()
+	end)
+	searchInput:GetPropertyChangedSignal("Text"):Connect(function()
+		if expanded then buildList() end
+	end)
+	clearBtn.MouseButton1Click:Connect(function()
+		table.clear(selected)
+		updateSummary()
+	end)
+
+	updateSummary()
 	table.insert(TemplateHub.searchables, holder)
 end
 
-local function threshold(text)
-	local value = string.lower((text or ""):gsub("%s", ""))
-	if value == "" or value == "0" then return 0 end
-	local num, suffix = value:match("^([%d%.]+)([kmbt]?)$")
-	local multipliers = { [""] = 1, k = 1e3, m = 1e6, b = 1e9, t = 1e12 }
-	local n = num and tonumber(num)
-	if not n or n < 0 or n == math.huge then error("Invalid threshold: use a number or K/M/B/T") end
-	return n * multipliers[suffix]
+local function getMutationOptions()
+	local opts = { "Normal" }
+	local seen = { Normal = true }
+	local ok, cfg = pcall(configModule, "MutationsConfig")
+	if ok and type(cfg.List) == "table" then
+		for _, m in ipairs(cfg.List) do
+			if type(m.Name) == "string" and not seen[m.Name] then
+				seen[m.Name] = true
+				table.insert(opts, m.Name)
+			end
+		end
+	else
+		for _, name in ipairs({ "Gold", "Diamond", "Emerald", "Ruby", "Rainbow", "Champion", "Lucid", "Gobble" }) do
+			table.insert(opts, name)
+		end
+	end
+	return opts
 end
-local function matchesText(input, value)
-	input = (input or ""):lower():match("^%s*(.-)%s*$")
-	if input == "" or input == "any" then return true end
-	for term in input:gmatch("[^,]+") do
-		if term:match("^%s*(.-)%s*$") == tostring(value or ""):lower() then return true end
+
+local function getRarityOptions()
+	local opts = {}
+	local ok, cfg = pcall(configModule, "RarityConfig")
+	if ok and type(cfg.List) == "table" then
+		for _, r in ipairs(cfg.List) do
+			if type(r.Name) == "string" then table.insert(opts, r.Name) end
+		end
+	else
+		opts = { "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Secret", "Divine", "Celestial", "Eternal", "Cosmic", "Supreme", "Sovereign", "Astral" }
+	end
+	return opts
+end
+
+local function getAnimalOptions()
+	local displayNames = {}
+	local okData, animalsData = pcall(require, replicatedStorage:WaitForChild("AnimalsData", 2))
+	if okData and type(animalsData) == "table" then
+		for _, list in pairs(animalsData) do
+			if type(list) == "table" then
+				for _, entry in ipairs(list) do
+					if type(entry.ModelName) == "string" and type(entry.Name) == "string" then
+						displayNames[entry.ModelName] = entry.Name
+					end
+				end
+			end
+		end
+	end
+	local okTg, tgCfg = pcall(configModule, "ThanksgivingConfig")
+	if okTg and type(tgCfg.Animals) == "table" then
+		for _, entry in ipairs(tgCfg.Animals) do
+			if type(entry.ModelName) == "string" and type(entry.Name) == "string" then
+				displayNames[entry.ModelName] = entry.Name
+			end
+		end
+		if type(tgCfg.Gobbler) == "table" and type(tgCfg.Gobbler.ModelName) == "string" then
+			displayNames[tgCfg.Gobbler.ModelName] = tgCfg.Gobbler.Name or tgCfg.Gobbler.ModelName
+		end
+	end
+
+	local opts = {}
+	local seen = {}
+	local okEcon, econ = pcall(configModule, "AnimalEconomy")
+	if okEcon and type(econ.List) == "table" then
+		for modelName in pairs(econ.List) do
+			seen[modelName] = true
+			local disp = displayNames[modelName]
+			local label = (disp and disp ~= modelName) and (disp .. " (" .. modelName .. ")") or modelName
+			table.insert(opts, { key = modelName, label = label })
+		end
+	end
+	for modelName, disp in pairs(displayNames) do
+		if not seen[modelName] then
+			local label = (disp ~= modelName) and (disp .. " (" .. modelName .. ")") or modelName
+			table.insert(opts, { key = modelName, label = label })
+		end
+	end
+	table.sort(opts, function(a, b) return string.lower(a.label) < string.lower(b.label) end)
+	return opts
+end
+
+local function hasSelections(tbl)
+	if type(tbl) ~= "table" then return false end
+	for _, v in pairs(tbl) do
+		if v == true then return true end
 	end
 	return false
 end
+local function matchesSet(selectedSet, value)
+	if not hasSelections(selectedSet) then return true end
+	return selectedSet[tostring(value or "")] == true
+end
 local function filters(prefix)
 	return {
-		mutation = TemplateHub.values[prefix .. " Mutation"], rarity = TemplateHub.values[prefix .. " Rarity"],
-		animal = TemplateHub.values[prefix .. " Animals"], cps = threshold(TemplateHub.values[prefix .. " CPS"]),
-		weight = threshold(TemplateHub.values[prefix .. " Weight"]),
+		mutation = TemplateHub.values[prefix .. " Mutations"],
+		rarity = TemplateHub.values[prefix .. " Rarities"],
+		animal = TemplateHub.values[prefix .. " Animals"],
 	}
 end
 local function isRestricted(f)
-	return f.cps > 0 or f.weight > 0 or not matchesText(f.mutation, "") or not matchesText(f.rarity, "") or not matchesText(f.animal, "")
+	return hasSelections(f.mutation) or hasSelections(f.rarity) or hasSelections(f.animal)
 end
-local function sameFilters(a, b)
-	return a.mutation == b.mutation and a.rarity == b.rarity and a.animal == b.animal and a.cps == b.cps and a.weight == b.weight
+local function filterSignature(f)
+	local parts = {}
+	for _, tbl in ipairs({ f.mutation, f.rarity, f.animal }) do
+		local keys = {}
+		if type(tbl) == "table" then
+			for k, v in pairs(tbl) do
+				if v == true then table.insert(keys, k) end
+			end
+		end
+		table.sort(keys)
+		table.insert(parts, table.concat(keys, ","))
+	end
+	return table.concat(parts, "|")
 end
 local function animalStats(entry)
 	if type(entry) ~= "table" or type(entry.ModelName) ~= "string" then return nil end
-	local economy, mutations = configModule("AnimalEconomy"), sharedModule("Mutations")
+	local economy = configModule("AnimalEconomy")
 	local details = economy.Get(entry.ModelName)
 	if type(details) ~= "table" or type(details.Rarity) ~= "string" then return nil end
-	local income = mutations.IncomeOf(entry, localPlayer:GetAttribute("BestIncome") or 0)
-	local weight = mutations.Weight(entry.ModelName, entry.Size)
-	if type(income) ~= "number" or type(weight) ~= "number" then return nil end
-	return { name = entry.ModelName, mutation = entry.Mutation or "Normal", rarity = details.Rarity, cps = income, weight = weight }
+	return { name = entry.ModelName, mutation = entry.Mutation or "Normal", rarity = details.Rarity }
 end
-local function matchesAnimal(f, stats, above)
-	if not stats or not matchesText(f.mutation, stats.mutation) or not matchesText(f.rarity, stats.rarity) or not matchesText(f.animal, stats.name) then return false end
-	if above then return (f.cps == 0 or stats.cps > f.cps) and (f.weight == 0 or stats.weight > f.weight) end
-	return (f.cps == 0 or stats.cps < f.cps) and (f.weight == 0 or stats.weight < f.weight)
+local function matchesAnimal(f, stats)
+	return stats ~= nil and matchesSet(f.mutation, stats.mutation) and matchesSet(f.rarity, stats.rarity) and matchesSet(f.animal, stats.name)
 end
 local sellBusy = false
 local function sellMatches(auto)
 	if sellBusy then error("Sell already running") end
 	local f = filters("Sell")
-	if not isRestricted(f) then error("Set at least one sell filter first") end
+	if not isRestricted(f) then error("Select at least one sell filter first") end
+	local sig = filterSignature(f)
 	local animals = playerData().Animals
 	if type(animals) ~= "table" then error("Animal inventory unavailable") end
 	local mutations = sharedModule("Mutations")
@@ -2174,14 +2348,13 @@ local function sellMatches(auto)
 		local count = 0
 		for id, entry in pairs(animals) do
 			if not TemplateHub.active or (auto and not TemplateHub.values["Auto Sell"]) then break end
-			local currentFilters = filters("Sell")
-			if not sameFilters(currentFilters, f) then break end
+			if filterSignature(filters("Sell")) ~= sig then break end
 			-- Re-read each animal so an inventory change cannot sell a stale entry.
 			local current = playerData().Animals
 			entry = type(current) == "table" and current[id] or nil
 			if type(id) == "string" and type(entry) == "table" and not entry.Placed and not entry.Bought and not entry.Locked then
 				local protected = mutations.EventOnlyNames(entry)
-				if type(protected) == "table" and #protected == 0 and matchesAnimal(f, animalStats(entry), false) and TemplateHub.active and (not auto or TemplateHub.values["Auto Sell"]) and sameFilters(filters("Sell"), f) then
+				if type(protected) == "table" and #protected == 0 and matchesAnimal(f, animalStats(entry)) and TemplateHub.active and (not auto or TemplateHub.values["Auto Sell"]) and filterSignature(filters("Sell")) == sig then
 					doCall("Plot_SellAnimal", id)
 					count += 1
 					task.wait(0.5)
@@ -2195,52 +2368,11 @@ local function sellMatches(auto)
 	return result
 end
 periodic("Auto Sell", 10, function() sellMatches(true) end, function()
-	if not isRestricted(filters("Sell")) then error("Set at least one sell filter first") end
+	if not isRestricted(filters("Sell")) then error("Select at least one sell filter first") end
 end)
 local function sellOnce()
 	local ok, result = pcall(sellMatches, false)
 	TemplateHub.report(ok and ("Sold " .. result .. " matching animals") or tostring(result), not ok)
-end
-
-local function webhookRequest(message)
-	local url = secretWebhook:match("^%s*(.-)%s*$")
-	-- Keep the URL/token out of settings, output, and error messages.
-	if not url:match("^https://discord%.com/api/webhooks/%d+/[%w_%-]+$") then error("Enter a valid discord.com webhook URL") end
-	local send = request or http_request or (type(syn) == "table" and syn.request)
-	if type(send) ~= "function" then error("Executor HTTP request API unavailable") end
-	local ok, response = pcall(send, { Url = url, Method = "POST", Headers = { ["Content-Type"] = "application/json" }, Body = httpService:JSONEncode({ content = message, allowed_mentions = { parse = {} } }) })
-	if not ok then error("Webhook request failed") end
-	local status = type(response) == "table" and (response.StatusCode or response.Status)
-	if type(status) ~= "number" or status < 200 or status >= 300 then error("Webhook rejected or returned an unknown status") end
-end
-local function webhookSetup()
-	if not secretWebhook:match("^%s*https://discord%.com/api/webhooks/%d+/[%w_%-]+%s*$") then error("Enter a valid discord.com webhook URL") end
-	filters("Webhook")
-	local animals = playerData().Animals
-	if type(animals) ~= "table" then error("Animal inventory unavailable") end
-	local seen = {}
-	for id in pairs(animals) do seen[id] = true end
-	return seen
-end
-periodic("Enable Webhook", 3, function(seen)
-	local animals = playerData().Animals
-	if type(animals) ~= "table" then error("Animal inventory unavailable") end
-	local f = filters("Webhook")
-	for id, entry in pairs(animals) do
-		if not TemplateHub.active or not TemplateHub.values["Enable Webhook"] then break end
-		if not seen[id] then
-			seen[id] = true
-			local stats = animalStats(entry)
-			if matchesAnimal(f, stats, true) and TemplateHub.active and TemplateHub.values["Enable Webhook"] then
-				webhookRequest(string.format("New animal: %s | %s | %s | CPS %.2f | Weight %.2f", stats.name, stats.mutation, stats.rarity, stats.cps, stats.weight))
-				task.wait(1)
-			end
-		end
-	end
-end, webhookSetup)
-local function testWebhook()
-	local ok = pcall(webhookRequest, "Throw Food Hub webhook test.")
-	TemplateHub.report(ok and "Webhook test sent" or "Webhook test failed; check URL and executor HTTP", not ok)
 end
 
 ---Build the whole interface.
@@ -2283,7 +2415,6 @@ local function initializeScript()
 		TemplateHub.values["Auto Perfect"] = false
 		TemplateHub.values["Instant Throw"] = false
 		TemplateHub.values["Throw Distance Indicator"] = false
-		TemplateHub.values["Area Rank Overlay"] = false
 		TemplateHub.values["Animal ESP"] = false
 		if TemplateHub.restoreLighting then pcall(TemplateHub.restoreLighting) end
 		if TemplateHub.restoreInstant then pcall(TemplateHub.restoreInstant) end
@@ -2643,7 +2774,6 @@ local function initializeScript()
 	addSection(mainLeft, "Throw")
 	addToggle(mainLeft, "Auto Perfect", nil, false)
 	addToggle(mainLeft, "Instant Throw", nil, false)
-	addSlider(mainLeft, "Throw Power", 0, 1, 0.95, 2)
 	addSection(mainLeft, "Training")
 	addToggle(mainLeft, "Auto Train", nil, false)
 	addToggle(mainLeft, "Auto 2x Press", nil, false)
@@ -2697,36 +2827,25 @@ local function initializeScript()
 		end)
 	end)
 	addSection(extraRight, "Selling (filters are AND)")
-	addInput(extraRight, "Sell Mutation", "Any")
-	addInput(extraRight, "Sell Rarity", "Any")
-	addInput(extraRight, "Sell Animals", "Any")
-	addInput(extraRight, "Sell CPS", "0")
-	addInput(extraRight, "Sell Weight", "0")
-	local sellConfirmUntil, sellConfirmFilters = 0, nil
+	addMultiDropdown(extraRight, "Sell Mutations", getMutationOptions)
+	addMultiDropdown(extraRight, "Sell Rarities", getRarityOptions)
+	addMultiDropdown(extraRight, "Sell Animals", getAnimalOptions)
+	local sellConfirmUntil, sellConfirmSig = 0, nil
 	addButton(extraRight, "Sell matched (confirm twice)", function()
 		local valid, f = pcall(filters, "Sell")
 		if not valid or not isRestricted(f) then
-			return TemplateHub.report(valid and "Set at least one sell filter first" or tostring(f), true)
+			return TemplateHub.report(valid and "Select at least one sell filter first" or tostring(f), true)
 		end
-		local signature = table.concat({ f.mutation, f.rarity, f.animal, tostring(f.cps), tostring(f.weight) }, "\0")
+		local signature = filterSignature(f)
 		local now = os.clock()
-		if sellConfirmUntil == 0 or now > sellConfirmUntil or signature ~= sellConfirmFilters then
-			sellConfirmUntil, sellConfirmFilters = now + 5, signature
+		if sellConfirmUntil == 0 or now > sellConfirmUntil or signature ~= sellConfirmSig then
+			sellConfirmUntil, sellConfirmSig = now + 5, signature
 			return TemplateHub.report("Press Sell again in 5s to confirm these filters", true)
 		end
-		sellConfirmUntil, sellConfirmFilters = 0, nil
+		sellConfirmUntil, sellConfirmSig = 0, nil
 		task.spawn(sellOnce)
 	end)
 	addToggle(extraRight, "Auto Sell", nil, false)
-	addSection(extraRight, "Webhook (new animals)")
-	addInput(extraRight, "Webhook URL", "", true)
-	addButton(extraRight, "Send Test Message", function() task.spawn(testWebhook) end)
-	addInput(extraRight, "Webhook Mutation", "Any")
-	addInput(extraRight, "Webhook Rarity", "Any")
-	addInput(extraRight, "Webhook Animals", "Any")
-	addInput(extraRight, "Webhook CPS", "0")
-	addInput(extraRight, "Webhook Weight", "0")
-	addToggle(extraRight, "Enable Webhook", nil, false)
 
 	-- Visuals are local-only and restored when disabled or unloaded.
 	local visualsLeft = createColumn(TemplateHub.pages.Visuals, UDim2.fromOffset(0, 0))
@@ -2735,7 +2854,6 @@ local function initializeScript()
 	addToggle(visualsLeft, "Fullbright", nil, false)
 	addSection(visualsRight, "Game Visuals")
 	addToggle(visualsRight, "Throw Distance Indicator", nil, false)
-	addToggle(visualsRight, "Area Rank Overlay", nil, false)
 	addToggle(visualsRight, "Animal ESP", nil, false)
 
 	-- Config tab.
@@ -2797,7 +2915,7 @@ local function initializeScript()
 			return setStatus("Settings file is corrupted.")
 		end
 
-		local safeVisuals = { Fullbright = true, ["Throw Distance Indicator"] = true, ["Area Rank Overlay"] = true, ["Animal ESP"] = true }
+		local safeVisuals = { Fullbright = true, ["Throw Distance Indicator"] = true, ["Animal ESP"] = true }
 		for name, value in data do
 			-- Never start actions just because a settings file was loaded.
 			if TemplateHub.featureCallbacks[name] and not safeVisuals[name] then value = false end
