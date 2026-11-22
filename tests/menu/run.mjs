@@ -12,10 +12,15 @@ const state = await LuauState.createAsync({
   jsonEncode: value => JSON.stringify(unpack(value)), jsonDecode: JSON.parse,
 });
 try {
-  const source = read('../../ViolenceDistrictMenu.client.luau');
-  state.loadstring(source, 'Zenith', true); // compile the unmodified standalone script
-  const suite = `${read('mock.luau')}\nlocal function launch()\n${source}\nassert(ok,err)\nend\n${read('menu.spec.luau')}`;
-  await state.loadstring(suite, 'ZenithMenuTests', true)();
+  for (const [name, file, extraFixture, spec] of [
+    ['Zenith', 'ViolenceDistrictMenu.client.luau', '', 'menu.spec.luau'],
+    ['Snowpaw', 'SnowpawMenu.client.luau', read('snowpaw-fixture.luau'), 'snowpaw.spec.luau'],
+  ]) {
+    const source = read('../../' + file);
+    state.loadstring(source, name, true); // compile the unmodified standalone script
+    const suite = `${read('mock.luau')}\n${extraFixture}\nlocal function launch()\n${source}\nassert(ok,err)\nend\n${read(spec)}`;
+    await state.loadstring(suite, name + 'MenuTests', true)();
+  }
 } finally {
   state.destroy();
 }

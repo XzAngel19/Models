@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1600 1000" fill="none">
+<defs>
+<path id="contour" d="M0 -90 C36 -105 96 -94 112 -68 S143 -35 155 -7 S143 29 110 45 S86 91 57 93 S22 80 -10 86 S-58 100 -83 80 S-107 46 -148 29 S-162 -17 -139 -37 S-119 -76 -83 -78 S-25 -80 0 -90 Z" vector-effect="non-scaling-stroke"/>
+<pattern id="dust" width="175" height="141" patternUnits="userSpaceOnUse" fill="#cadae4"><circle cx="10" cy="69" r=".8" opacity=".12"/><circle cx="83" cy="92" r="1" opacity=".21"/><circle cx="131" cy="17" r=".6" opacity=".25"/><circle cx="54" cy="27" r=".8" opacity=".11"/><circle cx="169" cy="137" r="1" opacity=".16"/></pattern></defs>
+<rect width="1600" height="1000" fill="url(#dust)"/>
+<g transform="translate(76 -112)" stroke="#bad9ef" stroke-width="1" stroke-opacity=".060">
+<use xlink:href="#contour" transform="rotate(3.0) scale(0.420 0.330)"/>
+<use xlink:href="#contour" transform="rotate(3.4) scale(0.634 0.501)"/>
+<use xlink:href="#contour" transform="rotate(3.8) scale(0.848 0.672)"/>
+<use xlink:href="#contour" transform="rotate(4.3) scale(1.062 0.843)"/>
+<use xlink:href="#contour" transform="rotate(4.7) scale(1.276 1.014)"/>
+<use xlink:href="#contour" transform="rotate(5.1) scale(1.490 1.185)"/>
+<use xlink:href="#contour" transform="rotate(5.5) scale(1.704 1.356)"/>
+<use xlink:href="#contour" transform="rotate(5.9) scale(1.918 1.527)"/>
+<use xlink:href="#contour" transform="rotate(6.4) scale(2.132 1.698)"/>
+<use xlink:href="#contour" transform="rotate(6.8) scale(2.346 1.869)"/>
+<use xlink:href="#contour" transform="rotate(7.2) scale(2.560 2.040)"/>
+<use xlink:href="#contour" transform="rotate(7.6) scale(2.774 2.211)"/>
+<use xlink:href="#contour" transform="rotate(8.0) scale(2.988 2.382)"/>
+<use xlink:href="#contour" transform="rotate(8.5) scale(3.202 2.553)"/>
+<use xlink:href="#contour" transform="rotate(8.9) scale(3.416 2.724)"/>
+<use xlink:href="#contour" transform="rotate(9.3) scale(3.630 2.895)"/>
+<use xlink:href="#contour" transform="rotate(9.7) scale(3.844 3.066)"/>
+<use xlink:href="#contour" transform="rotate(10.1) scale(4.058 3.237)"/>
+<use xlink:href="#contour" transform="rotate(10.6) scale(4.272 3.408)"/>
+<use xlink:href="#contour" transform="rotate(11.0) scale(4.486 3.579)"/>
+<use xlink:href="#contour" transform="rotate(11.4) scale(4.700 3.750)"/>
+<use xlink:href="#contour" transform="rotate(11.8) scale(4.914 3.921)"/>
+</g>
+<g transform="translate(1499 1080)" stroke="#bad9ef" stroke-width="1" stroke-opacity=".060">
+<use xlink:href="#contour" transform="rotate(-3.0) scale(0.420 0.330)"/>
+<use xlink:href="#contour" transform="rotate(-3.4) scale(0.634 0.501)"/>
+<use xlink:href="#contour" transform="rotate(-3.8) scale(0.848 0.672)"/>
+<use xlink:href="#contour" transform="rotate(-4.3) scale(1.062 0.843)"/>
+<use xlink:href="#contour" transform="rotate(-4.7) scale(1.276 1.014)"/>
+<use xlink:href="#contour" transform="rotate(-5.1) scale(1.490 1.185)"/>
+<use xlink:href="#contour" transform="rotate(-5.5) scale(1.704 1.356)"/>
+<use xlink:href="#contour" transform="rotate(-5.9) scale(1.918 1.527)"/>
+<use xlink:href="#contour" transform="rotate(-6.4) scale(2.132 1.698)"/>
+<use xlink:href="#contour" transform="rotate(-6.8) scale(2.346 1.869)"/>
+<use xlink:href="#contour" transform="rotate(-7.2) scale(2.560 2.040)"/>
+<use xlink:href="#contour" transform="rotate(-7.6) scale(2.774 2.211)"/>
+<use xlink:href="#contour" transform="rotate(-8.0) scale(2.988 2.382)"/>
+<use xlink:href="#contour" transform="rotate(-8.5) scale(3.202 2.553)"/>
+<use xlink:href="#contour" transform="rotate(-8.9) scale(3.416 2.724)"/>
+<use xlink:href="#contour" transform="rotate(-9.3) scale(3.630 2.895)"/>
+<use xlink:href="#contour" transform="rotate(-9.7) scale(3.844 3.066)"/>
+<use xlink:href="#contour" transform="rotate(-10.1) scale(4.058 3.237)"/>
+<use xlink:href="#contour" transform="rotate(-10.6) scale(4.272 3.408)"/>
+<use xlink:href="#contour" transform="rotate(-11.0) scale(4.486 3.579)"/>
+<use xlink:href="#contour" transform="rotate(-11.4) scale(4.700 3.750)"/>
+<use xlink:href="#contour" transform="rotate(-11.8) scale(4.914 3.921)"/>
+</g>
+</svg>

@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#11191f" />
+    <title>Snowpaw — Field Console</title>
+    <link rel="icon" href="assets/snowpaw.jpg" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="stage" aria-label="Snowpaw console preview">
+      <div class="frame-wrap" id="wrap">
+        <div class="folio top" aria-hidden="true">
+          <span><i></i> FIELD STUDIES <b>/</b> INTERFACE ARCHIVE</span
+          ><span>WINTER COLLECTION <b>+</b></span>
+        </div>
+        <section
+          id="window"
+          class="window"
+          aria-label="Snowpaw field console"
+          hidden
+        >
+          <aside>
+            <div class="brand">
+              <span class="brand-mark" data-glyph="paw"></span>
+              <div><strong>Snowpaw</strong><small>FIELD CONSOLE</small></div>
+            </div>
+            <div class="nav-label">WORKSPACE</div>
+            <nav id="wideNav" aria-label="Menu sections"></nav>
+            <div class="rail-bottom">
+              <span class="edition-mark" data-glyph="snow"></span
+              ><small>WINTER SYSTEMS<br /><b>Edition nº 001</b></small>
+            </div>
+            <div class="profile">
+              <img src="assets/snowpaw.jpg" alt="Snowpaw raising a paw" />
+              <div><strong>Snowpaw</strong><small>Resident mascot</small></div>
+              <i title="Local profile"></i>
+            </div>
+          </aside>
+          <div class="right">
+            <header id="handle">
+              <div class="crumb">
+                <span data-glyph="panel"></span> Workspace <b>/</b>
+                <strong id="crumb">Main</strong>
+              </div>
+              <div class="pocket-brand">
+                <img src="assets/snowpaw.jpg" alt="Snowpaw" /><strong
+                  >Snowpaw</strong
+                >
+              </div>
+              <div class="tools">
+                <span class="preview"><i></i>UI ONLY</span><b></b
+                ><button
+                  id="min"
+                  aria-label="Minimize console"
+                  title="Minimize"
+                  data-glyph="minus"
+                ></button
+                ><button
+                  id="exit"
+                  aria-label="Close console"
+                  title="Close"
+                  data-glyph="close"
+                ></button>
+              </div>
+            </header>
+            <nav id="smallNav" aria-label="Menu sections"></nav>
+            <div class="scroll" id="scroll">
+              <div class="hero">
+                <div class="hero-copy">
+                  <small><i></i> WINTER SERIES <b>/</b> 001</small>
+                  <h1>
+                    <span id="heroLead">Night</span>
+                    <em id="heroScript">patrol.</em>
+                  </h1>
+                  <p id="heroNote">A field kit for the quiet hours.</p>
+                </div>
+                <span class="figure"><b>+</b> FIG. 01</span>
+              </div>
+              <div class="section-head">
+                <div>
+                  <span id="kicker" class="eyebrow">WORKBENCH / 01</span>
+                  <h2 id="heading">Module library</h2>
+                </div>
+                <span id="suite" class="suite"></span>
+              </div>
+              <div id="workbench"></div>
+            </div>
+            <footer>
+              <div>
+                <i></i><span id="status" role="status">Local preview</span>
+              </div>
+              <span id="count">0 / 12 SELECTED</span>
+            </footer>
+          </div>
+          <dialog id="confirm">
+            <small class="eyebrow">SNOWPAW / CONSOLE</small>
+            <h2 id="dialogTitle"></h2>
+            <p id="dialogText"></p>
+            <div class="dialog-actions">
+              <button id="cancel">Cancel</button><button id="accept"></button>
+            </div>
+          </dialog>
+        </section>
+        <div class="folio bottom" aria-hidden="true">
+          <span>SWP—FC.01</span
+          ><span>BUILT FOR THE QUIET HOURS <b>/</b> 01</span>
+        </div>
+      </div>
+      <button class="launcher" id="open" hidden>
+        <span class="brand-mark" data-glyph="paw"></span
+        ><span><strong>Snowpaw</strong><small>Open console ↗</small></span>
+      </button>
+      <p id="boot">Opening Snowpaw…</p>
+    </main>
+    <script type="module" src="preview.js"></script>
+  </body>
+</html>

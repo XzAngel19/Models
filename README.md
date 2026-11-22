@@ -1,5 +1,14 @@
 # Models
 
+## Snowpaw | Field Console
+
+[`SnowpawMenu.client.luau`](SnowpawMenu.client.luau) is a separate, mobile-friendly Roblox menu themed around the paw-up cat. The **Main**, **Extra**, and **Visual** tabs have 12 decorative switches and three tuning sliders. Selecting Aimbot, Flight, Player ESP, etc. only changes the console's own UI. **Config** changes its accent, card spacing and captions; nothing is saved across runs.
+
+- **Touch:** tap the tabs, tap a card, or slide the tuner. Drag the header to move the console. **−** docks it to a small Snowpaw button; tap that to reopen. On a keyboard, **Right Shift** also docks/restores it. **×** asks before unloading.
+- **Roblox:** the standalone script uses the local player's `PlayerGui`. Both photos are included: no decal upload, external image request or file access. If the place doesn't allow `EditableImage`, it draws the same pictures with static GUI gradients instead.
+- **Browser preview:** serve `snowpaw/` with a static web server (e.g. `python -m http.server --directory snowpaw`). The interactive preview and Roblox script use the same [catalog](snowpaw/kit.json), icon shapes and artwork. The preview is not a Roblox runtime.
+- **Maintenance:** after changing `snowpaw/kit.json` or the two photos in `snowpaw/assets/`, run `python tools/sync_snowpaw.py` (requires ImageMagick's `convert`) to update the embedded kit. `--check` verifies it without rewriting the file. Run `npm ci && npm test` in `tests/menu` for the mocked-client checks for both menus.
+
 ## Zenith | Violence District
 
 [`ViolenceDistrictMenu.client.luau`](ViolenceDistrictMenu.client.luau) is a standalone client menu. On a phone the cards stack in one column. Drag the title to move the window; tap **−** to minimize and **+** to restore it.
