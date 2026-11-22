@@ -847,6 +847,7 @@ local playerData
 local doCall
 local prepareIndex
 local prepareThanksgivingIndex
+local showInstantThrowResult
 local patchedMeterEntries = {}
 local patchedArcEntries = {}
 local patchedRevealEntries = {}
@@ -974,7 +975,7 @@ local function withCharacterAt(targetCF, fn)
 	if not hrp then return false, err end
 	local savedCF = hrp.CFrame
 	moveRootTo(hrp, targetCF)
-	runService.Heartbeat:Wait()
+	task.wait(0.12)
 	local ok, r1, r2 = pcall(fn)
 	if hrp and hrp.Parent then
 		moveRootTo(hrp, savedCF)
@@ -1045,9 +1046,17 @@ local function ensureInvokeHook()
 	pcall(function() rf:Destroy() end)
 	if type(fn) ~= "function" then return end
 	local hookOk, orig = pcall(hookfunction, fn, function(self, ...)
-		if TemplateHub.active and TemplateHub.values["Auto Perfect"]
-			and typeof(self) == "Instance" and self:IsA("RemoteFunction") and self.Name == "Throw_Resolve" then
-			return originalInvokeServer(self, 1)
+		if TemplateHub.active and typeof(self) == "Instance" and self:IsA("RemoteFunction") and self.Name == "Throw_Resolve" then
+			local res
+			if TemplateHub.values["Auto Perfect"] then
+				res = originalInvokeServer(self, 1)
+			else
+				res = originalInvokeServer(self, ...)
+			end
+			if TemplateHub.values["Instantly View Throw"] and type(res) == "table" and res.Ok == true and showInstantThrowResult then
+				task.defer(showInstantThrowResult, res)
+			end
+			return res
 		end
 		return originalInvokeServer(self, ...)
 	end)
@@ -1218,6 +1227,9 @@ local function setFarm(enabled)
 				-- Power meter always resolves to 1 (+20 bonus studs).
 				local resolvedOk, resolvedResult = step("Throw_Resolve", 1)
 				if not resolvedOk then break end
+				if TemplateHub.values["Instantly View Throw"] and type(resolvedResult) == "table" and showInstantThrowResult then
+					task.defer(showInstantThrowResult, resolvedResult)
+				end
 				local revealWait = TemplateHub.values["Reveal Delay"]
 				if not TemplateHub.values["Instant Throw"] and type(resolvedResult) == "table" and type(resolvedResult.FlightTime) == "number" then
 					revealWait = math.max(revealWait, resolvedResult.FlightTime + 0.25)
@@ -1232,29 +1244,42 @@ local function setFarm(enabled)
 				if TemplateHub.values["Train Between Farms"] and throwCount >= TemplateHub.values["Train After Throws"] then
 					local data = playerData()
 					if (tonumber(data.Stand) or 0) >= 1 then
-						local spotPos, radius = getTrainingSpotInfo()
-						if not spotPos then error(radius) end
+						local spotPos = getTrainingSpotInfo()
+						if not spotPos then error("Training spot unavailable") end
 						local hrp, hrpErr = getCharacterRoot()
 						if not hrp then error(hrpErr) end
 						local savedCF = hrp.CFrame
 						local prevBusy = clientStateOk and clientState.Busy or nil
 						if clientStateOk then clientState.Busy = "HubTrain" end
-						moveRootTo(hrp, CFrame.new(spotPos + Vector3.new(0, 3, 0)))
-						runService.Heartbeat:Wait()
-						local trainOk, response = callRemote("Training_Start", false)
+						local trainOk, response = false, nil
+						for attempt = 1, 3 do
+							if not TemplateHub.active or not TemplateHub.values["Farm Animals"] then break end
+							moveRootTo(hrp, CFrame.new(spotPos + Vector3.new(0, 3, 0)))
+							task.wait(0.15)
+							trainOk, response = callRemote("Training_Start", false)
+							if trainOk and type(response) == "table" and response.Ok == true then
+								break
+							end
+							local errStr = tostring(response)
+							if not (errStr:find("TooFar", 1, true) or errStr:find("Busy", 1, true) or errStr:find("Cooldown", 1, true)) then
+								break
+							end
+							task.wait(0.15)
+						end
 						if not trainOk or type(response) ~= "table" or response.Ok ~= true then
 							moveRootTo(hrp, savedCF)
 							if clientStateOk and clientState.Busy == "HubTrain" then clientState.Busy = prevBusy end
 							error(trainOk and "Training_Start returned an unexpected response" or tostring(response))
 						end
-						moveRootTo(hrp, CFrame.new(spotPos + Vector3.new(math.max((radius or 5) * 0.78, 3.8), 3, 0)))
-						if clientStateOk and clientState.Busy == "HubTrain" then clientState.Busy = prevBusy end
 						training = true
 						waitEnabled("Farm Animals", TemplateHub.values["Train for(s)"])
 						local stopOk, stopResult = callRemote("Training_Stop", true)
 						training = false
 						moveRootTo(hrp, savedCF)
+						if clientStateOk and clientState.Busy == "HubTrain" then clientState.Busy = prevBusy end
 						if not stopOk then error(tostring(stopResult)) end
+					else
+						TemplateHub.report("Buy a pull-up bar to use Train Between Farms", true)
 					end
 					throwCount = 0
 				end
@@ -1290,25 +1315,24 @@ local function setAutoTrain(enabled)
 		local started = false
 		local savedCF = nil
 		local clientStateOk, clientState = pcall(clientModule, "ClientState")
+		local prevBusy = nil
 		local function startAtSpot()
-			local spotPos, radius = getTrainingSpotInfo()
-			if not spotPos then return false, radius end
+			local spotPos = getTrainingSpotInfo()
+			if not spotPos then return false, "Training spot unavailable" end
 			local hrp, hrpErr = getCharacterRoot()
 			if not hrp then return false, hrpErr end
 			if not savedCF then savedCF = hrp.CFrame end
-			-- First try edge inside server range but outside TrainingController's 0.64*radius auto-trigger.
-			local edgeOffset = Vector3.new(math.max((radius or 5) * 0.78, 3.8), 3, 0)
-			moveRootTo(hrp, CFrame.new(spotPos + edgeOffset))
-			runService.Heartbeat:Wait()
-			local accepted, result = callRemote("Training_Start", false)
-			if not accepted and tostring(result):find("TooFar", 1, true) then
-				local prevBusy = clientStateOk and clientState.Busy or nil
-				if clientStateOk then clientState.Busy = "HubTrain" end
+			if clientStateOk and clientState.Busy ~= "HubTrain" then
+				prevBusy = clientState.Busy
+				clientState.Busy = "HubTrain"
+			end
+			local accepted, result = false, nil
+			for attempt = 1, 3 do
 				moveRootTo(hrp, CFrame.new(spotPos + Vector3.new(0, 3, 0)))
-				runService.Heartbeat:Wait()
+				task.wait(0.15)
 				accepted, result = callRemote("Training_Start", false)
-				moveRootTo(hrp, CFrame.new(spotPos + edgeOffset))
-				if clientStateOk and clientState.Busy == "HubTrain" then clientState.Busy = prevBusy end
+				if accepted then break end
+				if not tostring(result):find("TooFar", 1, true) then break end
 			end
 			return accepted, result
 		end
@@ -1337,6 +1361,9 @@ local function setAutoTrain(enabled)
 		if savedCF then
 			local hrp = getCharacterRoot()
 			if hrp then moveRootTo(hrp, savedCF) end
+		end
+		if clientStateOk and clientState.Busy == "HubTrain" then
+			clientState.Busy = prevBusy
 		end
 		trainWorker = false
 		if not ok and TemplateHub.active then
@@ -1778,146 +1805,202 @@ periodic("Auto Cook Sandwich", 5, function()
 	end
 end)
 
--- Visuals: Throw Distance Indicator and Animal ESP (all local-only & cleaned up on toggle off / unload).
-local throwIndicatorFolder, throwIndicatorConn
-local function cleanupThrowIndicator()
-	if throwIndicatorConn then throwIndicatorConn:Disconnect(); throwIndicatorConn = nil end
-	if throwIndicatorFolder then throwIndicatorFolder:Destroy(); throwIndicatorFolder = nil end
+-- Visuals: Instantly View Throw (bottom-center menu-styled notification) and Animal ESP (all local-only & cleaned up on toggle off / unload).
+local patchedRemotesInvoke = {}
+local lastShownThrowResult, lastShownThrowAt = nil, 0
+local instantThrowBannerGui, instantThrowBannerSeq = nil, 0
+
+local function cleanupInstantViewThrow()
+	for _, entry in ipairs(patchedRemotesInvoke) do
+		if entry.mod and entry.mod.Invoke == entry.patched then
+			entry.mod.Invoke = entry.original
+		end
+	end
+	table.clear(patchedRemotesInvoke)
+	instantThrowBannerSeq += 1
+	if instantThrowBannerGui and instantThrowBannerGui.Parent then
+		instantThrowBannerGui:Destroy()
+	end
+	instantThrowBannerGui = nil
 end
-local function setThrowDistanceIndicator(enabled)
-	cleanupThrowIndicator()
+
+showInstantThrowResult = function(res)
+	if not TemplateHub.active or not TemplateHub.values["Instantly View Throw"] then return end
+	if type(res) ~= "table" or res.Ok ~= true then return end
+	local now = os.clock()
+	if res == lastShownThrowResult and (now - lastShownThrowAt) < 0.25 then return end
+	lastShownThrowResult, lastShownThrowAt = res, now
+
+	local modelName = res.ModelName or res.DisplayName
+	if not modelName then return end
+	local okEcon, econ = pcall(configModule, "AnimalEconomy")
+	local okMut, mut = pcall(sharedModule, "Mutations")
+	local okRarity, rarityCfg = pcall(configModule, "RarityConfig")
+	local okAreas, areasCfg = pcall(configModule, "AreasConfig")
+	local okFmt, numFmt = pcall(sharedModule, "NumberFormat")
+	local okBoosts, boosts = pcall(sharedModule, "Boosts")
+
+	local info = okEcon and econ.Get(modelName)
+	local rarity = res.Rarity or (info and info.Rarity) or "Common"
+	local rarityCol = (okRarity and rarityCfg.Get(rarity).Color) or ACCENT_A
+	local displayName = res.DisplayName or modelName
+	local mutation = res.Mutation
+	local size = tonumber(res.Size) or 1
+	local income = tonumber(res.Income)
+	if not income and okMut then
+		income = mut.Income(modelName, mutation, size)
+	end
+	local weight = tonumber(res.Weight)
+	if not weight and okMut then
+		weight = mut.Weight(modelName, size)
+	end
+
+	local titleParts = {}
+	if res.IsNew then table.insert(titleParts, "[NEW]") end
+	if type(mutation) == "string" and mutation ~= "" and mutation ~= "Normal" then
+		table.insert(titleParts, mutation)
+	end
+	table.insert(titleParts, tostring(displayName))
+	local titleText = table.concat(titleParts, " ") .. "  [" .. tostring(rarity) .. "]"
+
+	local statsParts = {}
+	if income and income > 0 then
+		local incStr
+		if okBoosts and type(boosts.IncomeText) == "function" then
+			local okT, txt = pcall(boosts.IncomeText, income, localPlayer)
+			if okT and type(txt) == "string" then
+				incStr = txt:gsub("<[^>]+>", "")
+			end
+		end
+		if not incStr then
+			incStr = okFmt and numFmt.PerSecond(income) or ("$" .. tostring(math.floor(income + 0.5)) .. "/s")
+		end
+		table.insert(statsParts, incStr)
+	end
+	if weight and weight > 0 then
+		local wStr = okFmt and (numFmt.Abbreviate(weight, 1) .. " kg") or string.format("%.1f kg", weight)
+		table.insert(statsParts, wStr)
+	end
+	if size > 1.05 then
+		local sizeTitle = (okMut and type(mut.SizeTitle) == "function") and mut.SizeTitle(size) or nil
+		if type(sizeTitle) == "table" and sizeTitle.Name then
+			table.insert(statsParts, string.format("%s (x%.2f)", sizeTitle.Name, size))
+		else
+			table.insert(statsParts, string.format("Size x%.2f", size))
+		end
+	end
+	if res.AreaIndex then
+		local area = okAreas and areasCfg.Get(res.AreaIndex)
+		local areaName = area and area.Name or ("Area " .. tostring(res.AreaIndex))
+		if type(res.Distance) == "number" then
+			table.insert(statsParts, string.format("%s (%dm)", areaName, math.floor(res.Distance + 0.5)))
+		else
+			table.insert(statsParts, areaName)
+		end
+	end
+	if res.Dream then
+		table.insert(statsParts, "Dream")
+	end
+
+	local parentGui = shared and shared.ThrowFoodHubGui or localPlayer:FindFirstChild("PlayerGui")
+	if not parentGui then return end
+	if instantThrowBannerGui and instantThrowBannerGui.Parent then
+		instantThrowBannerGui:Destroy()
+	end
+	instantThrowBannerSeq += 1
+	local mySeq = instantThrowBannerSeq
+
+	local card = Instance.new("Frame")
+	card.Name = "InstantThrowNotification"
+	card.AnchorPoint = Vector2.new(0.5, 1)
+	card.Position = UDim2.new(0.5, 0, 1, 10)
+	card.Size = UDim2.fromOffset(370, 62)
+	card.BackgroundColor3 = Color3.new(1, 1, 1)
+	card.BorderSizePixel = 0
+	card.ZIndex = 25
+	card.Parent = parentGui
+	instantThrowBannerGui = card
+	Instance.new("UICorner", card).CornerRadius = UDim.new(0, 8)
+	local bgGrad = Instance.new("UIGradient", card)
+	bgGrad.Color = ColorSequence.new(BACKGROUND_TOP, BACKGROUND_BOTTOM)
+	bgGrad.Rotation = 90
+	local cardStroke = Instance.new("UIStroke", card)
+	cardStroke.Color = Color3.fromRGB(115, 115, 122)
+	cardStroke.Thickness = 1.2
+
+	local accentBar = Instance.new("Frame", card)
+	accentBar.Size = UDim2.new(0, 4, 1, -14)
+	accentBar.Position = UDim2.fromOffset(7, 7)
+	accentBar.BackgroundColor3 = rarityCol
+	accentBar.BorderSizePixel = 0
+	accentBar.ZIndex = 26
+	Instance.new("UICorner", accentBar).CornerRadius = UDim.new(1, 0)
+
+	local headerLbl = Instance.new("TextLabel", card)
+	headerLbl.Size = UDim2.new(1, -26, 0, 22)
+	headerLbl.Position = UDim2.fromOffset(18, 8)
+	headerLbl.BackgroundTransparency = 1
+	headerLbl.Font = BOLD_FONT
+	headerLbl.TextSize = 14
+	headerLbl.TextColor3 = rarityCol
+	headerLbl.TextXAlignment = Enum.TextXAlignment.Left
+	headerLbl.TextTruncate = Enum.TextTruncate.AtEnd
+	headerLbl.Text = titleText
+	headerLbl.ZIndex = 26
+
+	local detailLbl = Instance.new("TextLabel", card)
+	detailLbl.Size = UDim2.new(1, -26, 0, 22)
+	detailLbl.Position = UDim2.fromOffset(18, 32)
+	detailLbl.BackgroundTransparency = 1
+	detailLbl.Font = TEXT_FONT
+	detailLbl.TextSize = 12
+	detailLbl.TextColor3 = TEXT_COLOR
+	detailLbl.TextXAlignment = Enum.TextXAlignment.Left
+	detailLbl.TextTruncate = Enum.TextTruncate.AtEnd
+	detailLbl.Text = #statsParts > 0 and table.concat(statsParts, "  •  ") or "Thrown animal resolved"
+	detailLbl.ZIndex = 26
+
+	tween(card, POP_TWEEN, { Position = UDim2.new(0.5, 0, 1, -18) })
+	task.delay(4.5, function()
+		if instantThrowBannerSeq ~= mySeq or not card.Parent then return end
+		tween(card, MEDIUM_TWEEN, { Position = UDim2.new(0.5, 0, 1, 80), BackgroundTransparency = 1 })
+		tween(cardStroke, MEDIUM_TWEEN, { Transparency = 1 })
+		tween(accentBar, MEDIUM_TWEEN, { BackgroundTransparency = 1 })
+		tween(headerLbl, MEDIUM_TWEEN, { TextTransparency = 1 })
+		tween(detailLbl, MEDIUM_TWEEN, { TextTransparency = 1 })
+		task.wait(0.26)
+		if instantThrowBannerSeq == mySeq and card.Parent then
+			card:Destroy()
+			if instantThrowBannerGui == card then instantThrowBannerGui = nil end
+		end
+	end)
+end
+
+local function isRemotesModuleTable(t)
+	return type(rawget(t, "Invoke")) == "function"
+		and type(rawget(t, "Function")) == "function"
+		and type(rawget(t, "Event")) == "function"
+end
+
+local function setInstantlyViewThrow(enabled)
+	cleanupInstantViewThrow()
 	if not enabled then return true end
 	if game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
-	local okAreas, areas = pcall(configModule, "AreasConfig")
-	local okUtil, areaUtil = pcall(sharedModule, "AreaUtil")
-	local okLevels, levels = pcall(configModule, "LevelConfig")
-	local okCfg, gameCfg = pcall(configModule, "GameConfig")
-	local okData, dataCtrl = pcall(clientModule, "DataController")
-	local okRoll, animalRoll = pcall(sharedModule, "AnimalRoll")
-	local okFoods, foodsCfg = pcall(configModule, "FoodsConfig")
-	local okAnimals, animalsData = pcall(require, replicatedStorage:WaitForChild("AnimalsData"))
-	if not (okAreas and okUtil and okLevels and okCfg and okData) then
-		return false, "Game config modules unavailable"
-	end
-
-	local folder = Instance.new("Folder")
-	folder.Name = "Hub_ThrowIndicator"
-	folder.Parent = workspace
-	throwIndicatorFolder = folder
-
-	local function makeMarker(name, color, size, transparency)
-		local p = Instance.new("Part")
-		p.Name = name
-		p.Anchored = true
-		p.CanCollide = false
-		p.CanQuery = false
-		p.CanTouch = false
-		p.CastShadow = false
-		p.Material = Enum.Material.Neon
-		p.Color = color
-		p.Transparency = transparency
-		p.Size = size
-		p.Parent = folder
-		return p
-	end
-
-	local targetRing = makeMarker("TargetMarker", Color3.fromRGB(90, 235, 140), Vector3.new(0.2, 6, 6), 0.25)
-	targetRing.Shape = Enum.PartType.Cylinder
-
-	local bb = Instance.new("BillboardGui")
-	bb.Size = UDim2.fromOffset(230, 66)
-	bb.StudsOffset = Vector3.new(0, 4.5, 0)
-	bb.AlwaysOnTop = true
-	bb.MaxDistance = 4000
-	bb.Adornee = targetRing
-	bb.Parent = targetRing
-
-	local bg = Instance.new("Frame")
-	bg.Size = UDim2.fromScale(1, 1)
-	bg.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
-	bg.BackgroundTransparency = 0.22
-	bg.BorderSizePixel = 0
-	bg.Parent = bb
-	Instance.new("UICorner", bg).CornerRadius = UDim.new(0, 6)
-	local stroke = Instance.new("UIStroke", bg)
-	stroke.Color = Color3.fromRGB(90, 235, 140)
-	stroke.Thickness = 1.5
-
-	local titleLbl = Instance.new("TextLabel")
-	titleLbl.Size = UDim2.new(1, -10, 0, 22)
-	titleLbl.Position = UDim2.fromOffset(5, 3)
-	titleLbl.BackgroundTransparency = 1
-	titleLbl.Font = BOLD_FONT
-	titleLbl.TextSize = 13
-	titleLbl.Text = "Loading..."
-	titleLbl.TextColor3 = Color3.fromRGB(245, 245, 245)
-	titleLbl.TextXAlignment = Enum.TextXAlignment.Center
-	titleLbl.Parent = bg
-
-	local subLbl = Instance.new("TextLabel")
-	subLbl.Size = UDim2.new(1, -10, 0, 36)
-	subLbl.Position = UDim2.fromOffset(5, 25)
-	subLbl.BackgroundTransparency = 1
-	subLbl.Font = TEXT_FONT
-	subLbl.TextSize = 12
-	subLbl.Text = ""
-	subLbl.TextColor3 = Color3.fromRGB(205, 225, 210)
-	subLbl.TextWrapped = true
-	subLbl.TextXAlignment = Enum.TextXAlignment.Center
-	subLbl.Parent = bg
-
-	local sectionNames = { "Front 1/3", "Mid 2/3", "Back 3/3" }
-	local lastKey = ""
-	local acc = 0
-	throwIndicatorConn = runService.RenderStepped:Connect(function(dt)
-		acc += dt
-		if acc < 0.08 then return end
-		acc = 0
-		if not folder.Parent then cleanupThrowIndicator(); return end
-		pcall(function()
-			local data = dataCtrl:GetPlayerData()
-			if type(data) ~= "table" then return end
-			local basePower = levels.EffectiveThrowPower(tonumber(data.Level) or 1, data.ThrowPower)
-			local bonusMax = gameCfg.Throw and gameCfg.Throw.MeterBonusStuds or 20
-			local targetDist = basePower + bonusMax
-			local landPos, areaIdx = areaUtil.ComputeLanding(targetDist, 0)
-			local area = areas.Get(areaIdx)
-			local subIdx = areaUtil.SubAreaForZ(areaIdx, landPos.Z)
-			local areaColor = area and area.Color or Color3.fromRGB(90, 235, 140)
-
-			targetRing.Color = areaColor
-			stroke.Color = areaColor
-			targetRing.CFrame = CFrame.new(landPos + Vector3.new(0, 0.14, 0)) * CFrame.Angles(0, 0, math.pi / 2)
-
-			local key = tostring(areaIdx) .. ":" .. tostring(subIdx) .. ":" .. tostring(math.floor(targetDist + 0.5)) .. ":" .. tostring(data.EquippedFood)
-			if key ~= lastKey then
-				lastKey = key
-				titleLbl.Text = string.format("%s · %s (%d studs)", area and area.Name or ("Area " .. tostring(areaIdx)), sectionNames[subIdx] or tostring(subIdx), math.floor(targetDist + 0.5))
-				local topLine = ""
-				if okRoll and okFoods and okAnimals and area and type(animalsData[area.Key]) == "table" then
-					local food = foodsCfg.Get(tonumber(data.EquippedFood) or 1) or foodsCfg.Get(1)
-					local depth = areaUtil.DepthInArea(areaIdx, landPos.Z)
-					local weights = food and animalRoll.Weights(food.Bait, areaIdx, depth)
-					if type(weights) == "table" then
-						local list = animalsData[area.Key]
-						local ranked = {}
-						for r = 1, #list do
-							if (weights[r] or 0) > 0.01 then
-								table.insert(ranked, { r = r, name = list[r].Name or list[r].ModelName, w = weights[r] })
-							end
-						end
-						table.sort(ranked, function(a, b) return a.w > b.w end)
-						local parts = {}
-						for k = 1, math.min(3, #ranked) do
-							table.insert(parts, string.format("#%d %s (%.0f%%)", ranked[k].r, ranked[k].name, ranked[k].w * 100))
-						end
-						topLine = table.concat(parts, " · ")
-					end
-				end
-				subLbl.Text = topLine ~= "" and topLine or string.format("Target: %d studs (+%d bonus)", math.floor(targetDist + 0.5), math.floor(bonusMax + 0.5))
+	ensureInvokeHook()
+	local remotesMods = collectModuleTables(sharedModule, "Remotes", isRemotesModuleTable)
+	for _, rm in ipairs(remotesMods) do
+		local orig = rm.Invoke
+		local patched = function(name, ...)
+			local res = orig(name, ...)
+			if TemplateHub.active and TemplateHub.values["Instantly View Throw"]
+				and name == "Throw_Resolve" and type(res) == "table" and res.Ok == true then
+				task.defer(showInstantThrowResult, res)
 			end
-		end)
-	end)
+			return res
+		end
+		rm.Invoke = patched
+		table.insert(patchedRemotesInvoke, { mod = rm, original = orig, patched = patched })
+	end
 	return true
 end
 
@@ -1996,11 +2079,228 @@ local function setAnimalEsp(enabled)
 end
 
 TemplateHub.restoreVisuals = function()
-	cleanupThrowIndicator()
+	cleanupInstantViewThrow()
 	cleanupAnimalEsp()
 end
-TemplateHub.featureCallbacks["Throw Distance Indicator"] = setThrowDistanceIndicator
+TemplateHub.featureCallbacks["Instantly View Throw"] = setInstantlyViewThrow
 TemplateHub.featureCallbacks["Animal ESP"] = setAnimalEsp
+
+-- Movement: WalkSpeed and Fly (local-only, cleaned up on toggle off or GUI unload).
+local walkSpeedConn, defaultWalkSpeed = nil, nil
+local function restoreWalkSpeed()
+	if walkSpeedConn then walkSpeedConn:Disconnect(); walkSpeedConn = nil end
+	local char = localPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if hum and defaultWalkSpeed then
+		pcall(function() hum.WalkSpeed = defaultWalkSpeed end)
+	end
+	defaultWalkSpeed = nil
+end
+local function setWalkSpeed(enabled)
+	if not enabled then restoreWalkSpeed(); return true end
+	local char = localPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if hum and not defaultWalkSpeed then defaultWalkSpeed = hum.WalkSpeed end
+	if not walkSpeedConn then
+		walkSpeedConn = runService.Heartbeat:Connect(function()
+			if not TemplateHub.active or not TemplateHub.values["WalkSpeed"] then return end
+			local c = localPlayer.Character
+			local h = c and c:FindFirstChildOfClass("Humanoid")
+			if h then
+				if not defaultWalkSpeed then defaultWalkSpeed = h.WalkSpeed end
+				local target = tonumber(TemplateHub.values["WalkSpeed Value"]) or 32
+				if h.WalkSpeed ~= target then h.WalkSpeed = target end
+			end
+		end)
+	end
+	return true
+end
+
+local flyConn, flyBV, flyBG = nil, nil, nil
+local function restoreFly()
+	if flyConn then flyConn:Disconnect(); flyConn = nil end
+	if flyBV and flyBV.Parent then flyBV:Destroy() end
+	if flyBG and flyBG.Parent then flyBG:Destroy() end
+	flyBV, flyBG = nil, nil
+	local char = localPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if hum then pcall(function() hum.PlatformStand = false end) end
+end
+local function setFly(enabled)
+	restoreFly()
+	if not enabled then return true end
+	flyConn = runService.RenderStepped:Connect(function()
+		if not TemplateHub.active or not TemplateHub.values["Fly"] then restoreFly(); return end
+		local char = localPlayer.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if not (hrp and hum and hum.Health > 0) then
+			if flyBV and flyBV.Parent then flyBV:Destroy(); flyBV = nil end
+			if flyBG and flyBG.Parent then flyBG:Destroy(); flyBG = nil end
+			return
+		end
+		hum.PlatformStand = true
+		if not (flyBV and flyBV.Parent == hrp) then
+			if flyBV then flyBV:Destroy() end
+			flyBV = Instance.new("BodyVelocity")
+			flyBV.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+			flyBV.P = 1250
+			flyBV.Velocity = Vector3.zero
+			flyBV.Parent = hrp
+		end
+		if not (flyBG and flyBG.Parent == hrp) then
+			if flyBG then flyBG:Destroy() end
+			flyBG = Instance.new("BodyGyro")
+			flyBG.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
+			flyBG.P = 9e4
+			flyBG.D = 500
+			flyBG.CFrame = hrp.CFrame
+			flyBG.Parent = hrp
+		end
+		local cam = workspace.CurrentCamera
+		local camCF = cam and cam.CFrame or hrp.CFrame
+		flyBG.CFrame = camCF
+		local move = Vector3.zero
+		if not userInputService:GetFocusedTextBox() then
+			if userInputService:IsKeyDown(Enum.KeyCode.W) then move += camCF.LookVector end
+			if userInputService:IsKeyDown(Enum.KeyCode.S) then move -= camCF.LookVector end
+			if userInputService:IsKeyDown(Enum.KeyCode.D) then move += camCF.RightVector end
+			if userInputService:IsKeyDown(Enum.KeyCode.A) then move -= camCF.RightVector end
+			if userInputService:IsKeyDown(Enum.KeyCode.Space) then move += Vector3.new(0, 1, 0) end
+			if userInputService:IsKeyDown(Enum.KeyCode.LeftControl) or userInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
+				move -= Vector3.new(0, 1, 0)
+			end
+		end
+		local speed = tonumber(TemplateHub.values["Fly Speed"]) or 60
+		flyBV.Velocity = move.Magnitude > 0 and (move.Unit * speed) or Vector3.zero
+	end)
+	return true
+end
+
+TemplateHub.restoreMovement = function()
+	restoreWalkSpeed()
+	restoreFly()
+end
+TemplateHub.featureCallbacks["WalkSpeed"] = setWalkSpeed
+TemplateHub.featureCallbacks["Fly"] = setFly
+
+-- Single-select dropdown using template styling.
+local function addDropdown(parent, text, options, default)
+	local holder = createCard("Frame", parent, text, 30)
+	local headerBtn = create("TextButton", {
+		Size = UDim2.new(1, 0, 0, 30),
+		BackgroundTransparency = 1,
+		Text = "",
+		AutoButtonColor = false,
+	}, holder)
+	create("TextLabel", {
+		Size = UDim2.new(0.55, -8, 1, 0),
+		Position = UDim2.fromOffset(10, 0),
+		BackgroundTransparency = 1,
+		Text = text,
+		TextColor3 = TEXT_COLOR,
+		TextSize = 13,
+		Font = TEXT_FONT,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, headerBtn)
+	local valueLbl = create("TextLabel", {
+		Size = UDim2.new(0.45, -12, 1, 0),
+		Position = UDim2.new(0.55, 0, 0, 0),
+		BackgroundTransparency = 1,
+		Text = "",
+		TextColor3 = ACCENT_A,
+		TextSize = 12,
+		Font = BOLD_FONT,
+		TextXAlignment = Enum.TextXAlignment.Right,
+	}, headerBtn)
+
+	local listHeight = math.min(#options * 24 + 8, 140)
+	local panel = create("Frame", {
+		Size = UDim2.new(1, -12, 0, listHeight),
+		Position = UDim2.fromOffset(6, 32),
+		BackgroundColor3 = ELEMENT_COLOR,
+		BorderSizePixel = 0,
+		Visible = false,
+	}, holder)
+	create("UICorner", { CornerRadius = UDim.new(0, 4) }, panel)
+	addStroke(panel, DIM_TEXT_COLOR, 0.5)
+
+	local scroll = create("ScrollingFrame", {
+		Size = UDim2.new(1, -6, 1, -6),
+		Position = UDim2.fromOffset(3, 3),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 4,
+		ScrollBarImageColor3 = ACCENT_B,
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	}, panel)
+	create("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, scroll)
+
+	local current = default or options[1]
+	local expanded = false
+	local rowLabels = {}
+	TemplateHub.values[text] = current
+	TemplateHub.defaults[text] = current
+
+	local function refresh()
+		valueLbl.Text = tostring(current) .. (expanded and " ▴" or " ▾")
+		for opt, lbl in pairs(rowLabels) do
+			lbl.TextColor3 = opt == current and ACCENT_A or OFF_TEXT_COLOR
+			lbl.Font = opt == current and BOLD_FONT or TEXT_FONT
+		end
+	end
+
+	local function setOpen(open)
+		expanded = open
+		panel.Visible = expanded
+		tween(holder, FAST_TWEEN, { Size = UDim2.new(1, 0, 0, expanded and (36 + listHeight) or 30) })
+		refresh()
+	end
+
+	TemplateHub.setters[text] = function(val)
+		if table.find(options, val) then
+			current = val
+			TemplateHub.values[text] = val
+			refresh()
+		end
+	end
+
+	for i, opt in ipairs(options) do
+		local row = create("TextButton", {
+			Size = UDim2.new(1, -2, 0, 22),
+			BackgroundColor3 = ROW_COLOR,
+			BackgroundTransparency = 0.45,
+			BorderSizePixel = 0,
+			Text = "",
+			LayoutOrder = i,
+			AutoButtonColor = false,
+		}, scroll)
+		create("UICorner", { CornerRadius = UDim.new(0, 3) }, row)
+		local lbl = create("TextLabel", {
+			Size = UDim2.new(1, -14, 1, 0),
+			Position = UDim2.fromOffset(8, 0),
+			BackgroundTransparency = 1,
+			Text = tostring(opt),
+			TextColor3 = OFF_TEXT_COLOR,
+			TextSize = 12,
+			Font = TEXT_FONT,
+			TextXAlignment = Enum.TextXAlignment.Left,
+		}, row)
+		rowLabels[opt] = lbl
+		row.MouseButton1Click:Connect(function()
+			TemplateHub.setters[text](opt)
+			setOpen(false)
+		end)
+	end
+
+	headerBtn.MouseButton1Click:Connect(function()
+		setOpen(not expanded)
+	end)
+
+	refresh()
+	table.insert(TemplateHub.searchables, holder)
+end
 
 -- Multi-select dropdown using template styling.
 local function addMultiDropdown(parent, text, optionsProvider)
@@ -2414,12 +2714,15 @@ local function initializeScript()
 		TemplateHub.values["Auto Train"] = false
 		TemplateHub.values["Auto Perfect"] = false
 		TemplateHub.values["Instant Throw"] = false
-		TemplateHub.values["Throw Distance Indicator"] = false
+		TemplateHub.values["Instantly View Throw"] = false
 		TemplateHub.values["Animal ESP"] = false
+		TemplateHub.values["WalkSpeed"] = false
+		TemplateHub.values["Fly"] = false
 		if TemplateHub.restoreLighting then pcall(TemplateHub.restoreLighting) end
 		if TemplateHub.restoreInstant then pcall(TemplateHub.restoreInstant) end
 		if TemplateHub.restorePerfect then pcall(TemplateHub.restorePerfect) end
 		if TemplateHub.restoreVisuals then pcall(TemplateHub.restoreVisuals) end
+		if TemplateHub.restoreMovement then pcall(TemplateHub.restoreMovement) end
 		if typeof(shared) == "table" and shared.ThrowFoodHubGui == screenGui then
 			shared.ThrowFoodHubGui = nil
 			shared.ThrowFoodHub = nil
@@ -2783,7 +3086,7 @@ local function initializeScript()
 	addSection(mainRight, "Rewards")
 	addToggle(mainRight, "Auto Claim Index Rewards", nil, false)
 	addToggle(mainRight, "Auto Equip Best Trails", nil, false)
-	addCycle(mainRight, "Trail Priority", { "Xp", "Cash" })
+	addDropdown(mainRight, "Trail Priority", { "Xp", "Cash" }, "Xp")
 
 	-- Extra: the observed farming sequence and reference features awaiting data.
 	local extraLeft = createColumn(TemplateHub.pages.Extra, UDim2.fromOffset(0, 0))
@@ -2803,20 +3106,18 @@ local function initializeScript()
 	addToggle(extraLeft, "Auto Event (claim chef rewards)", nil, false)
 	addToggle(extraLeft, "Auto Thanksgiving Index", nil, false)
 	addToggle(extraLeft, "Auto Cook Sandwich", nil, false)
-	addCycle(extraLeft, "Cook Size", { "Best", "Regular", "Big", "Mega" })
+	addDropdown(extraLeft, "Cook Size", { "Best", "Regular", "Big", "Mega" }, "Best")
 
+	addSection(extraRight, "Movement")
+	addToggle(extraRight, "WalkSpeed", nil, false)
+	addSlider(extraRight, "WalkSpeed Value", 16, 200, 32, 0)
+	addToggle(extraRight, "Fly", nil, false)
+	addSlider(extraRight, "Fly Speed", 20, 300, 60, 0)
 	addSection(extraRight, "Upgrades")
 	addToggle(extraRight, "Auto Upgrade Bars", nil, false)
 	addToggle(extraRight, "Auto Upgrade Plot", nil, false)
 	addToggle(extraRight, "Auto Upgrade Food", nil, false)
-	local upgradeConfirmUntil = 0
-	addButton(extraRight, "Upgrade Stand (confirm twice)", function()
-		local now = os.clock()
-		if upgradeConfirmUntil == 0 or now > upgradeConfirmUntil then
-			upgradeConfirmUntil = now + 5
-			return TemplateHub.report("Press Upgrade Stand again in 5s to confirm", true)
-		end
-		upgradeConfirmUntil = 0
+	addButton(extraRight, "Upgrade Stand", function()
 		task.spawn(function()
 			local ok, result = callRemote("Stand_Upgrade", false)
 			if ok then
@@ -2830,19 +3131,11 @@ local function initializeScript()
 	addMultiDropdown(extraRight, "Sell Mutations", getMutationOptions)
 	addMultiDropdown(extraRight, "Sell Rarities", getRarityOptions)
 	addMultiDropdown(extraRight, "Sell Animals", getAnimalOptions)
-	local sellConfirmUntil, sellConfirmSig = 0, nil
-	addButton(extraRight, "Sell matched (confirm twice)", function()
+	addButton(extraRight, "Sell Match", function()
 		local valid, f = pcall(filters, "Sell")
 		if not valid or not isRestricted(f) then
 			return TemplateHub.report(valid and "Select at least one sell filter first" or tostring(f), true)
 		end
-		local signature = filterSignature(f)
-		local now = os.clock()
-		if sellConfirmUntil == 0 or now > sellConfirmUntil or signature ~= sellConfirmSig then
-			sellConfirmUntil, sellConfirmSig = now + 5, signature
-			return TemplateHub.report("Press Sell again in 5s to confirm these filters", true)
-		end
-		sellConfirmUntil, sellConfirmSig = 0, nil
 		task.spawn(sellOnce)
 	end)
 	addToggle(extraRight, "Auto Sell", nil, false)
@@ -2853,7 +3146,7 @@ local function initializeScript()
 	addSection(visualsLeft, "Environment")
 	addToggle(visualsLeft, "Fullbright", nil, false)
 	addSection(visualsRight, "Game Visuals")
-	addToggle(visualsRight, "Throw Distance Indicator", nil, false)
+	addToggle(visualsRight, "Instantly View Throw", nil, false)
 	addToggle(visualsRight, "Animal ESP", nil, false)
 
 	-- Config tab.
@@ -2915,7 +3208,7 @@ local function initializeScript()
 			return setStatus("Settings file is corrupted.")
 		end
 
-		local safeVisuals = { Fullbright = true, ["Throw Distance Indicator"] = true, ["Animal ESP"] = true }
+		local safeVisuals = { Fullbright = true, ["Instantly View Throw"] = true, ["Animal ESP"] = true }
 		for name, value in data do
 			-- Never start actions just because a settings file was loaded.
 			if TemplateHub.featureCallbacks[name] and not safeVisuals[name] then value = false end
