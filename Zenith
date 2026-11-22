@@ -6,6 +6,8 @@ local tweenService = game:GetService("TweenService")
 local httpService = game:GetService("HttpService")
 local replicatedStorage = game:GetService("ReplicatedStorage")
 local lighting = game:GetService("Lighting")
+local runService = game:GetService("RunService")
+local collectionService = game:GetService("CollectionService")
 
 -- Constants.
 local WINDOW_WIDTH = 420
@@ -19,7 +21,7 @@ local MAX_HEIGHT = 800
 local CONFIG_FOLDER = "ThrowFoodHub"
 local CONFIG_FILE = "ThrowFoodHub/Settings.json"
 local TAB_NAMES = { "Main", "Extra", "Visuals", "Config" }
-local TITLE_TEXT = "Throw Food Hub"
+local TITLE_TEXT = "Zenith"
 local GAME_PLACE_ID = 120219252362013
 
 local ACCENT_A = Color3.fromRGB(225, 225, 225)
@@ -819,6 +821,7 @@ local remoteTypes = {
 	Throw_Resolve = "RemoteFunction",
 	Throw_Revealed = "RemoteEvent",
 	Throw_Complete = "RemoteFunction",
+	Throw_UseSandwich = "RemoteFunction",
 	Training_Start = "RemoteFunction",
 	Training_Stop = "RemoteFunction",
 	Training_Bonus = "RemoteEvent",
@@ -838,8 +841,16 @@ local remoteTypes = {
 local remoteBusy = {}
 local farmWorker, trainWorker = false, false
 local clientModule
+local sharedModule
+local configModule
+local playerData
+local doCall
 local prepareIndex
-local perfectModule, originalMeterRun, patchedMeterRun
+local prepareThanksgivingIndex
+local patchedMeterEntries = {}
+local patchedArcEntries = {}
+local patchedRevealEntries = {}
+local originalInvokeServer, invokeHookInstalled = nil, false
 
 ---Find a captured remote without loading game modules.
 local function findRemote(name)
@@ -879,36 +890,219 @@ end
 local function waitEnabled(name, seconds)
 	local deadline = os.clock() + seconds
 	while TemplateHub.active and TemplateHub.values[name] and os.clock() < deadline do
-		task.wait(math.min(0.2, math.max(0, deadline - os.clock())))
+		task.wait(math.min(0.1, math.max(0, deadline - os.clock())))
 	end
 	return TemplateHub.active and TemplateHub.values[name]
 end
 
--- Remotes.Invoke in the supplied client uses dot calls, not namecalls. Patch the
--- live ThrowMeter module's Run method instead; restore only our own replacement.
+---Find live module tables via require and optional getgc fallback.
+local function collectModuleTables(loaderFn, moduleName, signatureCheck)
+	local found = {}
+	local seen = {}
+	local ok, mod = pcall(loaderFn, moduleName)
+	if ok and type(mod) == "table" and signatureCheck(mod) then
+		seen[mod] = true
+		table.insert(found, mod)
+	end
+	if type(getgc) == "function" then
+		local gcOk, gcList = pcall(getgc, true)
+		if gcOk and type(gcList) == "table" then
+			for _, obj in ipairs(gcList) do
+				if type(obj) == "table" and not seen[obj] and signatureCheck(obj) then
+					seen[obj] = true
+					table.insert(found, obj)
+				end
+			end
+		end
+	end
+	return found
+end
+
+local function isThrowMeterTable(t)
+	return type(rawget(t, "Run")) == "function"
+		and type(rawget(t, "SetLocked")) == "function"
+		and type(rawget(t, "SetTapsBlocked")) == "function"
+		and type(rawget(t, "AddBlocker")) == "function"
+end
+
+local function isProjectileMathTable(t)
+	return type(rawget(t, "FlightTime")) == "function"
+		and type(rawget(t, "GravityFor")) == "function"
+		and type(rawget(t, "CreateArc")) == "function"
+end
+
+local function isRevealSequenceTable(t)
+	local runFn = rawget(t, "Run")
+	if type(runFn) ~= "function" then return false end
+	if type(debug) == "table" and type(debug.info) == "function" then
+		local ok, src = pcall(debug.info, runFn, "s")
+		if ok and type(src) == "string" and string.find(src, "RevealSequence", 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+---Character & world location helpers derived from PlotController, ThrowController, TrainingController, ThanksgivingController.
+local function getCharacterRoot()
+	local char = localPlayer.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not (hrp and hum and hum.Health > 0) then
+		return nil, "Character unavailable"
+	end
+	return hrp
+end
+
+local function moveRootTo(hrp, targetCF)
+	if not (hrp and hrp.Parent) then return end
+	hrp.AssemblyLinearVelocity = Vector3.zero
+	hrp.AssemblyAngularVelocity = Vector3.zero
+	hrp.CFrame = targetCF
+end
+
+local function withCharacterAt(targetCF, fn)
+	local hrp, err = getCharacterRoot()
+	if not hrp then return false, err end
+	local savedCF = hrp.CFrame
+	moveRootTo(hrp, targetCF)
+	runService.Heartbeat:Wait()
+	local ok, r1, r2 = pcall(fn)
+	if hrp and hrp.Parent then
+		moveRootTo(hrp, savedCF)
+	end
+	if not ok then return false, tostring(r1) end
+	return true, r1, r2
+end
+
+local function getPlotBasePos()
+	local plotIdx = localPlayer:GetAttribute("PlotIndex")
+	local plots = workspace:FindFirstChild("Plots")
+	local plot = plots and plotIdx and plots:FindFirstChild(tostring(plotIdx))
+	if not plot then return nil, "Plot not loaded yet" end
+	return plot.Position
+end
+
+local function getTrainingSpotInfo()
+	local props = workspace:FindFirstChild("LocalPlotProps")
+	local area = props and props:FindFirstChild("TrainingArea")
+	local spot = area and (area.PrimaryPart or area:FindFirstChild("TrainingSpot"))
+	if spot and spot:IsA("BasePart") then
+		return spot.Position, math.min(spot.Size.Y, spot.Size.Z) / 2
+	end
+	local plotPos, err = getPlotBasePos()
+	if not plotPos then return nil, err end
+	local ok, cfg = pcall(configModule, "GameConfig")
+	local offset = ok and cfg.Plot and cfg.Plot.TrainingSpotOffset or Vector3.new(-16, 0.5, -30.5)
+	return plotPos + offset, 5
+end
+
+local function getThrowLineCFrame(acrossLine)
+	local starter = workspace:FindFirstChild("StarterArea")
+	if not starter or not starter:IsA("BasePart") then
+		return nil, "StarterArea not found"
+	end
+	local cross = starter:FindFirstChild("CrossLine")
+	local lineZ = cross and cross:IsA("BasePart") and cross.Position.Z or (starter.Position.Z + starter.Size.Z / 2)
+	local y = starter.Position.Y + starter.Size.Y / 2 + 3
+	local z = acrossLine and (lineZ - 1.2) or (lineZ + 1.5)
+	return CFrame.lookAt(Vector3.new(starter.Position.X, y, z), Vector3.new(starter.Position.X, y, z - 10))
+end
+
+local function getFenceSignCFrame()
+	local plotPos, err = getPlotBasePos()
+	if not plotPos then return nil, err end
+	local plotIdx = localPlayer:GetAttribute("PlotIndex")
+	local plot = workspace.Plots:FindFirstChild(tostring(plotIdx))
+	local ok, fenceCfg = pcall(configModule, "FenceConfig")
+	local offset = ok and fenceCfg.SignOffset or Vector3.new(-10, 0, -20)
+	local pos = plotPos + offset
+	local y = plot.Position.Y + plot.Size.Y / 2 + 3
+	return CFrame.new(pos.X, y, pos.Z)
+end
+
+local function getTurkeyChefCFrame()
+	local picnic = workspace:FindFirstChild("ThanksgivingPicnic")
+	local chef = picnic and picnic:FindFirstChild("TurkeyChef")
+	if not chef then return nil, "Turkey Chef not in world" end
+	local pos = chef.PrimaryPart and chef.PrimaryPart.Position or chef:GetPivot().Position
+	return CFrame.lookAt(pos + Vector3.new(0, 3, 4), pos + Vector3.new(0, 3, 0))
+end
+
+local function ensureInvokeHook()
+	if invokeHookInstalled or type(hookfunction) ~= "function" then return end
+	local ok, rf = pcall(Instance.new, "RemoteFunction")
+	if not ok or not rf then return end
+	local fn = rf.InvokeServer
+	pcall(function() rf:Destroy() end)
+	if type(fn) ~= "function" then return end
+	local hookOk, orig = pcall(hookfunction, fn, function(self, ...)
+		if TemplateHub.active and TemplateHub.values["Auto Perfect"]
+			and typeof(self) == "Instance" and self:IsA("RemoteFunction") and self.Name == "Throw_Resolve" then
+			return originalInvokeServer(self, 1)
+		end
+		return originalInvokeServer(self, ...)
+	end)
+	if hookOk and type(orig) == "function" then
+		originalInvokeServer = orig
+		invokeHookInstalled = true
+	end
+end
+
+-- Patch ThrowMeter.Run (locking meter + returning 1.0 + PERFECT rating) and hook InvokeServer when available.
 local function restorePerfect()
-	if perfectModule and perfectModule.Run == patchedMeterRun then perfectModule.Run = originalMeterRun end
-	perfectModule, originalMeterRun, patchedMeterRun = nil, nil, nil
+	for _, entry in ipairs(patchedMeterEntries) do
+		if entry.mod and entry.mod.Run == entry.patched then
+			entry.mod.Run = entry.original
+		end
+	end
+	table.clear(patchedMeterEntries)
 end
 TemplateHub.restorePerfect = restorePerfect
+
 local function setPerfect(enabled)
 	if not enabled then restorePerfect(); return true end
 	if game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
-	local ok, meter = pcall(clientModule, "ThrowMeter")
-	if not ok then return false, tostring(meter) end
-	if type(meter.Run) ~= "function" then return false, "ThrowMeter.Run unavailable" end
-	perfectModule, originalMeterRun = meter, meter.Run
-	local original = originalMeterRun
-	patchedMeterRun = function(...)
-		local results = table.pack(original(...))
-		if TemplateHub.active and TemplateHub.values["Auto Perfect"] and type(results[1]) == "number" then results[1] = 1 end
-		return table.unpack(results, 1, results.n)
+	ensureInvokeHook()
+	local meters = collectModuleTables(clientModule, "ThrowMeter", isThrowMeterTable)
+	if #meters == 0 and not invokeHookInstalled then
+		return false, "ThrowMeter module unavailable"
 	end
-	meter.Run = patchedMeterRun
+	restorePerfect()
+	local okCfg, gameCfg = pcall(configModule, "GameConfig")
+	for _, meter in ipairs(meters) do
+		local orig = meter.Run
+		local patched
+		patched = function(self, ...)
+			if TemplateHub.active and TemplateHub.values["Auto Perfect"] then
+				if type(self) == "table" and type(self.SetLocked) == "function" then
+					pcall(self.SetLocked, self, true)
+				end
+			end
+			local results = table.pack(orig(self, ...))
+			if TemplateHub.active and TemplateHub.values["Auto Perfect"] and type(results[1]) == "number" then
+				results[1] = 1
+				if okCfg and gameCfg and gameCfg.Throw then
+					if type(gameCfg.Throw.MeterRatings) == "table" and gameCfg.Throw.MeterRatings[1] then
+						results[2] = gameCfg.Throw.MeterRatings[1]
+					end
+					if type(gameCfg.Throw.MeterBonusStuds) == "number" then
+						results[3] = gameCfg.Throw.MeterBonusStuds
+					end
+				end
+				if type(self) == "table" and self.Prompt and results[2] and results[2].Text then
+					pcall(function() self.Prompt.Text = results[2].Text end)
+				end
+			end
+			return table.unpack(results, 1, results.n)
+		end
+		meter.Run = patched
+		table.insert(patchedMeterEntries, { mod = meter, original = orig, patched = patched })
+	end
 	return true
 end
 
----Run the observed throw sequence using conservative, configurable delays.
+---Run the throw sequence with proper StarterArea positioning, cooldown waiting, and training support.
 local function setFarm(enabled)
 	if not enabled then return true end
 	if farmWorker then return false, "Previous farm call is still finishing" end
@@ -932,11 +1126,52 @@ local function setFarm(enabled)
 		end
 		local throwCount, training, throwPending = 0, false, false
 		local ok, errorMessage = xpcall(function()
+			local clientStateOk, clientState = pcall(clientModule, "ClientState")
 			while TemplateHub.active and TemplateHub.values["Farm Animals"] do
-				if TemplateHub.values["Auto Index"] then prepareIndex() end
+				-- Wait out any active throw cooldown before starting.
+				local readyAt = localPlayer:GetAttribute("ThrowReadyAt")
+				if type(readyAt) == "number" then
+					local waitLeft = readyAt - workspace:GetServerTimeNow()
+					if waitLeft > 0 and not waitEnabled("Farm Animals", waitLeft + 0.1) then break end
+				end
+				if localPlayer:GetAttribute("Training") == true then
+					callRemote("Training_Stop", true)
+					task.wait(0.2)
+				end
+				local sandwichToUse = nil
+				if TemplateHub.values["Auto Thanksgiving Index"] then
+					local tgOk, tgChoice = pcall(prepareThanksgivingIndex)
+					if tgOk and type(tgChoice) == "string" then
+						sandwichToUse = tgChoice
+					elseif not tgOk and TemplateHub.values["Auto Index"] then
+						prepareIndex()
+					elseif not tgOk then
+						error(tgChoice)
+					end
+				elseif TemplateHub.values["Auto Index"] then
+					prepareIndex()
+				end
 				if not TemplateHub.active or not TemplateHub.values["Farm Animals"] then break end
-				-- Start may finish after a stop request; remember an accepted start so it can be cancelled.
-				local startOk, startResult = callRemote("Throw_Start", false)
+
+				-- Stand at StarterArea CrossLine (just in front so ThrowController.pollLine won't hijack camera).
+				local lineCF, lineErr = getThrowLineCFrame(false)
+				if not lineCF then error(lineErr) end
+				local moveOk, startOk, startResult = withCharacterAt(lineCF, function()
+					return callRemote("Throw_Start", false)
+				end)
+				if not moveOk then error(startOk) end
+				if not startOk and tostring(startResult):find("TooFar", 1, true) then
+					local crossCF = getThrowLineCFrame(true)
+					if crossCF then
+						local prevBusy = clientStateOk and clientState.Busy or nil
+						if clientStateOk then clientState.Busy = "HubFarm" end
+						local m2, sOk2, sRes2 = withCharacterAt(crossCF, function()
+							return callRemote("Throw_Start", false)
+						end)
+						if clientStateOk and clientState.Busy == "HubFarm" then clientState.Busy = prevBusy end
+						if m2 then startOk, startResult = sOk2, sRes2 end
+					end
+				end
 				if startOk and type(startResult) == "table" and startResult.Ok == true then throwPending = true end
 				if not TemplateHub.active or not TemplateHub.values["Farm Animals"] then break end
 				if not startOk or not throwPending then
@@ -945,6 +1180,9 @@ local function setFarm(enabled)
 					break
 				end
 				if not step("Throw_MeterStarted") then break end
+				if sandwichToUse then
+					callRemote("Throw_UseSandwich", false, sandwichToUse)
+				end
 				if not waitEnabled("Farm Animals", TemplateHub.values["Meter Delay"]) then break end
 				if not step("Throw_Resolve", TemplateHub.values["Auto Perfect"] and 1 or TemplateHub.values["Throw Power"]) then break end
 				if not waitEnabled("Farm Animals", TemplateHub.values["Reveal Delay"]) then break end
@@ -954,15 +1192,32 @@ local function setFarm(enabled)
 				throwPending = false
 				throwCount += 1
 				if TemplateHub.values["Train Between Farms"] and throwCount >= TemplateHub.values["Train After Throws"] then
-					local trainOk, response = callRemote("Training_Start", false)
-					if not trainOk or type(response) ~= "table" or response.Ok ~= true then
-						error(trainOk and "Training_Start returned an unexpected response" or tostring(response))
+					local data = playerData()
+					if (tonumber(data.Stand) or 0) >= 1 then
+						local spotPos, radius = getTrainingSpotInfo()
+						if not spotPos then error(radius) end
+						local hrp, hrpErr = getCharacterRoot()
+						if not hrp then error(hrpErr) end
+						local savedCF = hrp.CFrame
+						local prevBusy = clientStateOk and clientState.Busy or nil
+						if clientStateOk then clientState.Busy = "HubTrain" end
+						moveRootTo(hrp, CFrame.new(spotPos + Vector3.new(0, 3, 0)))
+						runService.Heartbeat:Wait()
+						local trainOk, response = callRemote("Training_Start", false)
+						if not trainOk or type(response) ~= "table" or response.Ok ~= true then
+							moveRootTo(hrp, savedCF)
+							if clientStateOk and clientState.Busy == "HubTrain" then clientState.Busy = prevBusy end
+							error(trainOk and "Training_Start returned an unexpected response" or tostring(response))
+						end
+						moveRootTo(hrp, CFrame.new(spotPos + Vector3.new(math.max((radius or 5) * 0.78, 3.8), 3, 0)))
+						if clientStateOk and clientState.Busy == "HubTrain" then clientState.Busy = prevBusy end
+						training = true
+						waitEnabled("Farm Animals", TemplateHub.values["Train for(s)"])
+						local stopOk, stopResult = callRemote("Training_Stop", true)
+						training = false
+						moveRootTo(hrp, savedCF)
+						if not stopOk then error(tostring(stopResult)) end
 					end
-					training = true
-					waitEnabled("Farm Animals", TemplateHub.values["Train for(s)"])
-					local stopOk, stopResult = callRemote("Training_Stop", true)
-					training = false
-					if not stopOk then error(tostring(stopResult)) end
 					throwCount = 0
 				end
 				if not waitEnabled("Farm Animals", TemplateHub.values["Farm Delay"]) then break end
@@ -976,11 +1231,10 @@ local function setFarm(enabled)
 			TemplateHub.report("Farm stopped: " .. errorMessage, true)
 		end
 	end)
-	TemplateHub.report("Farm Animals is experimental; verify each step in-game.")
 	return true
 end
 
----Keep one training session active until the toggle is turned off.
+---Keep one training session active until the toggle is turned off (moves to TrainingSpot cleanly without camera lock).
 local function setAutoTrain(enabled)
 	if not enabled then return true end
 	if trainWorker then return false, "Previous training call is still finishing" end
@@ -989,11 +1243,39 @@ local function setAutoTrain(enabled)
 		local remote, reason = findRemote(name)
 		if not remote then return false, reason end
 	end
+	local okData, data = pcall(playerData)
+	if okData and (tonumber(data.Stand) or 0) < 1 then
+		return false, "Buy a pull-up bar first"
+	end
 	trainWorker = true
 	task.spawn(function()
 		local started = false
-		local ok, errorMessage = xpcall(function()
+		local savedCF = nil
+		local clientStateOk, clientState = pcall(clientModule, "ClientState")
+		local function startAtSpot()
+			local spotPos, radius = getTrainingSpotInfo()
+			if not spotPos then return false, radius end
+			local hrp, hrpErr = getCharacterRoot()
+			if not hrp then return false, hrpErr end
+			if not savedCF then savedCF = hrp.CFrame end
+			-- First try edge inside server range but outside TrainingController's 0.64*radius auto-trigger.
+			local edgeOffset = Vector3.new(math.max((radius or 5) * 0.78, 3.8), 3, 0)
+			moveRootTo(hrp, CFrame.new(spotPos + edgeOffset))
+			runService.Heartbeat:Wait()
 			local accepted, result = callRemote("Training_Start", false)
+			if not accepted and tostring(result):find("TooFar", 1, true) then
+				local prevBusy = clientStateOk and clientState.Busy or nil
+				if clientStateOk then clientState.Busy = "HubTrain" end
+				moveRootTo(hrp, CFrame.new(spotPos + Vector3.new(0, 3, 0)))
+				runService.Heartbeat:Wait()
+				accepted, result = callRemote("Training_Start", false)
+				moveRootTo(hrp, CFrame.new(spotPos + edgeOffset))
+				if clientStateOk and clientState.Busy == "HubTrain" then clientState.Busy = prevBusy end
+			end
+			return accepted, result
+		end
+		local ok, errorMessage = xpcall(function()
+			local accepted, result = startAtSpot()
 			if not accepted then
 				if TemplateHub.active then
 					TemplateHub.setters["Auto Train"](false)
@@ -1002,11 +1284,21 @@ local function setAutoTrain(enabled)
 				return
 			end
 			started = true
-			while TemplateHub.active and TemplateHub.values["Auto Train"] do task.wait(0.2) end
+			while TemplateHub.active and TemplateHub.values["Auto Train"] do
+				task.wait(0.25)
+				if TemplateHub.active and TemplateHub.values["Auto Train"] and localPlayer:GetAttribute("Training") == false then
+					local reOk = startAtSpot()
+					if not reOk then break end
+				end
+			end
 		end, function(message) return tostring(message) end)
 		if started then
 			local stopped, result = callRemote("Training_Stop", true)
 			if not stopped and TemplateHub.active then TemplateHub.report(tostring(result), true) end
+		end
+		if savedCF then
+			local hrp = getCharacterRoot()
+			if hrp then moveRootTo(hrp, savedCF) end
 		end
 		trainWorker = false
 		if not ok and TemplateHub.active then
@@ -1073,14 +1365,14 @@ end
 clientModule = function(name)
 	return gameModule(localPlayer, "PlayerScripts", "Client", "Controllers", name)
 end
-local function sharedModule(name) return gameModule(replicatedStorage, "Shared", name) end
-local function configModule(name) return gameModule(replicatedStorage, "Config", name) end
-local function playerData()
+sharedModule = function(name) return gameModule(replicatedStorage, "Shared", name) end
+configModule = function(name) return gameModule(replicatedStorage, "Config", name) end
+playerData = function()
 	local data = clientModule("DataController"):GetPlayerData()
 	if type(data) ~= "table" then error("Player data not ready") end
 	return data
 end
-local function doCall(name, ...)
+doCall = function(name, ...)
 	local ok, result = callRemote(name, false, ...)
 	if not ok then error(tostring(result)) end
 	if type(result) ~= "table" or result.Ok ~= true then error(name .. ": unexpected response; stopped") end
@@ -1118,20 +1410,58 @@ local function periodic(name, interval, callback, setup)
 	end
 end
 
--- Instant throw uses the game's own ThrowMeter test auto-tap field, not a skipped server phase.
-local instantModule, oldAutoTap
+-- Instant Throw auto-taps the meter, collapses flight arc duration, and skips RevealSequence POV/zoom/tap-to-continue.
+local instantMeterEntries = {}
 local function restoreInstant()
-	if instantModule then instantModule.TestAutoTap = oldAutoTap; instantModule = nil end
+	for _, entry in ipairs(instantMeterEntries) do
+		if entry.mod then entry.mod.TestAutoTap = entry.oldAutoTap end
+	end
+	table.clear(instantMeterEntries)
+	for _, entry in ipairs(patchedArcEntries) do
+		if entry.mod and entry.mod.CreateArc == entry.patched then entry.mod.CreateArc = entry.original end
+	end
+	table.clear(patchedArcEntries)
+	for _, entry in ipairs(patchedRevealEntries) do
+		if entry.mod and entry.mod.Run == entry.patched then entry.mod.Run = entry.original end
+	end
+	table.clear(patchedRevealEntries)
 end
 TemplateHub.restoreInstant = restoreInstant
+
 TemplateHub.featureCallbacks["Instant Throw"] = function(enabled)
 	if not enabled then restoreInstant(); return true end
 	if game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
-	local ok, result = pcall(clientModule, "ThrowMeter")
-	if not ok then return false, result end
-	instantModule = result
-	oldAutoTap = result.TestAutoTap
-	result.TestAutoTap = 0.36
+	restoreInstant()
+	local meters = collectModuleTables(clientModule, "ThrowMeter", isThrowMeterTable)
+	if #meters == 0 then return false, "ThrowMeter module unavailable" end
+	for _, meter in ipairs(meters) do
+		table.insert(instantMeterEntries, { mod = meter, oldAutoTap = meter.TestAutoTap })
+		meter.TestAutoTap = 0.05
+	end
+	local arcs = collectModuleTables(sharedModule, "ProjectileMath", isProjectileMathTable)
+	for _, pm in ipairs(arcs) do
+		local orig = pm.CreateArc
+		local patched = function(p1, p2, dur, grav)
+			if TemplateHub.active and TemplateHub.values["Instant Throw"] then
+				return orig(p1, p2, 0.05, nil)
+			end
+			return orig(p1, p2, dur, grav)
+		end
+		pm.CreateArc = patched
+		table.insert(patchedArcEntries, { mod = pm, original = orig, patched = patched })
+	end
+	local reveals = collectModuleTables(clientModule, "RevealSequence", isRevealSequenceTable)
+	for _, rs in ipairs(reveals) do
+		local orig = rs.Run
+		local patched = function(...)
+			if TemplateHub.active and TemplateHub.values["Instant Throw"] then
+				return nil
+			end
+			return orig(...)
+		end
+		rs.Run = patched
+		table.insert(patchedRevealEntries, { mod = rs, original = orig, patched = patched })
+	end
 	return true
 end
 
@@ -1147,9 +1477,23 @@ TemplateHub.featureCallbacks["Auto 2x Press"] = function(enabled)
 		if not TemplateHub.active or not TemplateHub.values["Auto 2x Press"] then return end
 		if type(id) ~= "number" or type(expires) ~= "number" or expires <= workspace:GetServerTimeNow() then return end
 		task.spawn(function()
+			-- Wait briefly so TrainingController can spawn the UI button if manual training is open.
+			task.wait(0.12)
 			if not TemplateHub.active or not TemplateHub.values["Auto 2x Press"] then return end
+			if expires <= workspace:GetServerTimeNow() then return end
+			local pgui = localPlayer:FindFirstChild("PlayerGui")
+			local seq = pgui and pgui:FindFirstChild("TrainingSequence")
+			local layer = seq and seq:FindFirstChild("TapBonusLayer")
+			local tapBtn = layer and layer:FindFirstChild("TapBonus")
+			if tapBtn and tapBtn:IsA("GuiButton") and type(firesignal) == "function" then
+				local fired = pcall(firesignal, tapBtn.Activated)
+				if fired then return end
+			end
 			local ok, result = callRemote("Training_TapBonus", false, id)
-			if not ok and TemplateHub.active then TemplateHub.report(tostring(result), true) end
+			if tapBtn and tapBtn.Parent then pcall(function() tapBtn:Destroy() end) end
+			if not ok and TemplateHub.active and not tostring(result):find("Expired", 1, true) then
+				TemplateHub.report(tostring(result), true)
+			end
 		end)
 	end)
 	table.insert(TemplateHub.connections, bonusConnection)
@@ -1157,7 +1501,6 @@ TemplateHub.featureCallbacks["Auto 2x Press"] = function(enabled)
 end
 
 -- Auto Index adjusts the game's persistent power setting before each farm throw.
--- The estimate follows PowerSlider's own predicted landing, but server rules may differ.
 prepareIndex = function()
 	local data = playerData()
 	if type(data.Index) ~= "table" then error("Index data unavailable") end
@@ -1195,6 +1538,76 @@ prepareIndex = function()
 	if TemplateHub.active and TemplateHub.values["Farm Animals"] and TemplateHub.values["Auto Index"] and (tonumber(data.ThrowPower) or 0) ~= desired then doCall("Player_SetThrowPower", desired) end
 end
 TemplateHub.featureCallbacks["Auto Index"] = function(enabled)
+	if enabled and game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
+	return true
+end
+
+-- Auto Thanksgiving Index picks missing Thanksgiving animals, sets throw power to their zone/section, and arms a sandwich.
+prepareThanksgivingIndex = function()
+	local data = playerData()
+	local tg = sharedModule("Thanksgiving")
+	local tgCfg = configModule("ThanksgivingConfig")
+	if not tg.IsEligible(localPlayer) or tg.State().Open ~= true then
+		error("Thanksgiving picnic is not open")
+	end
+	local tgState = type(data.Thanksgiving) == "table" and data.Thanksgiving or {}
+	local chosenSandwich = nil
+	for _, size in ipairs({ "Mega", "Big", "Regular" }) do
+		if tg.SandwichCount(tgState, size) > 0 then
+			chosenSandwich = size
+			break
+		end
+	end
+	if not chosenSandwich then
+		error("No sandwiches available")
+	end
+	local index = type(data.Index) == "table" and data.Index or {}
+	local areas = configModule("AreasConfig")
+	local areaUtil = sharedModule("AreaUtil")
+	local levels = configModule("LevelConfig")
+	local gameConfig = configModule("GameConfig")
+	local max = levels.ThrowPowerForLevel(tonumber(data.Level) or 1)
+	local min = math.min(levels.MinThrowPower, max)
+	local meter = TemplateHub.values["Auto Perfect"] and 1 or TemplateHub.values["Throw Power"]
+	local bonus = (gameConfig.Throw.MeterBonusStuds or 0) * meter
+	local launchZ = areaUtil.GetLaunchPosition().Z
+	local targetPower = nil
+	for _, animal in ipairs(tgCfg.Animals) do
+		if index[animal.ModelName] ~= true then
+			local area = areas.ByKey and areas.ByKey[animal.Zone]
+			if area and areas.IsPlayable(area) then
+				local depth = animal.Section == 3 and 0.85 or 0.5
+				local targetZ = area.ZStart - (area.ZStart - area.ZEnd) * depth
+				local targetDist = launchZ - targetZ
+				local power = math.floor(math.clamp(targetDist - bonus, min, max) + 0.5)
+				local landPos, landingArea = areaUtil.ComputeLanding(power + bonus, 0)
+				if landingArea == area.Index then
+					local sub = areaUtil.SubAreaForZ(area.Index, landPos.Z)
+					if not animal.Section or sub >= animal.Section then
+						targetPower = power >= max and 0 or power
+						break
+					end
+				end
+			end
+		end
+	end
+	if not targetPower and tgState.GobblerCaught ~= true then
+		local area = areas.ByKey and areas.ByKey[tgCfg.Gobbler.Zone]
+		if area and areas.IsPlayable(area) then
+			local power = math.floor(math.clamp(areaUtil.DistanceToAreaCenter(area.Index) - bonus, min, max) + 0.5)
+			local _, landingArea = areaUtil.ComputeLanding(power + bonus, 0)
+			if landingArea == area.Index then
+				targetPower = power >= max and 0 or power
+			end
+		end
+	end
+	if not targetPower then error("No reachable missing Thanksgiving animal") end
+	if TemplateHub.active and TemplateHub.values["Farm Animals"] and TemplateHub.values["Auto Thanksgiving Index"] and (tonumber(data.ThrowPower) or 0) ~= targetPower then
+		doCall("Player_SetThrowPower", targetPower)
+	end
+	return chosenSandwich
+end
+TemplateHub.featureCallbacks["Auto Thanksgiving Index"] = function(enabled)
 	if enabled and game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
 	return true
 end
@@ -1245,7 +1658,14 @@ periodic("Auto Upgrade Plot", 5, function()
 	local data = playerData()
 	local cfg = configModule("FenceConfig")
 	local nextLevel = cfg.Get((tonumber(data.FenceLevel) or 0) + 1)
-	if TemplateHub.active and TemplateHub.values["Auto Upgrade Plot"] and nextLevel and type(nextLevel.Price) == "number" and type(data.Money) == "number" and data.Money >= nextLevel.Price then doCall("Plot_UpgradeFence") end
+	if TemplateHub.active and TemplateHub.values["Auto Upgrade Plot"] and nextLevel and type(nextLevel.Price) == "number" and type(data.Money) == "number" and data.Money >= nextLevel.Price then
+		local signCF, signErr = getFenceSignCFrame()
+		if not signCF then error(signErr) end
+		local moveOk, resOrErr = withCharacterAt(signCF, function()
+			return doCall("Plot_UpgradeFence")
+		end)
+		if not moveOk then error(resOrErr) end
+	end
 end)
 periodic("Auto Upgrade Food", 5, function()
 	local data = playerData()
@@ -1255,7 +1675,10 @@ periodic("Auto Upgrade Food", 5, function()
 		local food = cfg.Get(i)
 		if food and data.OwnedFoods[food.Index] ~= true and data.OwnedFoods[tostring(food.Index)] ~= true then
 			local price = sharedModule("BalanceCurve").GetItemPrice(localPlayer, food)
-			if TemplateHub.active and TemplateHub.values["Auto Upgrade Food"] and type(price) == "number" and data.Money >= price then doCall("Shop_Buy", i) end
+			if TemplateHub.active and TemplateHub.values["Auto Upgrade Food"] and type(price) == "number" and data.Money >= price then
+				doCall("Shop_Buy", i)
+				callRemote("Shop_Equip", false, i)
+			end
 			break -- buy in progression order; don't guess at restricted/locked entries
 		end
 	end
@@ -1263,7 +1686,15 @@ end)
 periodic("Auto Event (claim chef rewards)", 10, function()
 	local state = playerData().Thanksgiving
 	if type(state) ~= "table" then error("Thanksgiving data unavailable") end
-	if sharedModule("Thanksgiving").RewardsPending(state) > 0 and TemplateHub.active and TemplateHub.values["Auto Event (claim chef rewards)"] then doCall("Thanksgiving_Action", "Claim") end
+	if sharedModule("Thanksgiving").RewardsPending(state) > 0 and TemplateHub.active and TemplateHub.values["Auto Event (claim chef rewards)"] then
+		local chefCF, chefErr = getTurkeyChefCFrame()
+		if not chefCF then error(chefErr) end
+		local moveOk, resOrErr = withCharacterAt(chefCF, function()
+			if state.Talked ~= true then callRemote("Thanksgiving_Action", false, "Talked") end
+			return doCall("Thanksgiving_Action", "Claim")
+		end)
+		if not moveOk then error(resOrErr) end
+	end
 end)
 periodic("Auto Cook Sandwich", 5, function()
 	local thanksgiving = sharedModule("Thanksgiving")
@@ -1275,8 +1706,384 @@ periodic("Auto Cook Sandwich", 5, function()
 			if thanksgiving.CanCook(state, candidate) then size = candidate; break end
 		end
 	end
-	if size ~= "Best" and thanksgiving.CanCook(state, size) and TemplateHub.active and TemplateHub.values["Auto Cook Sandwich"] then doCall("Thanksgiving_Action", "Cook", size) end
+	if size ~= "Best" and thanksgiving.CanCook(state, size) and TemplateHub.active and TemplateHub.values["Auto Cook Sandwich"] then
+		local chefCF, chefErr = getTurkeyChefCFrame()
+		if not chefCF then error(chefErr) end
+		local moveOk, resOrErr = withCharacterAt(chefCF, function()
+			if state.Talked ~= true then callRemote("Thanksgiving_Action", false, "Talked") end
+			return doCall("Thanksgiving_Action", "Cook", size)
+		end)
+		if not moveOk then error(resOrErr) end
+	end
 end)
+
+-- Visuals: Throw Distance Indicator, Area Rank Overlay, and Animal ESP (all local-only & cleaned up on toggle off / unload).
+local throwIndicatorFolder, throwIndicatorConn
+local function cleanupThrowIndicator()
+	if throwIndicatorConn then throwIndicatorConn:Disconnect(); throwIndicatorConn = nil end
+	if throwIndicatorFolder then throwIndicatorFolder:Destroy(); throwIndicatorFolder = nil end
+end
+local function setThrowDistanceIndicator(enabled)
+	cleanupThrowIndicator()
+	if not enabled then return true end
+	if game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
+	local okAreas, areas = pcall(configModule, "AreasConfig")
+	local okUtil, areaUtil = pcall(sharedModule, "AreaUtil")
+	local okLevels, levels = pcall(configModule, "LevelConfig")
+	local okCfg, gameCfg = pcall(configModule, "GameConfig")
+	local okData, dataCtrl = pcall(clientModule, "DataController")
+	local okRoll, animalRoll = pcall(sharedModule, "AnimalRoll")
+	local okFoods, foodsCfg = pcall(configModule, "FoodsConfig")
+	local okAnimals, animalsData = pcall(require, replicatedStorage:WaitForChild("AnimalsData"))
+	if not (okAreas and okUtil and okLevels and okCfg and okData) then
+		return false, "Game config modules unavailable"
+	end
+
+	local folder = Instance.new("Folder")
+	folder.Name = "Hub_ThrowIndicator"
+	folder.Parent = workspace
+	throwIndicatorFolder = folder
+
+	local function makeMarker(name, color, size, transparency)
+		local p = Instance.new("Part")
+		p.Name = name
+		p.Anchored = true
+		p.CanCollide = false
+		p.CanQuery = false
+		p.CanTouch = false
+		p.CastShadow = false
+		p.Material = Enum.Material.Neon
+		p.Color = color
+		p.Transparency = transparency
+		p.Size = size
+		p.Parent = folder
+		return p
+	end
+
+	local targetRing = makeMarker("TargetMarker", Color3.fromRGB(90, 235, 140), Vector3.new(0.2, 6, 6), 0.25)
+	targetRing.Shape = Enum.PartType.Cylinder
+	local rangeStrip = makeMarker("RangeStrip", Color3.fromRGB(255, 220, 90), Vector3.new(1.5, 0.12, 1), 0.55)
+
+	local bb = Instance.new("BillboardGui")
+	bb.Size = UDim2.fromOffset(220, 66)
+	bb.StudsOffset = Vector3.new(0, 4.5, 0)
+	bb.AlwaysOnTop = true
+	bb.MaxDistance = 4000
+	bb.Adornee = targetRing
+	bb.Parent = targetRing
+
+	local bg = Instance.new("Frame")
+	bg.Size = UDim2.fromScale(1, 1)
+	bg.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
+	bg.BackgroundTransparency = 0.22
+	bg.BorderSizePixel = 0
+	bg.Parent = bb
+	Instance.new("UICorner", bg).CornerRadius = UDim.new(0, 6)
+	local stroke = Instance.new("UIStroke", bg)
+	stroke.Color = Color3.fromRGB(90, 235, 140)
+	stroke.Thickness = 1.5
+
+	local titleLbl = Instance.new("TextLabel")
+	titleLbl.Size = UDim2.new(1, -10, 0, 22)
+	titleLbl.Position = UDim2.fromOffset(5, 3)
+	titleLbl.BackgroundTransparency = 1
+	titleLbl.Font = BOLD_FONT
+	titleLbl.TextSize = 13
+	titleLbl.TextColor3 = Color3.fromRGB(245, 245, 245)
+	titleLbl.TextXAlignment = Enum.TextXAlignment.Center
+	titleLbl.Parent = bg
+
+	local subLbl = Instance.new("TextLabel")
+	subLbl.Size = UDim2.new(1, -10, 0, 36)
+	subLbl.Position = UDim2.fromOffset(5, 25)
+	subLbl.BackgroundTransparency = 1
+	subLbl.Font = TEXT_FONT
+	subLbl.TextSize = 12
+	subLbl.TextColor3 = Color3.fromRGB(205, 225, 210)
+	subLbl.TextWrapped = true
+	subLbl.TextXAlignment = Enum.TextXAlignment.Center
+	subLbl.Parent = bg
+
+	local sectionNames = { "Front 1/3", "Mid 2/3", "Back 3/3" }
+	local lastKey = ""
+	local acc = 0
+	throwIndicatorConn = runService.RenderStepped:Connect(function(dt)
+		acc += dt
+		if acc < 0.08 then return end
+		acc = 0
+		if not folder.Parent then cleanupThrowIndicator(); return end
+		local data = dataCtrl:GetPlayerData()
+		if type(data) ~= "table" then return end
+		local basePower = levels.EffectiveThrowPower(tonumber(data.Level) or 1, data.ThrowPower)
+		local bonusMax = gameCfg.Throw and gameCfg.Throw.MeterBonusStuds or 20
+		local meter = TemplateHub.values["Auto Perfect"] and 1 or (TemplateHub.values["Throw Power"] or 1)
+		local targetDist = basePower + bonusMax * meter
+		local minPos = areaUtil.ComputeLanding(basePower, 0)
+		local maxPos = areaUtil.ComputeLanding(basePower + bonusMax, 0)
+		local landPos, areaIdx = areaUtil.ComputeLanding(targetDist, 0)
+		local area = areas.Get(areaIdx)
+		local subIdx = areaUtil.SubAreaForZ(areaIdx, landPos.Z)
+		local areaColor = area and area.Color or Color3.fromRGB(90, 235, 140)
+
+		targetRing.Color = areaColor
+		stroke.Color = areaColor
+		targetRing.CFrame = CFrame.new(landPos + Vector3.new(0, 0.14, 0)) * CFrame.Angles(0, 0, math.pi / 2)
+
+		local stripLen = math.max(1, math.abs(minPos.Z - maxPos.Z))
+		local stripMidZ = (minPos.Z + maxPos.Z) / 2
+		rangeStrip.Visible = not TemplateHub.values["Auto Perfect"]
+		rangeStrip.Size = Vector3.new(2, 0.1, stripLen)
+		rangeStrip.CFrame = CFrame.new(landPos.X, landPos.Y + 0.08, stripMidZ)
+
+		local key = tostring(areaIdx) .. ":" .. tostring(subIdx) .. ":" .. tostring(math.floor(targetDist + 0.5)) .. ":" .. tostring(data.EquippedFood)
+		if key ~= lastKey then
+			lastKey = key
+			titleLbl.Text = string.format("%s · %s (%d studs)", area and area.Name or ("Area " .. tostring(areaIdx)), sectionNames[subIdx] or tostring(subIdx), math.floor(targetDist + 0.5))
+			local topLine = ""
+			if okRoll and okFoods and okAnimals and area and type(animalsData[area.Key]) == "table" then
+				local food = foodsCfg.Get(tonumber(data.EquippedFood) or 1) or foodsCfg.Get(1)
+				local depth = areaUtil.DepthInArea(areaIdx, landPos.Z)
+				local weights = food and animalRoll.Weights(food.Bait, areaIdx, depth)
+				if type(weights) == "table" then
+					local list = animalsData[area.Key]
+					local ranked = {}
+					for r = 1, #list do
+						if (weights[r] or 0) > 0.01 then
+							table.insert(ranked, { r = r, name = list[r].Name or list[r].ModelName, w = weights[r] })
+						end
+					end
+					table.sort(ranked, function(a, b) return a.w > b.w end)
+					local parts = {}
+					for k = 1, math.min(3, #ranked) do
+						table.insert(parts, string.format("#%d %s (%.0f%%)", ranked[k].r, ranked[k].name, ranked[k].w * 100))
+					end
+					topLine = table.concat(parts, " · ")
+				end
+			end
+			subLbl.Text = topLine ~= "" and topLine or string.format("Range: %d–%d studs", math.floor(basePower + 0.5), math.floor(basePower + bonusMax + 0.5))
+		end
+	end)
+	return true
+end
+
+local areaOverlayFolder
+local function cleanupAreaOverlay()
+	if areaOverlayFolder then areaOverlayFolder:Destroy(); areaOverlayFolder = nil end
+end
+local function setAreaRankOverlay(enabled)
+	cleanupAreaOverlay()
+	if not enabled then return true end
+	if game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
+	local okAreas, areas = pcall(configModule, "AreasConfig")
+	local okUtil, areaUtil = pcall(sharedModule, "AreaUtil")
+	local okRoll, animalRoll = pcall(sharedModule, "AnimalRoll")
+	local okFoods, foodsCfg = pcall(configModule, "FoodsConfig")
+	local okData, dataCtrl = pcall(clientModule, "DataController")
+	local okRarity, rarityCfg = pcall(configModule, "RarityConfig")
+	local okAnimals, animalsData = pcall(require, replicatedStorage:WaitForChild("AnimalsData"))
+	if not (okAreas and okUtil and okRoll and okAnimals) then
+		return false, "Area modules unavailable"
+	end
+
+	local folder = Instance.new("Folder")
+	folder.Name = "Hub_AreaRankOverlay"
+	folder.Parent = workspace
+	areaOverlayFolder = folder
+
+	local data = okData and dataCtrl:GetPlayerData() or {}
+	local food = okFoods and (foodsCfg.Get(tonumber(type(data) == "table" and data.EquippedFood) or 1) or foodsCfg.Get(1))
+	local bait = food and food.Bait or 1
+	local launchX = areaUtil.GetLaunchPosition().X
+	local subNames = { "Front (1/3)", "Mid (2/3)", "Back (3/3)" }
+	local subColors = {
+		Color3.fromRGB(130, 230, 140),
+		Color3.fromRGB(255, 200, 90),
+		Color3.fromRGB(255, 105, 130),
+	}
+
+	for i = 1, areaUtil.Count() do
+		local area = areas.Get(i)
+		if area then
+			local width = math.min(area.Width or 60, 70)
+			local floorY = (area.FloorY or 0) + 0.1
+			local lines = areaUtil.SubAreaLines(i)
+			local bounds = { area.ZStart, lines[1], lines[2], area.ZEnd }
+
+			-- Divider stripes at 1/3 and 2/3.
+			for li, zLine in ipairs(lines) do
+				local bar = Instance.new("Part")
+				bar.Name = area.Key .. "_Div" .. li
+				bar.Anchored = true
+				bar.CanCollide = false
+				bar.CanQuery = false
+				bar.CanTouch = false
+				bar.CastShadow = false
+				bar.Material = Enum.Material.Neon
+				bar.Color = subColors[li + 1] or Color3.new(1, 1, 1)
+				bar.Transparency = 0.35
+				bar.Size = Vector3.new(width, 0.12, 0.7)
+				bar.Position = Vector3.new(launchX, floorY, zLine)
+				bar.Parent = folder
+			end
+
+			local list = animalsData[area.Key] or {}
+			for s = 1, 3 do
+				local zMid = (bounds[s] + bounds[s + 1]) / 2
+				local depth = (s - 0.5) / 3
+				local weights = animalRoll.Weights(bait, i, depth)
+				local minRank, maxRank = #list, 1
+				local items = {}
+				for r = 1, #list do
+					local w = weights and weights[r] or 0
+					if w > 0.005 then
+						if r < minRank then minRank = r end
+						if r > maxRank then maxRank = r end
+						table.insert(items, { r = r, name = list[r].Name or list[r].ModelName, w = w })
+					end
+				end
+				if minRank > maxRank then minRank, maxRank = 1, #list end
+				table.sort(items, function(a, b) return a.w > b.w end)
+				local topStrs = {}
+				for k = 1, math.min(3, #items) do
+					table.insert(topStrs, string.format("#%d %s %.0f%%", items[k].r, items[k].name, items[k].w * 100))
+				end
+				local rarityName = area.RarityPattern and area.RarityPattern[maxRank] or ""
+				local rarityCol = (okRarity and rarityName ~= "" and rarityCfg.Get(rarityName).Color) or subColors[s]
+
+				local anchor = Instance.new("Part")
+				anchor.Name = area.Key .. "_Sub" .. s
+				anchor.Anchored = true
+				anchor.CanCollide = false
+				anchor.CanQuery = false
+				anchor.CanTouch = false
+				anchor.Transparency = 1
+				anchor.Size = Vector3.new(1, 1, 1)
+				anchor.Position = Vector3.new(launchX, floorY + 3.5, zMid)
+				anchor.Parent = folder
+
+				local bb = Instance.new("BillboardGui")
+				bb.Size = UDim2.fromOffset(230, 56)
+				bb.AlwaysOnTop = false
+				bb.MaxDistance = 320
+				bb.Adornee = anchor
+				bb.Parent = anchor
+
+				local frame = Instance.new("Frame")
+				frame.Size = UDim2.fromScale(1, 1)
+				frame.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
+				frame.BackgroundTransparency = 0.25
+				frame.BorderSizePixel = 0
+				frame.Parent = bb
+				Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+				local st = Instance.new("UIStroke", frame)
+				st.Color = rarityCol
+				st.Thickness = 1.5
+
+				local lbl1 = Instance.new("TextLabel")
+				lbl1.Size = UDim2.new(1, -8, 0, 20)
+				lbl1.Position = UDim2.fromOffset(4, 2)
+				lbl1.BackgroundTransparency = 1
+				lbl1.Font = BOLD_FONT
+				lbl1.TextSize = 12
+				lbl1.TextColor3 = rarityCol
+				lbl1.Text = string.format("%s · %s (Ranks %d–%d)", area.Name, subNames[s], minRank, maxRank)
+				lbl1.Parent = frame
+
+				local lbl2 = Instance.new("TextLabel")
+				lbl2.Size = UDim2.new(1, -8, 0, 32)
+				lbl2.Position = UDim2.fromOffset(4, 21)
+				lbl2.BackgroundTransparency = 1
+				lbl2.Font = TEXT_FONT
+				lbl2.TextSize = 11
+				lbl2.TextColor3 = Color3.fromRGB(235, 235, 235)
+				lbl2.TextWrapped = true
+				lbl2.Text = table.concat(topStrs, " · ")
+				lbl2.Parent = frame
+			end
+		end
+	end
+	return true
+end
+
+local animalEspFolder, animalEspConns = nil, {}
+local function cleanupAnimalEsp()
+	for _, c in ipairs(animalEspConns) do pcall(function() c:Disconnect() end) end
+	table.clear(animalEspConns)
+	if animalEspFolder then animalEspFolder:Destroy(); animalEspFolder = nil end
+end
+local function setAnimalEsp(enabled)
+	cleanupAnimalEsp()
+	if not enabled then return true end
+	if game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
+	local okEcon, econ = pcall(configModule, "AnimalEconomy")
+	local okRarity, rarityCfg = pcall(configModule, "RarityConfig")
+	local folder = Instance.new("Folder")
+	folder.Name = "Hub_AnimalESP"
+	folder.Parent = workspace
+	animalEspFolder = folder
+
+	local tagged = {}
+	local function attach(obj)
+		if tagged[obj] or not obj:IsDescendantOf(workspace) then return end
+		local adornee = obj:IsA("Model") and (obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart", true)) or (obj:IsA("BasePart") and obj)
+		if not adornee then return end
+		tagged[obj] = true
+		local modelName = obj:GetAttribute("ModelName") or obj.Name
+		local mutation = obj:GetAttribute("Mutation")
+		local info = okEcon and econ.Get(modelName)
+		local col = (okRarity and info and info.Rarity and rarityCfg.Get(info.Rarity).Color) or Color3.fromRGB(220, 220, 235)
+
+		local hl = Instance.new("Highlight")
+		hl.Adornee = obj
+		hl.FillColor = col
+		hl.FillTransparency = 0.72
+		hl.OutlineColor = col
+		hl.OutlineTransparency = 0.1
+		hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		hl.Parent = folder
+
+		local bb = Instance.new("BillboardGui")
+		bb.Adornee = adornee
+		bb.Size = UDim2.fromOffset(150, 26)
+		bb.StudsOffset = Vector3.new(0, 3.5, 0)
+		bb.AlwaysOnTop = true
+		bb.MaxDistance = 220
+		bb.Parent = folder
+		local lbl = Instance.new("TextLabel")
+		lbl.Size = UDim2.fromScale(1, 1)
+		lbl.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
+		lbl.BackgroundTransparency = 0.35
+		lbl.TextColor3 = col
+		lbl.Font = BOLD_FONT
+		lbl.TextSize = 12
+		lbl.Text = (mutation and mutation ~= "" and (mutation .. " ") or "") .. tostring(modelName)
+		lbl.Parent = bb
+		Instance.new("UICorner", lbl).CornerRadius = UDim.new(0, 4)
+
+		obj.AncestryChanged:Connect(function(_, parent)
+			if not parent then
+				tagged[obj] = nil
+				if hl.Parent then hl:Destroy() end
+				if bb.Parent then bb:Destroy() end
+			end
+		end)
+	end
+
+	for _, tag in ipairs({ "PlotAnimal", "Animal" }) do
+		for _, inst in ipairs(collectionService:GetTagged(tag)) do attach(inst) end
+		table.insert(animalEspConns, collectionService:GetInstanceAddedSignal(tag):Connect(attach))
+	end
+	return true
+end
+
+TemplateHub.restoreVisuals = function()
+	cleanupThrowIndicator()
+	cleanupAreaOverlay()
+	cleanupAnimalEsp()
+end
+TemplateHub.featureCallbacks["Throw Distance Indicator"] = setThrowDistanceIndicator
+TemplateHub.featureCallbacks["Area Rank Overlay"] = setAreaRankOverlay
+TemplateHub.featureCallbacks["Animal ESP"] = setAnimalEsp
 
 -- A text box uses template styling. The webhook URL is deliberately session-only.
 local secretWebhook = ""
@@ -1372,7 +2179,7 @@ local function sellMatches(auto)
 			-- Re-read each animal so an inventory change cannot sell a stale entry.
 			local current = playerData().Animals
 			entry = type(current) == "table" and current[id] or nil
-			if type(id) == "string" and type(entry) == "table" and not entry.Placed and not entry.Bought then
+			if type(id) == "string" and type(entry) == "table" and not entry.Placed and not entry.Bought and not entry.Locked then
 				local protected = mutations.EventOnlyNames(entry)
 				if type(protected) == "table" and #protected == 0 and matchesAnimal(f, animalStats(entry), false) and TemplateHub.active and (not auto or TemplateHub.values["Auto Sell"]) and sameFilters(filters("Sell"), f) then
 					doCall("Plot_SellAnimal", id)
@@ -1474,9 +2281,14 @@ local function initializeScript()
 		TemplateHub.values["Farm Animals"] = false
 		TemplateHub.values["Auto Train"] = false
 		TemplateHub.values["Auto Perfect"] = false
+		TemplateHub.values["Instant Throw"] = false
+		TemplateHub.values["Throw Distance Indicator"] = false
+		TemplateHub.values["Area Rank Overlay"] = false
+		TemplateHub.values["Animal ESP"] = false
 		if TemplateHub.restoreLighting then pcall(TemplateHub.restoreLighting) end
 		if TemplateHub.restoreInstant then pcall(TemplateHub.restoreInstant) end
 		if TemplateHub.restorePerfect then pcall(TemplateHub.restorePerfect) end
+		if TemplateHub.restoreVisuals then pcall(TemplateHub.restoreVisuals) end
 		if typeof(shared) == "table" and shared.ThrowFoodHubGui == screenGui then
 			shared.ThrowFoodHubGui = nil
 			shared.ThrowFoodHub = nil
@@ -1849,9 +2661,9 @@ local function initializeScript()
 	addSection(extraLeft, "Farm")
 	addToggle(extraLeft, "Farm Animals", nil, false)
 	addSlider(extraLeft, "Meter Delay", 0.1, 20, 1.5, 1)
-	addSlider(extraLeft, "Reveal Delay", 0.5, 30, 8, 1)
-	addSlider(extraLeft, "Complete Delay", 0.5, 30, 8, 1)
-	addSlider(extraLeft, "Farm Delay", 1, 60, 3, 0)
+	addSlider(extraLeft, "Reveal Delay", 0.1, 30, 8, 1)
+	addSlider(extraLeft, "Complete Delay", 0.1, 30, 8, 1)
+	addSlider(extraLeft, "Farm Delay", 0.1, 60, 3, 1)
 	addCycle(extraLeft, "Index Priority", { "First incomplete", "Most complete" })
 	addToggle(extraLeft, "Auto Index", nil, false)
 	addToggle(extraLeft, "Train Between Farms", nil, false)
@@ -1859,7 +2671,7 @@ local function initializeScript()
 	addSlider(extraLeft, "Train for(s)", 1, 300, 30, 0)
 	addSection(extraLeft, "Thanksgiving")
 	addToggle(extraLeft, "Auto Event (claim chef rewards)", nil, false)
-	addUnavailable(extraLeft, "Auto Thanksgiving Index")
+	addToggle(extraLeft, "Auto Thanksgiving Index", nil, false)
 	addToggle(extraLeft, "Auto Cook Sandwich", nil, false)
 	addCycle(extraLeft, "Cook Size", { "Best", "Regular", "Big", "Mega" })
 
@@ -1922,7 +2734,9 @@ local function initializeScript()
 	addSection(visualsLeft, "Environment")
 	addToggle(visualsLeft, "Fullbright", nil, false)
 	addSection(visualsRight, "Game Visuals")
-	addUnavailable(visualsRight, "Animal ESP")
+	addToggle(visualsRight, "Throw Distance Indicator", nil, false)
+	addToggle(visualsRight, "Area Rank Overlay", nil, false)
+	addToggle(visualsRight, "Animal ESP", nil, false)
 
 	-- Config tab.
 	local configLeft = createColumn(TemplateHub.pages.Config, UDim2.fromOffset(0, 0))
@@ -1983,9 +2797,10 @@ local function initializeScript()
 			return setStatus("Settings file is corrupted.")
 		end
 
+		local safeVisuals = { Fullbright = true, ["Throw Distance Indicator"] = true, ["Area Rank Overlay"] = true, ["Animal ESP"] = true }
 		for name, value in data do
 			-- Never start actions just because a settings file was loaded.
-			if TemplateHub.featureCallbacks[name] and name ~= "Fullbright" then value = false end
+			if TemplateHub.featureCallbacks[name] and not safeVisuals[name] then value = false end
 			local setter = TemplateHub.setters[name]
 
 			if setter then
