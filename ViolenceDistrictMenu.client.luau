@@ -1,5 +1,5 @@
--- Zenith | Violence District — standalone client-side menu preview.
--- The catalog below is display data. No game module is loaded or invoked.
+-- Zenith | Violence District — local HUD readouts and menu preferences.
+-- Gameplay controls are previews. No game module is loaded or invoked.
 local function toggle(name, on) return {kind="toggle", name=name, value=on == true} end
 local function slider(name, low, high, value, digits)
 	return {kind="slider", name=name, low=low, high=high, value=value, digits=digits or 0}
@@ -8,12 +8,16 @@ local function choice(name, options) return {kind="choice", name=name, options=o
 local function color(name, hex) return {kind="color", name=name, value=hex} end
 local function bind(name) return {kind="bind", name=name, value="None"} end
 local function action(name, command) return {kind="action", name=name, command=command} end
+local function readout(name, field) return {kind="readout", name=name, field=field} end
 local function section(column, name, family, rows)
 	return {column=column, name=name, family=family, rows=rows}
 end
 
 local PAGES = {
 	{name="Main", sections={
+		section(1, "Live HUD", "On screen", {
+			readout("Round timer", "timer"), readout("Generators", "generators"), readout("Interaction", "prompt"),
+		}),
 		section(1, "Offense", "Killer", {
 			toggle("Burst Attack"), toggle("Instant Kill (carry+hook)"), toggle("Auto Kill"),
 			slider("Auto Kill Delay", 0.05, 1, 0.15, 2), slider("Kill Range", 1, 80, 12),
@@ -59,7 +63,7 @@ local PAGES = {
 		}),
 	}},
 	{name="Config", sections={
-		section(1, "Settings", "Session", {
+		section(1, "Settings", "Preferences", {
 			action("Save Settings", "save"), action("Load Settings", "load"), action("Reset Settings", "reset"),
 			action("Copy Settings", "copy"), toggle("Auto Save"),
 		}),
@@ -73,7 +77,7 @@ local PAGES = {
 local Players = game:GetService("Players")
 local Input = game:GetService("UserInputService")
 local Tweens = game:GetService("TweenService")
-local JSON = game:GetService("HttpService") -- local JSON encoding for the selectable settings text
+local JSON = game:GetService("HttpService") -- JSON codec only; no web requests
 local TITLE_TEXT = "Zenith | Violence District"
 local GUI_NAME = "ViolenceDistrictMenuPreview"
 local TITLE_HEIGHT, TAB_HEIGHT, FOOT_HEIGHT = 40, 34, 29
@@ -81,6 +85,9 @@ local WIDTH, HEIGHT = 656, 574
 local COMPACT = 500
 local AUTO_ID = "Config/Settings/Auto Save"
 local KEY_ID = "Config/Interface/Menu Keybind"
+local SETTINGS_FILE = "ZenithViolenceDistrict.settings.json"
+local SETTINGS_VERSION = 1
+local NO_HUD_VALUE = "Not on HUD"
 local PALETTE = {"00C8FF", "FF2828", "C800FF", "FF00FF", "56D6A0", "FFBA60", "788CFF", "F0F0F2"}
 
 -- The supplied template's silver accents, gradient window, cards and tab underline.
@@ -144,6 +151,148 @@ local function isPress(input)
 	return input.UserInputType==Enum.UserInputType.MouseButton1 or input.UserInputType==Enum.UserInputType.Touch
 end
 
+-- UI paths from the three-part place export. Only look at live copies in PlayerGui.
+local HUD_SCREENS = {"SpectatorHUD-mob", "SpectatorHUD", "SpectatorHUD-con", "Spectatot-mob", "Spectatot", "Spectatot-con"}
+local TIMER_PATH = {"time", "TimerLabel"}
+local GEN_PATH = {"bottom left", "Gen", "genholder", "Gencount"}
+local PROMPT_PATH = {"Frame", "TextLabel"}
+local HELP_PATH = {"Frame", "Help"}
+local function childAt(root, path)
+	for _,name in path do
+		root=root:FindFirstChild(name)
+		if not root then return nil end
+	end
+	return root
+end
+local function displayedText(labelObject, screen)
+	if not labelObject or not labelObject:IsA("TextLabel") or not screen.Enabled then return nil end
+	if labelObject.TextTransparency>=1 or labelObject.MaxVisibleGraphemes==0 then return nil end
+	local pos,size=labelObject.AbsolutePosition,labelObject.AbsoluteSize
+	local x,y,right,bottom=pos.X,pos.Y,pos.X+size.X,pos.Y+size.Y
+	local function clip(object)
+		local p,s=object.AbsolutePosition,object.AbsoluteSize
+		x,y=math.max(x,p.X),math.max(y,p.Y)
+		right,bottom=math.min(right,p.X+s.X),math.min(bottom,p.Y+s.Y)
+	end
+	local node=labelObject
+	while node and node~=screen do
+		if node:IsA("GuiObject") then
+			if not node.Visible or (node:IsA("CanvasGroup") and node.GroupTransparency>=1) then return nil end
+			if node.ClipsDescendants or node:IsA("CanvasGroup") or node:IsA("ScrollingFrame") then clip(node) end
+		end
+		node=node.Parent
+	end
+	clip(screen)
+	if node~=screen or right<=x or bottom<=y then return nil end
+	local text=labelObject.ContentText -- localized, without RichText markup
+	local limit=labelObject.MaxVisibleGraphemes
+	if limit>=0 and limit<(utf8.len(text) or #text) then return nil end -- don't reveal typewriter text early
+	text=text:gsub("%s+"," "):match("^%s*(.-)%s*$")
+	return text~="" and text or nil
+end
+local function isPlayingCounter(counter, screen)
+	-- The SurvivorHUD builder clones GenPanel into a GuiObject marked SurvivorGen.
+	local node,tagged=counter.Parent,false
+	while node and node~=screen do
+		if node.Name=="Preview" or node.Name=="survlayout" or node.Name=="killerlayout" then return false end
+		if node:IsA("GuiObject") and node:GetAttribute("SurvivorGen")==true then tagged=true end
+		node=node.Parent
+	end
+	return node==screen and tagged
+end
+local function mountHUD(playerGui, owner, fields, listen, isOpen)
+	-- Index only candidate counter labels, once and on insertion/removal. No per-frame tree scan.
+	local counters={}
+	local function added(node)
+		if node:IsA("TextLabel") and (node.Name=="Gencount" or (node.Parent and node.Parent.Name=="genholder")) then
+			counters[node]=true -- some builders name a label just after parenting it
+		end
+	end
+	listen(playerGui.DescendantAdded,added)
+	listen(playerGui.DescendantRemoving,function(node) counters[node]=nil end)
+	for _,node in playerGui:GetDescendants() do added(node) end
+	local function refresh()
+		if not isOpen() then return end
+		local text,orders={},{}
+		local function offer(field,source,screen)
+			if not source or (orders[field] and orders[field]>screen.DisplayOrder) then return end
+			local value=displayedText(source,screen)
+			if value then text[field]=value; orders[field]=screen.DisplayOrder end
+		end
+		-- Check direct children, not FindFirstChild(name): respawns can briefly leave
+		-- a disabled screen and its live replacement parented under the same name.
+		for _,screen in playerGui:GetChildren() do
+			if screen:IsA("ScreenGui") and screen.Enabled then
+				if table.find(HUD_SCREENS,screen.Name) then
+					offer("timer",childAt(screen,TIMER_PATH),screen)
+					offer("generators",childAt(screen,GEN_PATH),screen)
+				elseif screen.Name=="ProgressPromptGui" then
+					offer("prompt",childAt(screen,HELP_PATH),screen)
+					offer("prompt",childAt(screen,PROMPT_PATH),screen)
+				end
+			end
+		end
+		for counter in counters do
+			if counter.Name=="Gencount" then
+				local screen=counter:FindFirstAncestorWhichIsA("ScreenGui")
+				if screen and screen.Parent==playerGui and screen~=owner and screen.Enabled and isPlayingCounter(counter,screen) then
+					offer("generators",counter,screen)
+				end
+			end
+		end
+		for field,output in fields do
+			local value,tint=text[field] or NO_HUD_VALUE,text[field] and TEXT or DIM
+			if output.Text~=value then output.Text=value end
+			if output.TextColor3~=tint then output.TextColor3=tint end
+		end
+	end
+	local function tick()
+		if not owner.Parent then return end
+		refresh(); task.delay(0.3,tick)
+	end
+	tick()
+	return refresh
+end
+
+local function encodeSettings(snapshot)
+	return JSON:JSONEncode({version=SETTINGS_VERSION, values=snapshot})
+end
+local function settingValue(spec,v,keys)
+	if spec.kind=="toggle" and type(v)=="boolean" then return v end
+	if spec.kind=="slider" and type(v)=="number" and v==v and math.abs(v)<math.huge then
+		local pow=10^spec.digits
+		return math.round(math.clamp(v,spec.low,spec.high)*pow)/pow
+	end
+	if type(v)~="string" then return nil end
+	if spec.kind=="choice" and table.find(spec.options,v) then return v end
+	if spec.kind=="color" and #v==6 and v:match("^%x+$") then return v:upper() end
+	if spec.kind=="bind" and keys[v] then return v end
+	return nil
+end
+local function readDeviceSettings(specs,defaults)
+	if type(isfile)=="function" then
+		local ok,exists=pcall(isfile,SETTINGS_FILE)
+		if ok and exists==false then return nil,"missing" end
+	end
+	local ok,raw=pcall(readfile,SETTINGS_FILE)
+	if not ok or type(raw)~="string" then return nil,"unreadable" end
+	if #raw>64*1024 then return nil,"invalid" end
+	local decoded,doc=pcall(JSON.JSONDecode,JSON,raw)
+	if not decoded or type(doc)~="table" or doc.version~=SETTINGS_VERSION or type(doc.values)~="table" then return nil,"invalid" end
+	local keys={None=true}
+	for _,key in Enum.KeyCode:GetEnumItems() do keys[key.Name]=true end
+	local result,known=table.clone(defaults),false
+	for id,spec in specs do
+		if doc.values[id]~=nil then
+			local value=settingValue(spec,doc.values[id],keys)
+			if value==nil then return nil,"invalid" end
+			result[id]=value; known=true
+		end
+	end
+	if not known then return nil,"invalid" end
+	return result
+end
+
 local gui
 local function initialize()
 	local parent = Players.LocalPlayer:WaitForChild("PlayerGui")
@@ -153,11 +302,15 @@ local function initialize()
 		DisplayOrder=20, ZIndexBehavior=Enum.ZIndexBehavior.Sibling}, parent)
 	gui:SetAttribute("VDMenuPreview",true)
 	local external, pages, values, defaults, painters = {}, {}, {}, {}, {}
-	local selected, saved, capture, gesture, modal
+	local specs,hudFields={},{}
+	local canStore=type(readfile)=="function" and type(writefile)=="function"
+	local sessionNewer,sliderDirty=false,false
+	local selected, saved, capture, gesture, modal, flushSlider, refreshHUD
 	local closed, minimized, closing = false, false, false
 	local function listen(signal, callback) table.insert(external,signal:Connect(callback)) end
 	gui.Destroying:Connect(function()
 		closed=true; gesture=nil; capture=nil
+		if flushSlider then flushSlider() end
 		for _,connection in external do connection:Disconnect() end
 		table.clear(external)
 	end)
@@ -203,9 +356,10 @@ local function initialize()
 	local content=frame(window,"Pages",dim(1,-18,1,-(top+FOOT_HEIGHT+3)),off(9,top))
 	local footer=frame(window,"Footer",dim(1,0,0,FOOT_HEIGHT),dim(0,0,1,-FOOT_HEIGHT))
 	frame(footer,"Rule",dim(1,-20,0,1),off(10,0),WHITE).BackgroundTransparency=0.92
-	local badge=frame(footer,"PreviewBadge",off(59,16),off(12,7),ROW); corner(badge,4); stroke(badge,ACCENT_B,0.68)
-	label(badge,"PREVIEW",scale(1,1),nil,10,OFF_TEXT,true,CENTER)
+	local badge=frame(footer,"ModeBadge",off(59,16),off(12,7),ROW); corner(badge,4); stroke(badge,ACCENT_B,0.68)
+	local badgeText=label(badge,"PREVIEW",scale(1,1),nil,10,OFF_TEXT,true,CENTER)
 	local status=label(footer,"",dim(1,-235,1,0),off(79,1),12,DIM)
+	status.Name="Status"
 	local shortcut=label(footer,"",off(124,FOOT_HEIGHT),dim(1,-151,0,1),12,DIM,false,RIGHT)
 	local function updateShortcut()
 		shortcut.Text=Input.TouchEnabled and not Input.KeyboardEnabled and "Tap − to minimize" or ((values[KEY_ID] or "RightShift").."  ·  Hide")
@@ -215,7 +369,12 @@ local function initialize()
 
 	local stamp=0
 	local function defaultStatus()
-		return selected=="Config" and "Settings last for this session" or ((selected or "Main").."  /  Interface only")
+		if selected=="Main" then return "Live HUD · gameplay controls are previews" end
+		if selected=="Config" then
+			if sessionNewer then return "Session save · file write unavailable" end
+			return canStore and "Device settings · local JSON file" or "Session settings · no file access"
+		end
+		return (selected or "Menu").."  /  Preview controls"
 	end
 	local function notice(text)
 		stamp+=1; local current=stamp; status.Text=text; status.TextColor3=TEXT
@@ -263,7 +422,8 @@ local function initialize()
 		x=math.clamp(x,0,math.max(0,room.X-width)); y=math.clamp(y,0,math.max(0,room.Y-shown))
 		window.Size=off(width,shown); window.Position=off(x,y)
 		local narrow=width<COMPACT
-		emblem.Visible=not narrow
+		emblem.Visible=not narrow; shortcut.Visible=not narrow
+		status.Size=dim(1,narrow and -108 or -235,1,0)
 		local inset=narrow and 10 or 45
 		heading.Position=off(inset,0); heading.Size=dim(1,-inset-2,1,0)
 		local searchW=narrow and math.clamp(width-270,50,93) or 135
@@ -291,6 +451,7 @@ local function initialize()
 	local function showBody(show)
 		minimized=not show; tabs.Visible=show; content.Visible=show; footer.Visible=show
 		minimize.Label.Text=show and "−" or "+"; search.Visible=show; search:ReleaseFocus(); stopCapture(); dismiss(); fit(false)
+		if show and refreshHUD then refreshHUD() end
 	end
 	minimize.Activated:Connect(function() showBody(minimized) end)
 	stage:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() fit(false) end)
@@ -308,30 +469,58 @@ local function initialize()
 		return sheet
 	end
 	local function register(id, spec, paint)
-		defaults[id]=spec.value; values[id]=spec.value; painters[id]=paint; paint(spec.value,false)
+		specs[id]=spec; defaults[id]=spec.value; values[id]=spec.value; painters[id]=paint; paint(spec.value,false)
 	end
+	local function saveSettings(manual)
+		sliderDirty=false; saved=table.clone(values)
+		if not canStore then
+			if manual then notice("Saved for this session · no file access") end
+			return
+		end
+		local ok,result,err=pcall(function() return writefile(SETTINGS_FILE,encodeSettings(saved)) end)
+		local failed=not ok or result==false or err~=nil
+		if not closed then
+			if failed and (manual or not sessionNewer) then notice("File write failed · saved in session")
+			elseif manual and not failed then notice("Settings saved on device") end
+		end
+		sessionNewer=failed
+	end
+	flushSlider=function() if sliderDirty then saveSettings(false) end end
 	local function set(id,value,animate)
 		values[id]=value; painters[id](value,animate~=false)
-		updateShortcut()
-		if values[AUTO_ID] then saved=table.clone(values) end
+		if id==KEY_ID then updateShortcut() end
+		if values[AUTO_ID] or id==AUTO_ID then -- also persist switching Auto Save off
+			if specs[id].kind=="slider" and gesture then sliderDirty=true else saveSettings(false) end
+		end
 	end
 	local function restore(snapshot)
-		stopCapture()
+		stopCapture(); sliderDirty=false
 		for id,paint in painters do values[id]=snapshot[id]; paint(values[id],false) end
 		updateShortcut()
 	end
+	local function loadSettings(startup)
+		local reason
+		if canStore and not sessionNewer then
+			local snapshot
+			snapshot,reason=readDeviceSettings(specs,defaults)
+			if snapshot then saved=snapshot; restore(saved); notice("Device settings loaded"); return end
+		end
+		if not startup and saved then
+			restore(saved); notice("Session settings loaded")
+		elseif reason=="invalid" then notice("Invalid settings file · nothing changed")
+		elseif not startup then notice(reason=="unreadable" and "Couldn't read a settings file" or "No saved settings yet") end
+	end
 	local function configCommand(command)
-		if command=="save" then saved=table.clone(values); notice("Settings saved for this session")
-		elseif command=="load" then
-			if saved then restore(saved); notice("Session settings loaded") else notice("Save a settings snapshot first") end
-		elseif command=="reset" then restore(defaults); notice("Preview defaults restored")
+		if command=="save" then saveSettings(true)
+		elseif command=="load" then loadSettings(false)
+		elseif command=="reset" then restore(defaults); notice("Defaults restored · Save to keep")
 		elseif command=="center" then width,height=WIDTH,HEIGHT; showBody(true); fit(true); notice("Window reset")
 		elseif command=="close" then destroy()
 		elseif command=="copy" then
 			local sheet=dialog("Copy settings",142)
-			label(sheet,"Press Ctrl+C or ⌘C to copy the selected text.",dim(1,-24,0,20),off(12,33),13,DIM)
+			label(sheet,Input.TouchEnabled and "Touch and hold the text, then choose Copy." or "Press Ctrl+C or ⌘C to copy the selected text.",dim(1,-24,0,20),off(12,33),13,DIM)
 			local text=create("TextBox",{Name="SettingsText", Size=dim(1,-24,1,-69), Position=off(12,57),
-				Text=JSON:JSONEncode(values), ClearTextOnFocus=false, MultiLine=true, TextWrapped=true, ClipsDescendants=true,
+				Text=encodeSettings(values), ClearTextOnFocus=false, MultiLine=true, TextWrapped=true, ClipsDescendants=true,
 				TextXAlignment=Enum.TextXAlignment.Left, TextYAlignment=Enum.TextYAlignment.Top, Font=Enum.Font.Code, TextSize=12,
 				TextColor3=TEXT, BackgroundColor3=ELEMENT},sheet)
 			corner(text,4); padding(text,5,5,3,3); text:CaptureFocus(); text.CursorPosition=#text.Text+1; text.SelectionStart=1
@@ -367,7 +556,9 @@ local function initialize()
 		end
 		filter(page); page.body.GroupTransparency=0.65; tween(page.body,SLIDE,{GroupTransparency=0})
 		tween(indicator,SLIDE,{Position=dim((page.index-1)/#PAGES,4,0,3)})
+		badgeText.Text=selected=="Main" and "HUD" or (selected=="Config" and "CONFIG" or "PREVIEW")
 		status.Text=defaultStatus(); status.TextColor3=DIM
+		if refreshHUD then refreshHUD() end
 	end
 	local function createSection(page,spec,order)
 		local parentColumn=spec.column==1 and page.left or page.right
@@ -393,10 +584,16 @@ local function initialize()
 	local function addRow(page,group,spec,order)
 		local kind,name=spec.kind,spec.name
 		local id=page.name.."/"..group.spec.name.."/"..name
-		local row=button(group.box,name,dim(1,0,0,kind=="slider" and 44 or 29))
-		row.LayoutOrder=order; row.BackgroundColor3=ROW; corner(row,5); hover(row,0.65,0.30)
+		local size=dim(1,0,0,kind=="slider" and 44 or 29)
+		local row=kind=="readout" and frame(group.box,name,size) or button(group.box,name,size)
+		row.LayoutOrder=order; row.BackgroundColor3=ROW; corner(row,5)
+		if kind=="readout" then row.BackgroundTransparency=0.65 else hover(row,0.65,0.30) end
 		table.insert(group.rows,{object=row,key=name:lower()})
-		if kind=="toggle" then
+		if kind=="readout" then
+			label(row,name,dim(0.37,-10,1,0),off(9,0),13,OFF_TEXT)
+			local output=label(row,NO_HUD_VALUE,dim(0.63,-10,1,0),dim(0.37,0,0,0),13,DIM,true,RIGHT)
+			output.Name="Value"; hudFields[spec.field]=output
+		elseif kind=="toggle" then
 			local box=frame(row,"Checkbox",off(15,15),dim(0,8,0.5,-7.5),ELEMENT); corner(box,4)
 			local outline=stroke(box,DIM,0.48); local check=frame(box,"Check",off(0,0),scale(0.5,0.5),WHITE)
 			check.AnchorPoint=Vector2.new(0.5,0.5); corner(check,2); gradient(check,ACCENT_A,ACCENT_B,45)
@@ -431,7 +628,9 @@ local function initialize()
 			hit.InputBegan:Connect(function(input)
 				if not isPress(input) then return end
 				local column=group.box.Parent
-				track(input,scrub,function() column.ScrollingEnabled=true; tween(knobScale,FAST,{Scale=1}) end)
+				track(input,scrub,function()
+					column.ScrollingEnabled=true; tween(knobScale,FAST,{Scale=1}); flushSlider()
+				end)
 				column.ScrollingEnabled=false; tween(knobScale,FAST,{Scale=1.26}); scrub(input.Position)
 			end)
 		elseif kind=="action" then
@@ -497,6 +696,11 @@ local function initialize()
 		if not processed and input.KeyCode.Name==values[KEY_ID] then gui.Enabled=not gui.Enabled; stopDrag() end
 	end)
 	updateShortcut(); fit(true); selectTab(pages.Main)
+	refreshHUD=mountHUD(parent,gui,hudFields,listen,function()
+		return not closed and not closing and gui.Enabled and not minimized and selected=="Main"
+	end)
+	gui:GetPropertyChangedSignal("Enabled"):Connect(refreshHUD)
+	loadSettings(true)
 end
 
 local ok, err=xpcall(initialize,debug.traceback)
