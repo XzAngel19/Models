@@ -19,7 +19,7 @@ local MAX_HEIGHT = 800
 local CONFIG_FOLDER = "ThrowFoodHub"
 local CONFIG_FILE = "ThrowFoodHub/Settings.json"
 local TAB_NAMES = { "Main", "Extra", "Visuals", "Config" }
-local TITLE_TEXT = "Throw Food Hub"
+local TITLE_TEXT = "Zenith | Throw Food for Animals"
 local GAME_PLACE_ID = 120219252362013
 
 local ACCENT_A = Color3.fromRGB(225, 225, 225)
@@ -1615,13 +1615,13 @@ local function initializeScript()
 	addGradient(titleLine, 0)
 
 	create("TextLabel", {
-		Size = UDim2.new(1, -260, 1, 0),
+		Size = UDim2.new(1, -216, 1, 0),
 		Position = UDim2.fromOffset(12, 0),
 		BackgroundTransparency = 1,
 		RichText = true,
 		Text = "<b>" .. TITLE_TEXT .. "</b>",
 		TextColor3 = TEXT_COLOR,
-		TextSize = 14,
+		TextSize = 12,
 		Font = BOLD_FONT,
 		TextXAlignment = Enum.TextXAlignment.Left,
 	}, titleBar)
@@ -1824,7 +1824,7 @@ local function initializeScript()
 		TemplateHub.tabIndex[name] = index
 	end
 
-	-- Main: throw, training, animal and reward features.
+	-- Main: core throwing and farming controls, followed by training/equipment/rewards.
 	local mainLeft = createColumn(TemplateHub.pages.Main, UDim2.fromOffset(0, 0))
 	local mainRight = createColumn(TemplateHub.pages.Main, UDim2.new(0.5, 6, 0, 0))
 
@@ -1832,9 +1832,21 @@ local function initializeScript()
 	addToggle(mainLeft, "Auto Perfect", nil, false)
 	addToggle(mainLeft, "Instant Throw", nil, false)
 	addSlider(mainLeft, "Throw Power", 0, 1, 0.95, 2)
-	addSection(mainLeft, "Training")
-	addToggle(mainLeft, "Auto Train", nil, false)
-	addToggle(mainLeft, "Auto 2x Press", nil, false)
+	addSection(mainLeft, "Farm")
+	addToggle(mainLeft, "Farm Animals", nil, false)
+	addSlider(mainLeft, "Meter Delay", 0.1, 20, 1.5, 1)
+	addSlider(mainLeft, "Reveal Delay", 0.5, 30, 8, 1)
+	addSlider(mainLeft, "Complete Delay", 0.5, 30, 8, 1)
+	addSlider(mainLeft, "Farm Delay", 1, 60, 3, 0)
+	addCycle(mainLeft, "Index Priority", { "First incomplete", "Most complete" })
+	addToggle(mainLeft, "Auto Index", nil, false)
+
+	addSection(mainRight, "Training")
+	addToggle(mainRight, "Auto Train", nil, false)
+	addToggle(mainRight, "Auto 2x Press", nil, false)
+	addToggle(mainRight, "Train Between Farms", nil, false)
+	addSlider(mainRight, "Train After Throws", 1, 100, 30, 0)
+	addSlider(mainRight, "Train for(s)", 1, 300, 30, 0)
 	addSection(mainRight, "Equip Animals")
 	addToggle(mainRight, "Auto Equip Best", nil, false)
 	addSlider(mainRight, "Equip Delay", 5, 120, 30, 0)
@@ -1843,20 +1855,9 @@ local function initializeScript()
 	addToggle(mainRight, "Auto Equip Best Trails", nil, false)
 	addCycle(mainRight, "Trail Priority", { "Xp", "Cash" })
 
-	-- Extra: the observed farming sequence and reference features awaiting data.
+	-- Extra: event, upgrade, selling and webhook modules.
 	local extraLeft = createColumn(TemplateHub.pages.Extra, UDim2.fromOffset(0, 0))
 	local extraRight = createColumn(TemplateHub.pages.Extra, UDim2.new(0.5, 6, 0, 0))
-	addSection(extraLeft, "Farm")
-	addToggle(extraLeft, "Farm Animals", nil, false)
-	addSlider(extraLeft, "Meter Delay", 0.1, 20, 1.5, 1)
-	addSlider(extraLeft, "Reveal Delay", 0.5, 30, 8, 1)
-	addSlider(extraLeft, "Complete Delay", 0.5, 30, 8, 1)
-	addSlider(extraLeft, "Farm Delay", 1, 60, 3, 0)
-	addCycle(extraLeft, "Index Priority", { "First incomplete", "Most complete" })
-	addToggle(extraLeft, "Auto Index", nil, false)
-	addToggle(extraLeft, "Train Between Farms", nil, false)
-	addSlider(extraLeft, "Train After Throws", 1, 100, 30, 0)
-	addSlider(extraLeft, "Train for(s)", 1, 300, 30, 0)
 	addSection(extraLeft, "Thanksgiving")
 	addToggle(extraLeft, "Auto Event (claim chef rewards)", nil, false)
 	addUnavailable(extraLeft, "Auto Thanksgiving Index")
@@ -1884,6 +1885,7 @@ local function initializeScript()
 			end
 		end)
 	end)
+
 	addSection(extraRight, "Selling (filters are AND)")
 	addInput(extraRight, "Sell Mutation", "Any")
 	addInput(extraRight, "Sell Rarity", "Any")
