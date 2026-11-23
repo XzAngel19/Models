@@ -41,6 +41,16 @@ local MEDIUM_TWEEN = TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDire
 local POP_TWEEN = TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 
 local localPlayer = playersService.LocalPlayer
+local touchEnabled = userInputService.TouchEnabled and not userInputService.KeyboardEnabled
+
+---True when the screen is truly phone-sized: two columns no longer fit.
+-- A tablet keeps the two-column layout because it has the width for it.
+local function isSmallScreen()
+	local camera = workspace.CurrentCamera
+	local viewport = camera and camera.ViewportSize or Vector2.new(1280, 720)
+	return viewport.X < 700 or viewport.Y < 500
+end
+
 
 local TemplateHub = {
 	values = {},
@@ -260,13 +270,15 @@ end
 
 ---Add a toggle row.
 local function addToggle(parent, text, keybind, default)
-	local holder, stroke = createCard("TextButton", parent, text, 28)
+	local touch = isSmallScreen()
+	local holder, stroke = createCard("TextButton", parent, text, touch and 38 or 28)
 	holder.Text = ""
 	holder.AutoButtonColor = false
 
+	local boxSize = touch and 22 or 16
 	local box = create("Frame", {
-		Size = UDim2.fromOffset(16, 16),
-		Position = UDim2.new(0, 8, 0.5, -8),
+		Size = UDim2.fromOffset(boxSize, boxSize),
+		Position = UDim2.new(0, touch and 10 or 8, 0.5, -boxSize / 2),
 		BackgroundColor3 = ELEMENT_COLOR,
 		BorderSizePixel = 0,
 	}, holder)
@@ -277,7 +289,7 @@ local function addToggle(parent, text, keybind, default)
 	local check = create("Frame", {
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
-		Size = default and UDim2.fromOffset(10, 10) or UDim2.fromOffset(0, 0),
+		Size = default and UDim2.fromOffset(boxSize * 0.6, boxSize * 0.6) or UDim2.fromOffset(0, 0),
 		BackgroundColor3 = Color3.new(1, 1, 1),
 		BorderSizePixel = 0,
 	}, box)
@@ -286,12 +298,12 @@ local function addToggle(parent, text, keybind, default)
 	addGradient(check, 45)
 
 	local label = create("TextLabel", {
-		Size = UDim2.new(1, -40, 1, 0),
-		Position = UDim2.fromOffset(32, 0),
+		Size = UDim2.new(1, touch and -56 or -40, 1, 0),
+		Position = UDim2.fromOffset(touch and 40 or 32, 0),
 		BackgroundTransparency = 1,
 		Text = text,
 		TextColor3 = default and TEXT_COLOR or OFF_TEXT_COLOR,
-		TextSize = 13,
+		TextSize = touch and 15 or 13,
 		Font = TEXT_FONT,
 		TextXAlignment = Enum.TextXAlignment.Left,
 	}, holder)
@@ -435,7 +447,8 @@ end
 
 ---Add a slider row.
 local function addSlider(parent, text, minValue, maxValue, default, decimals)
-	local holder = createCard("Frame", parent, text, 44)
+	local touch = isSmallScreen()
+	local holder = createCard("Frame", parent, text, touch and 54 or 44)
 	local startAlpha = (default - minValue) / (maxValue - minValue)
 
 	create("TextLabel", {
@@ -461,8 +474,8 @@ local function addSlider(parent, text, minValue, maxValue, default, decimals)
 	}, holder)
 
 	local bar = create("Frame", {
-		Size = UDim2.new(1, -20, 0, 6),
-		Position = UDim2.fromOffset(10, 29),
+		Size = UDim2.new(1, -20, 0, touch and 8 or 6),
+		Position = UDim2.fromOffset(10, touch and 34 or 29),
 		BackgroundColor3 = ELEMENT_COLOR,
 		BorderSizePixel = 0,
 	}, holder)
@@ -481,7 +494,7 @@ local function addSlider(parent, text, minValue, maxValue, default, decimals)
 
 	local knob = create("Frame", {
 		AnchorPoint = Vector2.new(0.5, 0.5),
-		Size = UDim2.fromOffset(12, 12),
+		Size = UDim2.fromOffset(touch and 20 or 12, touch and 20 or 12),
 		Position = UDim2.new(startAlpha, 0, 0.5, 0),
 		BackgroundColor3 = Color3.new(1, 1, 1),
 		BorderSizePixel = 0,
@@ -491,9 +504,10 @@ local function addSlider(parent, text, minValue, maxValue, default, decimals)
 	addStroke(knob, ACCENT_A, 0, 2)
 	local knobScale = create("UIScale", {}, knob)
 
+	-- Fingers are much bigger than a mouse cursor: widen the grab area on touch.
 	local hitbox = create("Frame", {
-		Size = UDim2.new(1, -20, 0, 22),
-		Position = UDim2.fromOffset(10, 21),
+		Size = UDim2.new(1, -20, 0, touch and 34 or 22),
+		Position = UDim2.fromOffset(10, touch and 20 or 21),
 		BackgroundTransparency = 1,
 	}, holder)
 
@@ -705,7 +719,38 @@ local function endGroup()
 end
 
 ---Create a scrolling column.
+-- One shared vertical list per page, reused by both "columns" on small screens
+-- so sections interleave by LayoutOrder instead of stacking two scroll areas.
+local sharedColumns = setmetatable({}, { __mode = "k" })
+
 local function createColumn(parent, position)
+	if isSmallScreen() then
+		local list = sharedColumns[parent]
+		if not list then
+			list = create("ScrollingFrame", {
+				Name = "MobileList",
+				Size = UDim2.fromScale(1, 1),
+				BackgroundTransparency = 1,
+				BorderSizePixel = 0,
+				ScrollBarThickness = 2,
+				ScrollBarImageColor3 = ACCENT_A,
+				ScrollBarImageTransparency = 0.4,
+				CanvasSize = UDim2.new(),
+				AutomaticCanvasSize = Enum.AutomaticSize.Y,
+				ScrollingDirection = Enum.ScrollingDirection.Y,
+				ElasticBehavior = Enum.ElasticBehavior.WhenScrollable,
+				ScrollBarConstraint = Enum.ScrollBarConstraint.Scale,
+			}, parent)
+			create("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, list)
+			create("UIPadding", {
+				PaddingRight = UDim.new(0, 4),
+				PaddingBottom = UDim.new(0, 24),
+			}, list)
+			sharedColumns[parent] = list
+		end
+		return list
+	end
+
 	local column = create("ScrollingFrame", {
 		Size = UDim2.new(0.5, -6, 1, 0),
 		Position = position,
@@ -1878,6 +1923,7 @@ local function initializeScript()
 		end)
 	end
 
+
 	-- Prefer the hidden GUI container when the executor provides one.
 	local guiParent = localPlayer:WaitForChild("PlayerGui")
 
@@ -1886,6 +1932,13 @@ local function initializeScript()
 
 		if success and hiddenParent then
 			guiParent = hiddenParent
+		end
+	end
+
+	-- Drop a stray skull button / menu left behind by an earlier execution.
+	for _, child in ipairs(guiParent:GetChildren()) do
+		if child.Name == "ThrowFoodHubButton" or child.Name == "ThrowFoodHub" then
+			pcall(function() child:Destroy() end)
 		end
 	end
 
@@ -1928,9 +1981,12 @@ local function initializeScript()
 		print("[Throw Food Hub] " .. tostring(message))
 	end
 
+	local narrow = isSmallScreen()
+
 	local window = create("Frame", {
-		Size = UDim2.fromOffset(WINDOW_WIDTH, WINDOW_HEIGHT),
-		Position = UDim2.new(0.5, -WINDOW_WIDTH / 2, 0.5, -WINDOW_HEIGHT / 2),
+		Size = narrow and UDim2.fromScale(0.94, 0.9) or UDim2.fromOffset(WINDOW_WIDTH, WINDOW_HEIGHT),
+		Position = UDim2.fromScale(0.5, 0.5),
+		AnchorPoint = Vector2.new(0.5, 0.5),
 		BackgroundColor3 = Color3.new(1, 1, 1),
 		BorderSizePixel = 0,
 		ClipsDescendants = true,
@@ -1946,8 +2002,10 @@ local function initializeScript()
 	local windowStroke = addStroke(window, Color3.new(1, 1, 1), 0.2, 1.5)
 	addGradient(windowStroke, 45)
 
-	local windowScale = create("UIScale", { Scale = 0.85 }, window)
-	tween(windowScale, POP_TWEEN, { Scale = 1 })
+	local windowScale = create("UIScale", { Scale = narrow and 1 or 0.85 }, window)
+	if not narrow then
+		tween(windowScale, POP_TWEEN, { Scale = 1 })
+	end
 
 	-- Top sheen for depth.
 	local sheen = create("Frame", {
@@ -1980,18 +2038,19 @@ local function initializeScript()
 	addGradient(titleLine, 0)
 
 	create("TextLabel", {
-		Size = UDim2.new(1, -260, 1, 0),
+		Size = narrow and UDim2.new(1, -96, 1, 0) or UDim2.new(1, -260, 1, 0),
 		Position = UDim2.fromOffset(12, 0),
 		BackgroundTransparency = 1,
 		RichText = true,
 		Text = "<b>" .. TITLE_TEXT .. "</b>",
 		TextColor3 = TEXT_COLOR,
-		TextSize = 14,
+		TextSize = narrow and 15 or 14,
 		Font = BOLD_FONT,
 		TextXAlignment = Enum.TextXAlignment.Left,
 	}, titleBar)
 
 	local searchBox = create("TextBox", {
+		Visible = not narrow,
 		Size = UDim2.fromOffset(130, 22),
 		Position = UDim2.new(1, -200, 0.5, -11),
 		BackgroundColor3 = ELEMENT_COLOR,
@@ -2017,8 +2076,17 @@ local function initializeScript()
 		tween(searchStroke, FAST_TWEEN, { Transparency = 1 })
 	end)
 
-	local minimizeButton = createTitleButton(titleBar, "-", -60, ACCENT_B)
-	local closeButton = createTitleButton(titleBar, "X", -32, Color3.fromRGB(230, 60, 70))
+	local minimizeButton = createTitleButton(titleBar, "-", narrow and -104 or -60, ACCENT_B)
+	local closeButton = createTitleButton(titleBar, "X", narrow and -52 or -32, Color3.fromRGB(230, 60, 70))
+
+	if narrow then
+		minimizeButton.Size = UDim2.fromOffset(44, 34)
+		minimizeButton.Position = UDim2.new(1, -100, 0.5, -17)
+		minimizeButton.TextSize = 18
+		closeButton.Size = UDim2.fromOffset(44, 34)
+		closeButton.Position = UDim2.new(1, -50, 0.5, -17)
+		closeButton.TextSize = 16
+	end
 
 	makeDraggable(titleBar, window)
 
@@ -2034,13 +2102,17 @@ local function initializeScript()
 
 	closeButton.Activated:Connect(function()
 		tween(windowScale, FAST_TWEEN, { Scale = 0 }).Completed:Connect(function()
-			screenGui:Destroy()
+			if screenGui.Parent then
+				screenGui.Enabled = false
+			end
 		end)
 	end)
 
 	-- Tab bar with an animated indicator.
+	local tabHeight = narrow and 40 or TAB_HEIGHT
+
 	local tabBar = create("Frame", {
-		Size = UDim2.new(1, 0, 0, TAB_HEIGHT),
+		Size = UDim2.new(1, 0, 0, tabHeight),
 		Position = UDim2.fromOffset(0, TITLE_HEIGHT),
 		BackgroundTransparency = 1,
 	}, window)
@@ -2068,7 +2140,7 @@ local function initializeScript()
 	addGradient(underline, 0)
 	TemplateHub.indicator = indicator
 
-	local contentTop = TITLE_HEIGHT + TAB_HEIGHT + 8
+	local contentTop = TITLE_HEIGHT + tabHeight + 8
 
 	local content = create("Frame", {
 		Size = UDim2.new(1, -20, 1, -(contentTop + 10)),
@@ -2157,7 +2229,7 @@ local function initializeScript()
 			BackgroundTransparency = 1,
 			Text = name,
 			TextColor3 = DIM_TEXT_COLOR,
-			TextSize = 13,
+			TextSize = narrow and 14 or 13,
 			Font = BOLD_FONT,
 			AutoButtonColor = false,
 		}, tabBar)
@@ -2395,7 +2467,7 @@ local function initializeScript()
 	end)
 	addButton(configRight, "Unload GUI", function()
 		tween(windowScale, FAST_TWEEN, { Scale = 0 }).Completed:Connect(function()
-			screenGui:Destroy()
+			if screenGui.Parent then screenGui:Destroy() end
 		end)
 	end)
 
@@ -2468,6 +2540,10 @@ local function initializeScript()
 
 		if input.KeyCode == TemplateHub.menuKey then
 			screenGui.Enabled = not screenGui.Enabled
+			if screenGui.Enabled and narrow then
+				windowScale.Scale = 0.92
+				tween(windowScale, POP_TWEEN, { Scale = 1 })
+			end
 			return
 		end
 
@@ -2490,6 +2566,176 @@ local function initializeScript()
 
 			task.wait(0.5)
 		end
+	end)
+
+	-- Touch devices have no keyboard: start closed and open it from the skull.
+	if touchEnabled then
+		screenGui.Enabled = false
+	end
+
+	-- Floating skull button: on touch devices there is no menu key, so this is the
+	-- only way to open the menu. Draggable, and it hides while the menu is open.
+	local buttonGui = create("ScreenGui", {
+		Name = "ThrowFoodHubButton",
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		DisplayOrder = 50,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	}, guiParent)
+
+	local openButton = create("ImageButton", {
+		Name = "OpenButton",
+		AnchorPoint = Vector2.new(0, 0),
+		Position = UDim2.new(0, 14, 0.28, 0),
+		Size = UDim2.fromOffset(52, 52),
+		BackgroundColor3 = Color3.fromRGB(20, 20, 22),
+		BackgroundTransparency = 0.1,
+		BorderSizePixel = 0,
+		AutoButtonColor = false,
+		Image = "",
+		ZIndex = 15,
+	}, buttonGui)
+
+	create("UICorner", { CornerRadius = UDim.new(1, 0) }, openButton)
+	local openStroke = addStroke(openButton, ACCENT_A, 0.35, 1.5)
+	addGradient(openStroke, 45)
+
+	-- Skull drawn with primitives so it never depends on an asset id.
+	local skullHolder = create("Frame", {
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+	}, openButton)
+
+	local skull = create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.42),
+		Size = UDim2.fromOffset(26, 23),
+		BackgroundColor3 = Color3.fromRGB(240, 240, 244),
+		BorderSizePixel = 0,
+	}, skullHolder)
+
+	create("UICorner", { CornerRadius = UDim.new(0, 9) }, skull)
+
+	-- Jaw sits under the cranium, narrower, with two teeth gaps.
+	local jaw = create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 1, -2),
+		Size = UDim2.fromOffset(14, 6),
+		BackgroundColor3 = Color3.fromRGB(240, 240, 244),
+		BorderSizePixel = 0,
+	}, skull)
+
+	create("UICorner", { CornerRadius = UDim.new(0, 2) }, jaw)
+
+	for _, offset in ipairs({ -5, 5 }) do
+		local eye = create("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(0.5, offset, 0.38, 0),
+			Size = UDim2.fromOffset(6, 7),
+			BackgroundColor3 = Color3.fromRGB(18, 18, 20),
+			BorderSizePixel = 0,
+			ZIndex = 2,
+			Name = "Eye",
+		}, skull)
+		create("UICorner", { CornerRadius = UDim.new(1, 0) }, eye)
+	end
+
+	create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0),
+		Position = UDim2.new(0.5, 0, 0.74, 0),
+		Size = UDim2.fromOffset(4, 5),
+		BackgroundColor3 = Color3.fromRGB(18, 18, 20),
+		BorderSizePixel = 0,
+		ZIndex = 2,
+	}, skull)
+
+	for _, offset in ipairs({ -3, 3 }) do
+		create("Frame", {
+			AnchorPoint = Vector2.new(0.5, 1),
+			Position = UDim2.new(0.5, offset, 1, 0),
+			Size = UDim2.fromOffset(2, 3),
+			BackgroundColor3 = Color3.fromRGB(18, 18, 20),
+			BorderSizePixel = 0,
+			ZIndex = 2,
+		}, jaw)
+	end
+
+	local draggingButton, dragOrigin, dragStartPos
+	openButton.InputBegan:Connect(function(input)
+		if not isPress(input) then return end
+		draggingButton = true
+		dragOrigin = input.Position
+		dragStartPos = openButton.Position
+		tween(openStroke, FAST_TWEEN, { Transparency = 0 })
+	end)
+
+	connectInput(userInputService.InputChanged, function(input)
+		if not draggingButton or not isMove(input) then return end
+		local delta = input.Position - dragOrigin
+		local moved = math.abs(delta.X) + math.abs(delta.Y)
+		if moved > 6 then
+			draggingButton = "moved"
+			openButton.Position = UDim2.new(
+				dragStartPos.X.Scale, dragStartPos.X.Offset + delta.X,
+				dragStartPos.Y.Scale, dragStartPos.Y.Offset + delta.Y
+			)
+		end
+	end)
+
+	connectInput(userInputService.InputEnded, function(input)
+		if not draggingButton or not isPress(input) then return end
+		local moved = draggingButton == "moved"
+		draggingButton = nil
+		tween(openStroke, FAST_TWEEN, { Transparency = 0.35 })
+
+		if moved then return end
+
+		screenGui.Enabled = true
+		local scale = windowScale
+		if narrow then
+			scale.Scale = 0.9
+			tween(scale, POP_TWEEN, { Scale = 1 })
+		else
+			tween(scale, POP_TWEEN, { Scale = 1 })
+		end
+	end)
+
+	-- Rotating the phone must not leave the window hanging off screen.
+	local function fitWindow()
+		local camera = workspace.CurrentCamera
+		local viewport = camera and camera.ViewportSize
+		if not viewport then return end
+
+		if isSmallScreen() then
+			window.Size = UDim2.fromScale(0.94, 0.9)
+			window.Position = UDim2.fromScale(0.5, 0.5)
+			window.AnchorPoint = Vector2.new(0.5, 0.5)
+			windowScale.Scale = 1
+		else
+			if minimized then return end
+			local width = math.clamp(math.min(windowWidth, viewport.X - 28), MIN_WIDTH, MAX_WIDTH)
+			local height = math.clamp(math.min(windowHeight, viewport.Y - 28), MIN_HEIGHT, MAX_HEIGHT)
+			window.Size = UDim2.fromOffset(width, height)
+		end
+	end
+
+	local camera = workspace.CurrentCamera
+	if camera then
+		local viewportConnection = camera:GetPropertyChangedSignal("ViewportSize"):Connect(fitWindow)
+		table.insert(TemplateHub.connections, viewportConnection)
+	end
+
+	fitWindow()
+
+	-- Keep the button in sync with the menu: hidden while it is open.
+	local function syncOpenButton()
+		openButton.Visible = not screenGui.Enabled
+	end
+
+	screenGui:GetPropertyChangedSignal("Enabled"):Connect(syncOpenButton)
+	syncOpenButton()
+	screenGui.Destroying:Connect(function()
+		if buttonGui and buttonGui.Parent then buttonGui:Destroy() end
 	end)
 
 	switchTab("Main")
