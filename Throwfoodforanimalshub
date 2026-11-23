@@ -118,6 +118,61 @@ local function addStroke(parent, color, transparency, thickness)
 	}, parent)
 end
 
+-- Dropdown chevron. SourceSans has no "▾" glyph, so the old text arrows drew an
+-- empty box. Leave ARROW_ICON_ID empty to use the vector chevron drawn below
+-- (always renders), or paste an uploaded PNG (e.g. "rbxassetid://1234567890").
+local ARROW_ICON_ID = ""
+local ARROW_COLOR = Color3.fromRGB(198, 198, 204)
+
+---Create a dropdown chevron. Returns the holder and a function that points it up or down.
+local function createArrow(parent)
+	local holder = create("Frame", {
+		Name = "Chevron",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -7, 0.5, 0),
+		Size = UDim2.fromOffset(11, 11),
+		BackgroundTransparency = 1,
+	}, parent)
+
+	local function point(open)
+		tween(holder, FAST_TWEEN, { Rotation = open and 180 or 0 })
+	end
+
+	if ARROW_ICON_ID ~= "" then
+		create("ImageLabel", {
+			Name = "Icon",
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BackgroundColor3 = Color3.new(1, 1, 1),
+			Image = ARROW_ICON_ID,
+			ImageColor3 = ARROW_COLOR,
+			ImageTransparency = 0.1,
+			ScaleType = Enum.ScaleType.Fit,
+		}, holder)
+
+		return holder, point
+	end
+
+	-- Vector chevron: two thin bars whose tips meet at the bottom center.
+	local function bar(positionX, rotation)
+		local piece = create("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.new(positionX, 0, 0.486, 0),
+			Size = UDim2.new(0.44, 0, 0, 1.4),
+			BackgroundColor3 = ARROW_COLOR,
+			BorderSizePixel = 0,
+			Rotation = rotation,
+		}, holder)
+
+		create("UICorner", { CornerRadius = UDim.new(1, 0) }, piece)
+	end
+
+	bar(0.36, 50)
+	bar(0.64, -50)
+
+	return holder, point
+end
+
 ---Create a rounded row card.
 local function createCard(className, parent, text, height)
 	local card = create(className, {
@@ -848,6 +903,7 @@ local doCall
 local prepareIndex
 local prepareThanksgivingIndex
 local showInstantThrowResult
+local captureThrowResult
 local patchedMeterEntries = {}
 local patchedArcEntries = {}
 local patchedRevealEntries = {}
@@ -1038,6 +1094,7 @@ local function getTurkeyChefCFrame()
 	return CFrame.lookAt(pos + Vector3.new(0, 3, 4), pos + Vector3.new(0, 3, 0))
 end
 
+---Hook InvokeServer once so Throw_Resolve results can be read (Auto Perfect + Instantly View Throw).
 local function ensureInvokeHook()
 	if invokeHookInstalled or type(hookfunction) ~= "function" then return end
 	local ok, rf = pcall(Instance.new, "RemoteFunction")
@@ -1045,25 +1102,66 @@ local function ensureInvokeHook()
 	local fn = rf.InvokeServer
 	pcall(function() rf:Destroy() end)
 	if type(fn) ~= "function" then return end
-	local hookOk, orig = pcall(hookfunction, fn, function(self, ...)
-		if TemplateHub.active and typeof(self) == "Instance" and self:IsA("RemoteFunction") and self.Name == "Throw_Resolve" then
+
+	local function onInvokeServer(self, ...)
+		if typeof(self) == "Instance" and self:IsA("RemoteFunction") and self.Name == "Throw_Resolve" then
 			local res
-			if TemplateHub.values["Auto Perfect"] then
+			if TemplateHub.active and TemplateHub.values["Auto Perfect"] then
 				res = originalInvokeServer(self, 1)
 			else
 				res = originalInvokeServer(self, ...)
 			end
-			if TemplateHub.values["Instantly View Throw"] and type(res) == "table" and res.Ok == true and showInstantThrowResult then
-				task.defer(showInstantThrowResult, res)
-			end
+			if captureThrowResult then captureThrowResult(res) end
 			return res
 		end
 		return originalInvokeServer(self, ...)
-	end)
+	end
+
+	local hookOk, orig = pcall(hookfunction, fn, onInvokeServer)
 	if hookOk and type(orig) == "function" then
 		originalInvokeServer = orig
 		invokeHookInstalled = true
+	elseif captureThrowResult then
+		-- Some executors hand back a per-instance closure; the namecall hook below covers that.
+		-- Fall back to hooking the single remote instance.
+		local remote = findRemote("Throw_Resolve")
+		local original = remote and remote.InvokeServer
+		if type(original) == "function" then
+			local directOrig
+			local directOk
+			directOk, directOrig = pcall(hookfunction, original, function(self, ...)
+				local res = directOrig(self, ...)
+				captureThrowResult(res)
+				return res
+			end)
+			if directOk then
+				originalInvokeServer = type(directOrig) == "function" and directOrig or original
+				invokeHookInstalled = true
+			end
+		end
 	end
+end
+
+-- Last-resort capture: every InvokeServer is a namecall, so this route works even
+-- when hookfunction only reaches a single instance closure.
+local namecallHookInstalled = false
+local function ensureNamecallHook()
+	if namecallHookInstalled or type(hookmetamethod) ~= "function" or type(getnamecallmethod) ~= "function" then
+		return namecallHookInstalled
+	end
+	local ok = pcall(function()
+		local oldNamecall
+		oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+			local method = getnamecallmethod()
+			local results = table.pack(oldNamecall(self, ...))
+			if method == "InvokeServer" and typeof(self) == "Instance" and self.Name == "Throw_Resolve" and captureThrowResult then
+				captureThrowResult(results[1])
+			end
+			return table.unpack(results, 1, results.n)
+		end)
+	end)
+	if ok then namecallHookInstalled = true end
+	return namecallHookInstalled
 end
 
 -- Patch ThrowMeter.Run (locking meter + returning 1.0 + PERFECT rating) and hook InvokeServer when available.
@@ -1227,9 +1325,7 @@ local function setFarm(enabled)
 				-- Power meter always resolves to 1 (+20 bonus studs).
 				local resolvedOk, resolvedResult = step("Throw_Resolve", 1)
 				if not resolvedOk then break end
-				if TemplateHub.values["Instantly View Throw"] and type(resolvedResult) == "table" and showInstantThrowResult then
-					task.defer(showInstantThrowResult, resolvedResult)
-				end
+				if captureThrowResult then captureThrowResult(resolvedResult) end
 				local revealWait = TemplateHub.values["Reveal Delay"]
 				if not TemplateHub.values["Instant Throw"] and type(resolvedResult) == "table" and type(resolvedResult.FlightTime) == "number" then
 					revealWait = math.max(revealWait, resolvedResult.FlightTime + 0.25)
@@ -1824,12 +1920,30 @@ local function cleanupInstantViewThrow()
 	instantThrowBannerGui = nil
 end
 
+---Single entry point for every Throw_Resolve result: dedupes the several hooks and reports errors.
+captureThrowResult = function(res)
+	if not TemplateHub.active or TemplateHub.values["Instantly View Throw"] ~= true then return end
+	if type(res) ~= "table" or res.Ok ~= true then return end
+	local now = os.clock()
+	local key = table.concat({
+		tostring(res.ModelName or res.DisplayName),
+		tostring(res.Mutation),
+		tostring(res.Size),
+		tostring(res.Rarity),
+	}, "|")
+	if key == lastShownThrowResult and (now - lastShownThrowAt) < 1.5 then return end
+	lastShownThrowResult, lastShownThrowAt = key, now
+	task.defer(function()
+		local ok, err = pcall(showInstantThrowResult, res)
+		if not ok then
+			warn("[Throw Food Hub] Instantly View Throw: " .. tostring(err))
+		end
+	end)
+end
+
 showInstantThrowResult = function(res)
 	if not TemplateHub.active or not TemplateHub.values["Instantly View Throw"] then return end
 	if type(res) ~= "table" or res.Ok ~= true then return end
-	local now = os.clock()
-	if res == lastShownThrowResult and (now - lastShownThrowAt) < 0.25 then return end
-	lastShownThrowResult, lastShownThrowAt = res, now
 
 	local modelName = res.ModelName or res.DisplayName
 	if not modelName then return end
@@ -1840,19 +1954,22 @@ showInstantThrowResult = function(res)
 	local okFmt, numFmt = pcall(sharedModule, "NumberFormat")
 	local okBoosts, boosts = pcall(sharedModule, "Boosts")
 
-	local info = okEcon and econ.Get(modelName)
-	local rarity = res.Rarity or (info and info.Rarity) or "Common"
-	local rarityCol = (okRarity and rarityCfg.Get(rarity).Color) or ACCENT_A
+	local info = okEcon and econ.Get(modelName) or nil
+	local rarity = res.Rarity or (type(info) == "table" and info.Rarity) or "Common"
+	local rarityEntry = okRarity and rarityCfg.Get(rarity) or nil
+	local rarityCol = (type(rarityEntry) == "table" and rarityEntry.Color) or ACCENT_A
 	local displayName = res.DisplayName or modelName
 	local mutation = res.Mutation
 	local size = tonumber(res.Size) or 1
 	local income = tonumber(res.Income)
-	if not income and okMut then
-		income = mut.Income(modelName, mutation, size)
+	if not income and okMut and type(mut.Income) == "function" then
+		local okIncome, value = pcall(mut.Income, modelName, mutation, size)
+		income = okIncome and tonumber(value) or nil
 	end
 	local weight = tonumber(res.Weight)
-	if not weight and okMut then
-		weight = mut.Weight(modelName, size)
+	if not weight and okMut and type(mut.Weight) == "function" then
+		local okWeight, value = pcall(mut.Weight, modelName, size)
+		weight = okWeight and tonumber(value) or nil
 	end
 
 	local titleParts = {}
@@ -1957,7 +2074,7 @@ showInstantThrowResult = function(res)
 	detailLbl.TextColor3 = TEXT_COLOR
 	detailLbl.TextXAlignment = Enum.TextXAlignment.Left
 	detailLbl.TextTruncate = Enum.TextTruncate.AtEnd
-	detailLbl.Text = #statsParts > 0 and table.concat(statsParts, "  •  ") or "Thrown animal resolved"
+	detailLbl.Text = #statsParts > 0 and table.concat(statsParts, "  ·  ") or "Thrown animal resolved"
 	detailLbl.ZIndex = 26
 
 	tween(card, POP_TWEEN, { Position = UDim2.new(0.5, 0, 1, -18) })
@@ -1982,25 +2099,131 @@ local function isRemotesModuleTable(t)
 		and type(rawget(t, "Event")) == "function"
 end
 
+-- Result capture uses every route the game can take to Throw_Resolve, because a
+-- single hook is not reliable across executors: InvokeServer hook, Remotes.Invoke
+-- patch and RevealSequence.Run. Whichever fires first shows the banner.
+local resolveLayers = { invokeHook = false, namecall = false, remotesPatch = 0, revealPatch = false }
+
+local revealWrappers = {}
+local function ensureRevealResultCapture()
+	local reveals = collectModuleTables(clientModule, "RevealSequence", isRevealSequenceTable)
+	if #reveals == 0 then return false end
+	for _, rs in ipairs(reveals) do
+		-- Re-wrap only when another patch (Instant Throw) replaced our wrapper.
+		if rs.Run ~= revealWrappers[rs] and type(rs.Run) == "function" then
+			local orig = rs.Run
+			local patched = function(params, ...)
+				if type(params) == "table" and type(params.Result) == "table" and captureThrowResult then
+					captureThrowResult(params.Result)
+				end
+				return orig(params, ...)
+			end
+			rs.Run = patched
+			revealWrappers[rs] = patched
+		end
+	end
+	resolveLayers.revealPatch = true
+	return true
+end
+
+-- Fallback for executors where no hook can be installed: watch the inventory that the
+-- server replicates and announce animals that were not there before (throws only).
+local inventoryWatchThread
+local function stopInventoryWatch()
+	if inventoryWatchThread then
+		pcall(task.cancel, inventoryWatchThread)
+		inventoryWatchThread = nil
+	end
+end
+
+local function startInventoryWatch()
+	stopInventoryWatch()
+	local known = {}
+	local function scan(seed)
+		local ok, data = pcall(playerData)
+		local animals = ok and type(data) == "table" and data.Animals or nil
+		if type(animals) ~= "table" then return end
+		for id, entry in pairs(animals) do
+			if not known[id] then
+				known[id] = true
+				if not seed and type(entry) == "table" and entry.Bought ~= true and type(entry.ModelName) == "string" then
+					if captureThrowResult then
+						captureThrowResult({
+							Ok = true,
+							ModelName = entry.ModelName,
+							Mutation = entry.Mutation,
+							Size = entry.Size,
+							Income = entry.Income,
+						})
+					end
+				end
+			end
+		end
+	end
+	scan(true)
+	inventoryWatchThread = task.spawn(function()
+		while TemplateHub.active and TemplateHub.values["Instantly View Throw"] do
+			task.wait(0.4)
+			scan(false)
+		end
+		inventoryWatchThread = nil
+	end)
+end
+
 local function setInstantlyViewThrow(enabled)
 	cleanupInstantViewThrow()
+	stopInventoryWatch()
 	if not enabled then return true end
 	if game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
-	ensureInvokeHook()
-	local remotesMods = collectModuleTables(sharedModule, "Remotes", isRemotesModuleTable)
-	for _, rm in ipairs(remotesMods) do
-		local orig = rm.Invoke
-		local patched = function(name, ...)
-			local res = orig(name, ...)
-			if TemplateHub.active and TemplateHub.values["Instantly View Throw"]
-				and name == "Throw_Resolve" and type(res) == "table" and res.Ok == true then
-				task.defer(showInstantThrowResult, res)
+
+	-- Auto Perfect may already have installed the InvokeServer hook; reuse it.
+	if not invokeHookInstalled then ensureInvokeHook() end
+	resolveLayers.invokeHook = invokeHookInstalled
+	resolveLayers.namecall = ensureNamecallHook()
+
+	resolveLayers.remotesPatch = 0
+	local remotesOk, remotesMods = pcall(collectModuleTables, sharedModule, "Remotes", isRemotesModuleTable)
+	if remotesOk and type(remotesMods) == "table" then
+		for _, rm in ipairs(remotesMods) do
+			local orig = rm.Invoke
+			local patched = function(name, ...)
+				local res = orig(name, ...)
+				if name == "Throw_Resolve" and captureThrowResult then
+					captureThrowResult(res)
+				end
+				return res
 			end
-			return res
+			-- A frozen module table rejects the assignment; other layers still work.
+			local patchedOk = pcall(function()
+				rm.Invoke = patched
+			end)
+			if patchedOk and rm.Invoke == patched then
+				table.insert(patchedRemotesInvoke, { mod = rm, original = orig, patched = patched })
+				resolveLayers.remotesPatch += 1
+			end
 		end
-		rm.Invoke = patched
-		table.insert(patchedRemotesInvoke, { mod = rm, original = orig, patched = patched })
 	end
+
+	pcall(ensureRevealResultCapture)
+
+	local layers = {}
+	if resolveLayers.invokeHook then table.insert(layers, "invoke") end
+	if resolveLayers.namecall then table.insert(layers, "namecall") end
+	if resolveLayers.remotesPatch > 0 then table.insert(layers, "remotes") end
+	if resolveLayers.revealPatch then table.insert(layers, "reveal") end
+	if #layers == 0 then
+		-- No hooks at all: still show the banner from replicated inventory changes.
+		startInventoryWatch()
+		if TemplateHub.report then
+			TemplateHub.report("Instant view armed: inventory watch (no hooks in this executor)")
+		end
+		return true
+	end
+
+	if TemplateHub.report then
+		TemplateHub.report("Instant view armed: " .. table.concat(layers, " + "))
+	end
+
 	return true
 end
 
@@ -2204,7 +2427,7 @@ local function addDropdown(parent, text, options, default)
 		TextXAlignment = Enum.TextXAlignment.Left,
 	}, headerBtn)
 	local valueLbl = create("TextLabel", {
-		Size = UDim2.new(0.45, -12, 1, 0),
+		Size = UDim2.new(0.45, -26, 1, 0),
 		Position = UDim2.new(0.55, 0, 0, 0),
 		BackgroundTransparency = 1,
 		Text = "",
@@ -2212,7 +2435,9 @@ local function addDropdown(parent, text, options, default)
 		TextSize = 12,
 		Font = BOLD_FONT,
 		TextXAlignment = Enum.TextXAlignment.Right,
+		TextTruncate = Enum.TextTruncate.AtEnd,
 	}, headerBtn)
+	local _, pointArrow = createArrow(headerBtn)
 
 	local listHeight = math.min(#options * 24 + 8, 140)
 	local panel = create("Frame", {
@@ -2244,7 +2469,8 @@ local function addDropdown(parent, text, options, default)
 	TemplateHub.defaults[text] = current
 
 	local function refresh()
-		valueLbl.Text = tostring(current) .. (expanded and " ▴" or " ▾")
+		valueLbl.Text = tostring(current)
+		pointArrow(expanded)
 		for opt, lbl in pairs(rowLabels) do
 			lbl.TextColor3 = opt == current and ACCENT_A or OFF_TEXT_COLOR
 			lbl.Font = opt == current and BOLD_FONT or TEXT_FONT
@@ -2322,16 +2548,17 @@ local function addMultiDropdown(parent, text, optionsProvider)
 		TextXAlignment = Enum.TextXAlignment.Left,
 	}, headerBtn)
 	local summaryLbl = create("TextLabel", {
-		Size = UDim2.new(0.55, -12, 1, 0),
+		Size = UDim2.new(0.55, -30, 1, 0),
 		Position = UDim2.new(0.45, 0, 0, 0),
 		BackgroundTransparency = 1,
-		Text = "Any ▾",
+		Text = "Any",
 		TextColor3 = DIM_TEXT_COLOR,
 		TextSize = 12,
 		Font = TEXT_FONT,
 		TextXAlignment = Enum.TextXAlignment.Right,
 		TextTruncate = Enum.TextTruncate.AtEnd,
 	}, headerBtn)
+	local _, pointSummaryArrow = createArrow(headerBtn)
 
 	local panel = create("Frame", {
 		Size = UDim2.new(1, -12, 0, 166),
@@ -2397,15 +2624,15 @@ local function addMultiDropdown(parent, text, optionsProvider)
 				if not firstLabel then firstLabel = k end
 			end
 		end
-		local arrow = expanded and " ▴" or " ▾"
+		pointSummaryArrow(expanded)
 		if count == 0 then
-			summaryLbl.Text = "Any" .. arrow
+			summaryLbl.Text = "Any"
 			summaryLbl.TextColor3 = DIM_TEXT_COLOR
 		elseif count == 1 then
-			summaryLbl.Text = tostring(firstLabel) .. arrow
+			summaryLbl.Text = tostring(firstLabel)
 			summaryLbl.TextColor3 = ACCENT_A
 		else
-			summaryLbl.Text = tostring(count) .. " selected" .. arrow
+			summaryLbl.Text = tostring(count) .. " selected"
 			summaryLbl.TextColor3 = ACCENT_A
 		end
 		for key, info in pairs(rowButtons) do
