@@ -934,9 +934,14 @@ local function restorePerfect()
 end
 TemplateHub.restorePerfect = restorePerfect
 
+local perfectHeld = false
+
 local function setPerfect(enabled)
 	if not enabled then
-		if meterPatch.module then meterAssistApply(false) end
+		if perfectHeld then
+			perfectHeld = false
+			meterAssistApply(false)
+		end
 		return true
 	end
 	if game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
@@ -945,7 +950,10 @@ local function setPerfect(enabled)
 	if not ok or type(meter) ~= "table" then return false, tostring(meter) end
 	if type(meter.Run) ~= "function" then return false, "ThrowMeter.Run unavailable" end
 
-	meterAssistApply(true)
+	if not perfectHeld then
+		perfectHeld = true
+		meterAssistApply(true)
+	end
 	return true
 end
 TemplateHub.featureCallbacks["Auto Perfect"] = setPerfect
@@ -1405,7 +1413,8 @@ local function forecastThrow()
 
 	local okData, data = pcall(playerData)
 	local level = okData and tonumber(data.Level) or 1
-	local meter = TemplateHub.values["Auto Perfect"] and 1 or tonumber(TemplateHub.values["Throw Power"]) or 0
+	local autoMeter = TemplateHub.values["Auto Perfect"] or TemplateHub.values["Farm Animals"]
+	local meter = autoMeter and 1 or (tonumber(TemplateHub.values["Throw Power"]) or 0)
 	local reach = levels.ThrowPowerForLevel(level) + (gameConfig.Throw.MeterBonusStuds or 0) * meter
 
 	local okLanding, _, areaIndex = pcall(areaUtil.ComputeLanding, reach, 0)
@@ -1592,7 +1601,9 @@ prepareIndex = function()
 	if type(collections) ~= "table" then error("Index collections unavailable") end
 	local max = levels.ThrowPowerForLevel(tonumber(data.Level) or 1)
 	local min = math.min(levels.MinThrowPower, max)
-	local meter = TemplateHub.values["Auto Perfect"] and 1 or TemplateHub.values["Throw Power"]
+	-- Auto Index must assume the same meter the throw will actually use.
+	local autoMeter = TemplateHub.values["Auto Perfect"] or TemplateHub.values["Farm Animals"]
+	local meter = autoMeter and 1 or TemplateHub.values["Throw Power"]
 	local bonus = (gameConfig.Throw.MeterBonusStuds or 0) * meter
 	local selected, desired, selectedProgress
 	for i = 1, areaUtil.Count() do
