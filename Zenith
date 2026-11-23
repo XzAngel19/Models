@@ -41,6 +41,50 @@ local MEDIUM_TWEEN = TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDire
 local POP_TWEEN = TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 
 local localPlayer = playersService.LocalPlayer
+local MOBILE_ICON_URL = "https://raw.githubusercontent.com/XzAngel19/Models/94d1dfde54beb7895d426f79914ca255b153974f/ZenithMobileIcon.png"
+local MOBILE_ICON_FILE = "ZenithMobileIcon.png"
+
+---Detect an Android or iOS device, with touch-only fallback for older clients.
+local function isMobileDevice()
+	local ok, platform = pcall(function()
+		return userInputService:GetPlatform()
+	end)
+	if ok and typeof(platform) == "EnumItem" then
+		return platform.Name == "Android" or platform.Name == "IOS"
+	end
+	return userInputService.TouchEnabled and not userInputService.KeyboardEnabled
+end
+
+---Download the bundled icon into the executor's local asset cache when supported.
+local function loadMobileIcon()
+	local assetLoader = getcustomasset or getsynasset
+	if type(assetLoader) ~= "function" or type(writefile) ~= "function" then
+		return nil
+	end
+
+	local hasFile = false
+	if type(isfile) == "function" then
+		local ok, exists = pcall(isfile, MOBILE_ICON_FILE)
+		hasFile = ok and exists == true
+	end
+
+	if not hasFile then
+		local ok, imageData = pcall(function()
+			return game:HttpGet(MOBILE_ICON_URL)
+		end)
+		if not ok or type(imageData) ~= "string" or #imageData < 100 then
+			return nil
+		end
+		local saved = pcall(writefile, MOBILE_ICON_FILE, imageData)
+		if not saved then return nil end
+	end
+
+	local ok, asset = pcall(assetLoader, MOBILE_ICON_FILE)
+	if ok and type(asset) == "string" and asset ~= "" then
+		return asset
+	end
+	return nil
+end
 
 local TemplateHub = {
 	values = {},
@@ -1463,6 +1507,70 @@ local function initializeScript()
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 	}, guiParent)
 
+	-- Touch-only launcher stays enabled while the main menu is hidden.
+	local mobileToggleGui
+	if isMobileDevice() then
+		local previousToggle = guiParent:FindFirstChild("ZenithMobileToggle")
+		if previousToggle then previousToggle:Destroy() end
+
+		mobileToggleGui = create("ScreenGui", {
+			Name = "ZenithMobileToggle",
+			ResetOnSpawn = false,
+			IgnoreGuiInset = true,
+			DisplayOrder = 100,
+			ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		}, guiParent)
+
+		local mobileButton = create("ImageButton", {
+			Name = "MenuToggle",
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -14, 0, 86),
+			Size = UDim2.fromOffset(50, 50),
+			BackgroundColor3 = Color3.fromRGB(16, 16, 18),
+			BackgroundTransparency = 0.08,
+			BorderSizePixel = 0,
+			Image = "",
+			ImageColor3 = Color3.new(1, 1, 1),
+			ScaleType = Enum.ScaleType.Crop,
+			AutoButtonColor = false,
+			ClipsDescendants = true,
+			ZIndex = 10,
+		}, mobileToggleGui)
+		create("UICorner", { CornerRadius = UDim.new(1, 0) }, mobileButton)
+		local mobileButtonStroke = addStroke(mobileButton, ACCENT_A, 0.2, 1.5)
+		local fallbackIcon = create("TextLabel", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			Text = "Z",
+			TextColor3 = TEXT_COLOR,
+			TextSize = 22,
+			Font = BOLD_FONT,
+			ZIndex = 11,
+		}, mobileButton)
+
+		local function updateMobileButtonStyle()
+			local open = screenGui.Enabled
+			tween(mobileButtonStroke, FAST_TWEEN, {
+				Color = open and ACCENT_A or DIM_TEXT_COLOR,
+				Transparency = open and 0.2 or 0.55,
+			})
+		end
+
+		mobileButton.Activated:Connect(function()
+			screenGui.Enabled = not screenGui.Enabled
+		end)
+		screenGui:GetPropertyChangedSignal("Enabled"):Connect(updateMobileButtonStyle)
+		updateMobileButtonStyle()
+
+		task.spawn(function()
+			local icon = loadMobileIcon()
+			if icon and mobileButton.Parent then
+				mobileButton.Image = icon
+				fallbackIcon.Visible = false
+			end
+		end)
+	end
+
 	if typeof(shared) == "table" then
 		shared.ThrowFoodHubGui = screenGui
 		shared.ThrowFoodHub = TemplateHub
@@ -1470,6 +1578,9 @@ local function initializeScript()
 
 	-- Stop every global listener when the GUI is destroyed.
 	screenGui.Destroying:Connect(function()
+		if mobileToggleGui and mobileToggleGui.Parent then
+			mobileToggleGui:Destroy()
+		end
 		TemplateHub.active = false
 		TemplateHub.values["Farm Animals"] = false
 		TemplateHub.values["Auto Train"] = false
