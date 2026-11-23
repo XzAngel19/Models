@@ -1,0 +1,3370 @@
+-- Throw Food for Animals | GUI based on the supplied template.
+-- Services.
+local playersService = game:GetService("Players")
+local userInputService = game:GetService("UserInputService")
+local tweenService = game:GetService("TweenService")
+local httpService = game:GetService("HttpService")
+local replicatedStorage = game:GetService("ReplicatedStorage")
+local lighting = game:GetService("Lighting")
+local runService = game:GetService("RunService")
+local collectionService = game:GetService("CollectionService")
+
+-- Constants.
+local WINDOW_WIDTH = 420
+local WINDOW_HEIGHT = 540
+local TITLE_HEIGHT = 34
+local TAB_HEIGHT = 30
+local MIN_WIDTH = 360
+local MIN_HEIGHT = 360
+local MAX_WIDTH = 820
+local MAX_HEIGHT = 800
+local CONFIG_FOLDER = "ThrowFoodHub"
+local CONFIG_FILE = "ThrowFoodHub/Settings.json"
+local TAB_NAMES = { "Main", "Extra", "Visuals", "Config" }
+local TITLE_TEXT = "Zenith"
+local GAME_PLACE_ID = 120219252362013
+
+local ACCENT_A = Color3.fromRGB(225, 225, 225)
+local ACCENT_B = Color3.fromRGB(110, 110, 116)
+local BACKGROUND_TOP = Color3.fromRGB(25, 25, 27)
+local BACKGROUND_BOTTOM = Color3.fromRGB(9, 9, 10)
+local ROW_COLOR = Color3.fromRGB(34, 34, 36)
+local ELEMENT_COLOR = Color3.fromRGB(17, 17, 19)
+local TEXT_COLOR = Color3.fromRGB(238, 238, 238)
+local OFF_TEXT_COLOR = Color3.fromRGB(192, 192, 196)
+local DIM_TEXT_COLOR = Color3.fromRGB(120, 120, 124)
+
+local TEXT_FONT = Enum.Font.SourceSans
+local BOLD_FONT = Enum.Font.SourceSansBold
+
+local FAST_TWEEN = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local SLIDE_TWEEN = TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local MEDIUM_TWEEN = TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local POP_TWEEN = TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+
+local localPlayer = playersService.LocalPlayer
+
+local TemplateHub = {
+	values = {},
+	pages = {},
+	tabButtons = {},
+	tabIndex = {},
+	searchables = {},
+	sections = {},
+	boxes = {},
+	sectionBoxes = {},
+	setters = {},
+	connections = {},
+	keybinds = {},
+	keyLabels = {},
+	listening = nil,
+	defaults = {},
+	menuKey = Enum.KeyCode.RightShift,
+	active = true,
+	featureCallbacks = {},
+}
+
+---Create an instance with properties.
+local function create(className, properties, parent)
+	local instance = Instance.new(className)
+
+	for key, value in properties do
+		instance[key] = value
+	end
+
+	instance.Parent = parent
+	return instance
+end
+
+---Play a tween.
+local function tween(instance, info, goal)
+	local newTween = tweenService:Create(instance, info, goal)
+	newTween:Play()
+	return newTween
+end
+
+---Connect a global input signal that is cleaned up when the GUI closes.
+local function connectInput(signal, callback)
+	local connection = signal:Connect(callback)
+	table.insert(TemplateHub.connections, connection)
+	return connection
+end
+
+---Check if an input is a primary press.
+local function isPress(input)
+	return input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch
+end
+
+---Check if an input is pointer movement.
+local function isMove(input)
+	return input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch
+end
+
+---Add the accent gradient to an object.
+local function addGradient(parent, rotation)
+	return create("UIGradient", {
+		Color = ColorSequence.new(ACCENT_A, ACCENT_B),
+		Rotation = rotation,
+	}, parent)
+end
+
+---Add a border stroke to an object.
+local function addStroke(parent, color, transparency, thickness)
+	return create("UIStroke", {
+		Color = color,
+		Transparency = transparency,
+		Thickness = thickness or 1,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	}, parent)
+end
+
+---Create a rounded row card.
+local function createCard(className, parent, text, height)
+	local card = create(className, {
+		Name = text,
+		Size = UDim2.new(1, 0, 0, height),
+		BackgroundColor3 = ROW_COLOR,
+		BackgroundTransparency = 0.65,
+		BorderSizePixel = 0,
+	}, TemplateHub.sectionBoxes[parent] or parent)
+
+	create("UICorner", { CornerRadius = UDim.new(0, 5) }, card)
+	local stroke = addStroke(card, ACCENT_A, 1)
+	card.ClipsDescendants = true
+
+	-- Rows of a collapsible group start hidden and follow the group button.
+	local group = TemplateHub.currentGroup
+	if group then
+		table.insert(group.cards, card)
+		card:SetAttribute("GroupHidden", group.collapsed)
+		card.Visible = not group.collapsed
+	end
+
+	-- Click ripple that expands from the cursor.
+	card.InputBegan:Connect(function(input)
+		if not isPress(input) then
+			return
+		end
+
+		local offset = Vector2.new(input.Position.X, input.Position.Y) - card.AbsolutePosition
+
+		local ripple = create("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromOffset(offset.X, offset.Y),
+			Size = UDim2.fromOffset(0, 0),
+			BackgroundColor3 = Color3.new(1, 1, 1),
+			BackgroundTransparency = 0.8,
+			BorderSizePixel = 0,
+			ZIndex = 0,
+		}, card)
+
+		create("UICorner", { CornerRadius = UDim.new(1, 0) }, ripple)
+
+		local diameter = math.max(card.AbsoluteSize.X, card.AbsoluteSize.Y) * 2
+
+		tween(ripple, MEDIUM_TWEEN, {
+			Size = UDim2.fromOffset(diameter, diameter),
+			BackgroundTransparency = 1,
+		}).Completed:Connect(function()
+			ripple:Destroy()
+		end)
+	end)
+
+	card.MouseEnter:Connect(function()
+		tween(card, FAST_TWEEN, { BackgroundTransparency = 0.35 })
+		tween(stroke, FAST_TWEEN, { Transparency = 0.55 })
+	end)
+
+	card.MouseLeave:Connect(function()
+		tween(card, FAST_TWEEN, { BackgroundTransparency = 0.65 })
+		tween(stroke, FAST_TWEEN, { Transparency = 1 })
+	end)
+
+	return card, stroke
+end
+
+---Add a section group box. Following rows are placed inside it.
+local function addSection(parent, text)
+	local box = create("Frame", {
+		Name = text .. " Box",
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundColor3 = Color3.fromRGB(22, 22, 24),
+		BackgroundTransparency = 0.2,
+		BorderSizePixel = 0,
+		LayoutOrder = #TemplateHub.boxes + 1,
+	}, parent)
+
+	create("UICorner", { CornerRadius = UDim.new(0, 8) }, box)
+	addStroke(box, Color3.fromRGB(105, 105, 110), 0.55)
+
+	create("UIGradient", {
+		Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(165, 165, 170)),
+		Rotation = 90,
+	}, box)
+
+	create("UIPadding", {
+		PaddingTop = UDim.new(0, 4),
+		PaddingBottom = UDim.new(0, 6),
+		PaddingLeft = UDim.new(0, 6),
+		PaddingRight = UDim.new(0, 6),
+	}, box)
+
+	create("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder }, box)
+
+	local holder = create("Frame", {
+		Name = text,
+		Size = UDim2.new(1, 0, 0, 26),
+		BackgroundTransparency = 1,
+	}, box)
+
+	local marker = create("Frame", {
+		Size = UDim2.fromOffset(3, 12),
+		Position = UDim2.new(0, 3, 0.5, -7),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0,
+	}, holder)
+
+	create("UICorner", { CornerRadius = UDim.new(1, 0) }, marker)
+	addGradient(marker, 90)
+
+	tweenService:Create(
+		marker,
+		TweenInfo.new(1.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+		{ BackgroundTransparency = 0.5 }
+	):Play()
+
+	create("TextLabel", {
+		Size = UDim2.new(1, -14, 1, -4),
+		Position = UDim2.fromOffset(12, 0),
+		BackgroundTransparency = 1,
+		Text = string.upper(text),
+		TextColor3 = ACCENT_A,
+		TextSize = 11,
+		Font = BOLD_FONT,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, holder)
+
+	local line = create("Frame", {
+		Size = UDim2.new(1, 0, 0, 1),
+		Position = UDim2.new(0, 0, 1, -2),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0,
+	}, holder)
+
+	local gradient = addGradient(line, 0)
+	gradient.Transparency = NumberSequence.new(0.3, 1)
+
+	TemplateHub.sectionBoxes[parent] = box
+	table.insert(TemplateHub.boxes, box)
+	table.insert(TemplateHub.sections, holder)
+end
+
+---Add a toggle row.
+local function addToggle(parent, text, keybind, default)
+	local holder, stroke = createCard("TextButton", parent, text, 28)
+	holder.Text = ""
+	holder.AutoButtonColor = false
+
+	local box = create("Frame", {
+		Size = UDim2.fromOffset(16, 16),
+		Position = UDim2.new(0, 8, 0.5, -8),
+		BackgroundColor3 = ELEMENT_COLOR,
+		BorderSizePixel = 0,
+	}, holder)
+
+	create("UICorner", { CornerRadius = UDim.new(0, 4) }, box)
+	local boxStroke = addStroke(box, default and ACCENT_A or DIM_TEXT_COLOR, default and 0 or 0.5)
+
+	local check = create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = default and UDim2.fromOffset(10, 10) or UDim2.fromOffset(0, 0),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0,
+	}, box)
+
+	create("UICorner", { CornerRadius = UDim.new(0, 3) }, check)
+	addGradient(check, 45)
+
+	local label = create("TextLabel", {
+		Size = UDim2.new(1, -40, 1, 0),
+		Position = UDim2.fromOffset(32, 0),
+		BackgroundTransparency = 1,
+		Text = text,
+		TextColor3 = default and TEXT_COLOR or OFF_TEXT_COLOR,
+		TextSize = 13,
+		Font = TEXT_FONT,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, holder)
+
+	-- Glowing marker on the left edge while enabled.
+	local accentBar = create("Frame", {
+		Size = UDim2.new(0, 3, 1, -10),
+		Position = UDim2.fromOffset(0, 5),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BackgroundTransparency = default and 0 or 1,
+		BorderSizePixel = 0,
+	}, holder)
+
+	create("UICorner", { CornerRadius = UDim.new(1, 0) }, accentBar)
+	addGradient(accentBar, 90)
+
+	local state = default
+	TemplateHub.values[text] = state
+	TemplateHub.defaults[text] = default
+
+	TemplateHub.setters[text] = function(value)
+		local previous = state
+		state = value == true
+		TemplateHub.values[text] = state
+		local callback = TemplateHub.featureCallbacks[text]
+		if callback and state ~= previous then
+			local ok, accepted, reason = pcall(callback, state)
+			if not ok or accepted == false then
+				state = false
+				TemplateHub.values[text] = false
+				local message = ok and reason or accepted
+				if TemplateHub.report then TemplateHub.report(tostring(message or "Feature unavailable"), true) end
+			end
+		end
+
+		tween(check, POP_TWEEN, { Size = state and UDim2.fromOffset(10, 10) or UDim2.fromOffset(0, 0) })
+		tween(boxStroke, FAST_TWEEN, { Color = state and ACCENT_A or DIM_TEXT_COLOR, Transparency = state and 0 or 0.5 })
+		tween(label, FAST_TWEEN, { TextColor3 = state and TEXT_COLOR or OFF_TEXT_COLOR })
+		tween(accentBar, FAST_TWEEN, { BackgroundTransparency = state and 0 or 1 })
+	end
+
+	-- Clickable keybind label: click it, then press a key. Escape clears it.
+	if keybind then
+		local keybindName = text .. " Keybind"
+
+		local keybindButton = create("TextButton", {
+			Size = UDim2.fromOffset(52, 22),
+			Position = UDim2.new(1, -58, 0.5, -11),
+			BackgroundTransparency = 1,
+			Text = "[" .. keybind .. "]",
+			TextColor3 = DIM_TEXT_COLOR,
+			TextSize = 12,
+			Font = TEXT_FONT,
+			TextXAlignment = Enum.TextXAlignment.Right,
+			AutoButtonColor = false,
+		}, holder)
+
+		---Apply a key name to this toggle.
+		local function applyKey(keyName)
+			local keyCode = nil
+
+			for _, item in Enum.KeyCode:GetEnumItems() do
+				if item.Name == keyName then
+					keyCode = item
+					break
+				end
+			end
+
+			TemplateHub.keybinds[text] = keyCode
+			TemplateHub.values[keybindName] = keyCode and keyName or ""
+			keybindButton.Text = keyCode and ("[" .. keyName .. "]") or "[None]"
+			keybindButton.Visible = TemplateHub.values["Keybind Hints"] ~= false
+		end
+
+		TemplateHub.defaults[keybindName] = keybind
+		TemplateHub.setters[keybindName] = applyKey
+		TemplateHub.keyLabels[text] = keybindButton
+		applyKey(keybind)
+
+		keybindButton.MouseEnter:Connect(function()
+			tween(keybindButton, FAST_TWEEN, { TextColor3 = ACCENT_A })
+		end)
+
+		keybindButton.MouseLeave:Connect(function()
+			if not TemplateHub.listening then
+				tween(keybindButton, FAST_TWEEN, { TextColor3 = DIM_TEXT_COLOR })
+			end
+		end)
+
+		keybindButton.Activated:Connect(function()
+			-- Cancel any other keybind that is still waiting for a key.
+			if TemplateHub.cancelListening then
+				TemplateHub.cancelListening()
+			end
+
+			local previousKey = TemplateHub.values[keybindName]
+			keybindButton.Text = "[...]"
+			tween(keybindButton, FAST_TWEEN, { TextColor3 = ACCENT_A })
+
+			TemplateHub.cancelListening = function()
+				TemplateHub.listening = nil
+				TemplateHub.cancelListening = nil
+				tween(keybindButton, FAST_TWEEN, { TextColor3 = DIM_TEXT_COLOR })
+				applyKey(previousKey)
+			end
+
+			TemplateHub.listening = function(keyCode)
+				TemplateHub.listening = nil
+				TemplateHub.cancelListening = nil
+				tween(keybindButton, FAST_TWEEN, { TextColor3 = DIM_TEXT_COLOR })
+				applyKey(keyCode == Enum.KeyCode.Escape and "" or keyCode.Name)
+			end
+		end)
+	end
+
+	holder.MouseButton1Down:Connect(function()
+		tween(holder, FAST_TWEEN, { BackgroundTransparency = 0 })
+		tween(stroke, FAST_TWEEN, { Transparency = 0 })
+	end)
+
+	holder.MouseButton1Up:Connect(function()
+		tween(holder, FAST_TWEEN, { BackgroundTransparency = 0.35 })
+		tween(stroke, FAST_TWEEN, { Transparency = 0.55 })
+	end)
+
+	holder.Activated:Connect(function()
+		TemplateHub.setters[text](not state)
+
+		if TemplateHub.notify then
+			TemplateHub.notify(text, state)
+		end
+	end)
+
+	holder.MouseEnter:Connect(function()
+		tween(label, FAST_TWEEN, { Position = UDim2.fromOffset(36, 0) })
+	end)
+
+	holder.MouseLeave:Connect(function()
+		tween(label, FAST_TWEEN, { Position = UDim2.fromOffset(32, 0) })
+	end)
+
+	table.insert(TemplateHub.searchables, holder)
+end
+
+---Add a slider row.
+local function addSlider(parent, text, minValue, maxValue, default, decimals)
+	local holder = createCard("Frame", parent, text, 44)
+	local startAlpha = (default - minValue) / (maxValue - minValue)
+
+	create("TextLabel", {
+		Size = UDim2.new(1, -70, 0, 20),
+		Position = UDim2.fromOffset(10, 3),
+		BackgroundTransparency = 1,
+		Text = text,
+		TextColor3 = TEXT_COLOR,
+		TextSize = 13,
+		Font = TEXT_FONT,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, holder)
+
+	local valueLabel = create("TextLabel", {
+		Size = UDim2.fromOffset(56, 20),
+		Position = UDim2.new(1, -66, 0, 3),
+		BackgroundTransparency = 1,
+		Text = tostring(default),
+		TextColor3 = OFF_TEXT_COLOR,
+		TextSize = 13,
+		Font = BOLD_FONT,
+		TextXAlignment = Enum.TextXAlignment.Right,
+	}, holder)
+
+	local bar = create("Frame", {
+		Size = UDim2.new(1, -20, 0, 6),
+		Position = UDim2.fromOffset(10, 29),
+		BackgroundColor3 = ELEMENT_COLOR,
+		BorderSizePixel = 0,
+	}, holder)
+
+	create("UICorner", { CornerRadius = UDim.new(1, 0) }, bar)
+	addStroke(bar, Color3.new(1, 1, 1), 0.88)
+
+	local fill = create("Frame", {
+		Size = UDim2.fromScale(startAlpha, 1),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0,
+	}, bar)
+
+	create("UICorner", { CornerRadius = UDim.new(1, 0) }, fill)
+	addGradient(fill, 0)
+
+	local knob = create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Size = UDim2.fromOffset(12, 12),
+		Position = UDim2.new(startAlpha, 0, 0.5, 0),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0,
+	}, bar)
+
+	create("UICorner", { CornerRadius = UDim.new(1, 0) }, knob)
+	addStroke(knob, ACCENT_A, 0, 2)
+	local knobScale = create("UIScale", {}, knob)
+
+	local hitbox = create("Frame", {
+		Size = UDim2.new(1, -20, 0, 22),
+		Position = UDim2.fromOffset(10, 21),
+		BackgroundTransparency = 1,
+	}, holder)
+
+	TemplateHub.values[text] = default
+	TemplateHub.defaults[text] = default
+
+	local dragging = false
+
+	local function setValue(value)
+		local factor = 10 ^ decimals
+		value = math.floor(math.clamp(value, minValue, maxValue) * factor + 0.5) / factor
+		local snapped = (value - minValue) / (maxValue - minValue)
+
+		tween(fill, SLIDE_TWEEN, { Size = UDim2.fromScale(snapped, 1) })
+		tween(knob, SLIDE_TWEEN, { Position = UDim2.new(snapped, 0, 0.5, 0) })
+
+		valueLabel.Text = tostring(value)
+		TemplateHub.values[text] = value
+	end
+
+	TemplateHub.setters[text] = setValue
+
+	local function updateFromX(positionX)
+		local alpha = math.clamp((positionX - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
+		setValue(minValue + (maxValue - minValue) * alpha)
+	end
+
+	hitbox.InputBegan:Connect(function(input)
+		if not isPress(input) then
+			return
+		end
+
+		dragging = true
+		tween(knobScale, POP_TWEEN, { Scale = 1.35 })
+		tween(valueLabel, FAST_TWEEN, { TextColor3 = ACCENT_A })
+		updateFromX(input.Position.X)
+	end)
+
+	connectInput(userInputService.InputChanged, function(input)
+		if dragging and isMove(input) then
+			updateFromX(input.Position.X)
+		end
+	end)
+
+	connectInput(userInputService.InputEnded, function(input)
+		if not dragging or not isPress(input) then
+			return
+		end
+
+		dragging = false
+		tween(knobScale, POP_TWEEN, { Scale = 1 })
+		tween(valueLabel, FAST_TWEEN, { TextColor3 = OFF_TEXT_COLOR })
+	end)
+
+	table.insert(TemplateHub.searchables, holder)
+end
+
+---Add a cycling option row.
+local function addCycle(parent, text, options)
+	local holder = createCard("Frame", parent, text, 56)
+
+	create("TextLabel", {
+		Size = UDim2.new(1, -20, 0, 20),
+		Position = UDim2.fromOffset(10, 3),
+		BackgroundTransparency = 1,
+		Text = text,
+		TextColor3 = TEXT_COLOR,
+		TextSize = 13,
+		Font = TEXT_FONT,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, holder)
+
+	local button = create("TextButton", {
+		Size = UDim2.new(1, -20, 0, 24),
+		Position = UDim2.fromOffset(10, 26),
+		BackgroundColor3 = ELEMENT_COLOR,
+		BorderSizePixel = 0,
+		Text = options[1],
+		TextColor3 = TEXT_COLOR,
+		TextSize = 13,
+		Font = TEXT_FONT,
+		AutoButtonColor = false,
+	}, holder)
+
+	create("UICorner", { CornerRadius = UDim.new(0, 4) }, button)
+	local buttonStroke = addStroke(button, DIM_TEXT_COLOR, 0.6)
+
+	local index = 1
+	TemplateHub.values[text] = options[1]
+	TemplateHub.defaults[text] = options[1]
+
+	TemplateHub.setters[text] = function(value)
+		local found = table.find(options, value)
+		if not found then
+			return
+		end
+
+		index = found
+		TemplateHub.values[text] = options[index]
+		button.Text = options[index]
+	end
+
+	button.MouseEnter:Connect(function()
+		tween(buttonStroke, FAST_TWEEN, { Color = ACCENT_A, Transparency = 0 })
+	end)
+
+	button.MouseLeave:Connect(function()
+		tween(buttonStroke, FAST_TWEEN, { Color = DIM_TEXT_COLOR, Transparency = 0.6 })
+	end)
+
+	button.Activated:Connect(function()
+		index = index % #options + 1
+		TemplateHub.values[text] = options[index]
+
+		button.Text = options[index]
+		button.TextTransparency = 1
+		tween(button, FAST_TWEEN, { TextTransparency = 0 })
+	end)
+
+	table.insert(TemplateHub.searchables, holder)
+end
+
+---Add an action button row.
+local function addButton(parent, text, callback)
+	local holder = createCard("Frame", parent, text, 34)
+
+	local button = create("TextButton", {
+		Size = UDim2.new(1, -16, 0, 24),
+		Position = UDim2.fromOffset(8, 5),
+		BackgroundColor3 = ELEMENT_COLOR,
+		BorderSizePixel = 0,
+		Text = text,
+		TextColor3 = TEXT_COLOR,
+		TextSize = 13,
+		Font = TEXT_FONT,
+		AutoButtonColor = false,
+	}, holder)
+
+	create("UICorner", { CornerRadius = UDim.new(0, 4) }, button)
+	local buttonStroke = addStroke(button, DIM_TEXT_COLOR, 0.6)
+
+	button.MouseEnter:Connect(function()
+		tween(buttonStroke, FAST_TWEEN, { Color = ACCENT_A, Transparency = 0 })
+		tween(button, FAST_TWEEN, { BackgroundColor3 = Color3.fromRGB(28, 28, 30) })
+	end)
+
+	button.MouseLeave:Connect(function()
+		tween(buttonStroke, FAST_TWEEN, { Color = DIM_TEXT_COLOR, Transparency = 0.6 })
+		tween(button, FAST_TWEEN, { BackgroundColor3 = ELEMENT_COLOR })
+	end)
+
+	button.MouseButton1Down:Connect(function()
+		tween(button, FAST_TWEEN, { BackgroundColor3 = Color3.fromRGB(46, 46, 48) })
+	end)
+
+	button.MouseButton1Up:Connect(function()
+		tween(button, FAST_TWEEN, { BackgroundColor3 = Color3.fromRGB(28, 28, 30) })
+	end)
+
+	button.Activated:Connect(callback)
+	table.insert(TemplateHub.searchables, holder)
+end
+
+---Start a group of rows that a button shows or hides. The rows that follow belong to the group.
+local function beginGroup(parent, text)
+	local group = { cards = {}, collapsed = true }
+	local holder = createCard("Frame", parent, text .. " Options", 30)
+
+	local button = create("TextButton", {
+		Size = UDim2.new(1, -16, 0, 22),
+		Position = UDim2.fromOffset(8, 4),
+		BackgroundColor3 = ELEMENT_COLOR,
+		BorderSizePixel = 0,
+		Text = "+  Show options",
+		TextColor3 = OFF_TEXT_COLOR,
+		TextSize = 12,
+		Font = TEXT_FONT,
+		AutoButtonColor = false,
+	}, holder)
+
+	create("UICorner", { CornerRadius = UDim.new(0, 4) }, button)
+	local buttonStroke = addStroke(button, DIM_TEXT_COLOR, 0.6)
+
+	button.MouseEnter:Connect(function()
+		tween(buttonStroke, FAST_TWEEN, { Color = ACCENT_A, Transparency = 0 })
+	end)
+
+	button.MouseLeave:Connect(function()
+		tween(buttonStroke, FAST_TWEEN, { Color = DIM_TEXT_COLOR, Transparency = 0.6 })
+	end)
+
+	button.Activated:Connect(function()
+		group.collapsed = not group.collapsed
+		button.Text = group.collapsed and "+  Show options" or "-  Hide options"
+
+		for _, card in group.cards do
+			card:SetAttribute("GroupHidden", group.collapsed)
+			card.Visible = not group.collapsed
+		end
+	end)
+
+	table.insert(TemplateHub.searchables, holder)
+	TemplateHub.currentGroup = group
+end
+
+---End the current group of rows.
+local function endGroup()
+	TemplateHub.currentGroup = nil
+end
+
+---Create a scrolling column.
+local function createColumn(parent, position)
+	local column = create("ScrollingFrame", {
+		Size = UDim2.new(0.5, -6, 1, 0),
+		Position = position,
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = ACCENT_A,
+		ScrollBarImageTransparency = 0.4,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	}, parent)
+
+	create("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }, column)
+	create("UIPadding", { PaddingRight = UDim.new(0, 6) }, column)
+
+	return column
+end
+
+---Make a frame draggable by a handle.
+local function makeDraggable(handle, target)
+	local dragStart, startPosition
+
+	handle.InputBegan:Connect(function(input)
+		if not isPress(input) then
+			return
+		end
+
+		dragStart = input.Position
+		startPosition = target.Position
+	end)
+
+	connectInput(userInputService.InputChanged, function(input)
+		if not dragStart or not isMove(input) then
+			return
+		end
+
+		local delta = input.Position - dragStart
+
+		target.Position = UDim2.new(
+			startPosition.X.Scale,
+			startPosition.X.Offset + delta.X,
+			startPosition.Y.Scale,
+			startPosition.Y.Offset + delta.Y
+		)
+	end)
+
+	connectInput(userInputService.InputEnded, function(input)
+		if isPress(input) then
+			dragStart = nil
+		end
+	end)
+end
+
+---Create a title bar button with hover and press effects.
+local function createTitleButton(parent, text, offset, hoverColor)
+	local button = create("TextButton", {
+		Size = UDim2.fromOffset(24, 22),
+		Position = UDim2.new(1, offset, 0.5, -11),
+		BackgroundColor3 = ELEMENT_COLOR,
+		BackgroundTransparency = 0.4,
+		BorderSizePixel = 0,
+		Text = text,
+		TextColor3 = TEXT_COLOR,
+		TextSize = 13,
+		Font = BOLD_FONT,
+		AutoButtonColor = false,
+	}, parent)
+
+	create("UICorner", { CornerRadius = UDim.new(0, 5) }, button)
+
+	button.MouseEnter:Connect(function()
+		tween(button, FAST_TWEEN, { BackgroundColor3 = hoverColor, BackgroundTransparency = 0.1 })
+	end)
+
+	button.MouseLeave:Connect(function()
+		tween(button, FAST_TWEEN, { BackgroundColor3 = ELEMENT_COLOR, BackgroundTransparency = 0.4 })
+	end)
+
+	button.MouseButton1Down:Connect(function()
+		tween(button, FAST_TWEEN, { BackgroundTransparency = 0.4 })
+	end)
+
+	return button
+end
+
+---Switch the visible tab.
+local function switchTab(name)
+	for pageName, page in TemplateHub.pages do
+		local selected = pageName == name
+
+		page.Visible = selected
+		tween(TemplateHub.tabButtons[pageName], FAST_TWEEN, { TextColor3 = selected and TEXT_COLOR or DIM_TEXT_COLOR })
+
+		if selected then
+			page.GroupTransparency = 1
+			tween(page, MEDIUM_TWEEN, { GroupTransparency = 0 })
+		end
+	end
+
+	TemplateHub.selected = name
+	tween(TemplateHub.indicator, MEDIUM_TWEEN, { Position = UDim2.new((TemplateHub.tabIndex[name] - 1) / #TAB_NAMES, 6, 0, 3) })
+end
+
+-- Data from the capture covers only a subset of the reference menu.
+local remoteTypes = {
+	Throw_Start = "RemoteFunction",
+	Throw_MeterStarted = "RemoteEvent",
+	Throw_Resolve = "RemoteFunction",
+	Throw_Revealed = "RemoteEvent",
+	Throw_Complete = "RemoteFunction",
+	Throw_UseSandwich = "RemoteFunction",
+	Training_Start = "RemoteFunction",
+	Training_Stop = "RemoteFunction",
+	Training_Bonus = "RemoteEvent",
+	Training_TapBonus = "RemoteFunction",
+	Throw_Cancel = "RemoteFunction",
+	Plot_EquipBest = "RemoteFunction",
+	Player_SetThrowPower = "RemoteFunction",
+	IndexRewards_Claim = "RemoteFunction",
+	IndexRewards_Equip = "RemoteFunction",
+	Plot_UpgradeFence = "RemoteFunction",
+	Shop_Buy = "RemoteFunction",
+	Shop_Equip = "RemoteFunction",
+	Plot_SellAnimal = "RemoteFunction",
+	Thanksgiving_Action = "RemoteFunction",
+	Stand_Upgrade = "RemoteFunction",
+}
+local remoteBusy = {}
+local farmWorker, trainWorker = false, false
+local clientModule
+local sharedModule
+local configModule
+local playerData
+local doCall
+local prepareIndex
+local prepareThanksgivingIndex
+local showInstantThrowResult
+local patchedMeterEntries = {}
+local patchedArcEntries = {}
+local patchedRevealEntries = {}
+local patchedScreenFXEntries = {}
+local originalInvokeServer, invokeHookInstalled = nil, false
+
+---Find a captured remote without loading game modules.
+local function findRemote(name)
+	if game.PlaceId ~= GAME_PLACE_ID then return nil, "Join Throw Food for Animals first." end
+	local folder = replicatedStorage:FindFirstChild("Remotes")
+	local remote = folder and folder:FindFirstChild(name)
+	if not remote or remote.ClassName ~= remoteTypes[name] then
+		return nil, name .. " missing or class changed"
+	end
+	return remote
+end
+
+---Make a captured call; unknown responses are not treated as verified success.
+local function callRemote(name, allowInactive, ...)
+	if not TemplateHub.active and not allowInactive then return false, "Menu closed" end
+	local remote, reason = findRemote(name)
+	if not remote then return false, reason end
+	if remoteBusy[name] then return false, name .. " is already in flight" end
+	remoteBusy[name] = true
+	local args = table.pack(...)
+	local ok, result = pcall(function()
+		if remote.ClassName == "RemoteEvent" then
+			remote:FireServer(table.unpack(args, 1, args.n))
+			return nil
+		end
+		return remote:InvokeServer(table.unpack(args, 1, args.n))
+	end)
+	remoteBusy[name] = nil
+	if not ok then return false, name .. ": " .. tostring(result) end
+	if type(result) == "table" and result.Ok == false then
+		return false, name .. " rejected: " .. tostring(result.Reason or result.Message or result.Error or "Ok=false")
+	end
+	return true, result
+end
+
+---Wait in short intervals so an automation toggle can stop its worker.
+local function waitEnabled(name, seconds)
+	local deadline = os.clock() + seconds
+	while TemplateHub.active and TemplateHub.values[name] and os.clock() < deadline do
+		task.wait(math.min(0.1, math.max(0, deadline - os.clock())))
+	end
+	return TemplateHub.active and TemplateHub.values[name]
+end
+
+---Find live module tables via require and optional getgc fallback.
+local function collectModuleTables(loaderFn, moduleName, signatureCheck)
+	local found = {}
+	local seen = {}
+	local ok, mod = pcall(loaderFn, moduleName)
+	if ok and type(mod) == "table" and signatureCheck(mod) then
+		seen[mod] = true
+		table.insert(found, mod)
+	end
+	if type(getgc) == "function" then
+		local gcOk, gcList = pcall(getgc, true)
+		if gcOk and type(gcList) == "table" then
+			for _, obj in ipairs(gcList) do
+				if type(obj) == "table" and not seen[obj] and signatureCheck(obj) then
+					seen[obj] = true
+					table.insert(found, obj)
+				end
+			end
+		end
+	end
+	return found
+end
+
+local function isThrowMeterTable(t)
+	return type(rawget(t, "Run")) == "function"
+		and type(rawget(t, "SetLocked")) == "function"
+		and type(rawget(t, "SetTapsBlocked")) == "function"
+		and type(rawget(t, "AddBlocker")) == "function"
+end
+
+local function isProjectileMathTable(t)
+	return type(rawget(t, "FlightTime")) == "function"
+		and type(rawget(t, "GravityFor")) == "function"
+		and type(rawget(t, "CreateArc")) == "function"
+end
+
+local function isRevealSequenceTable(t)
+	local runFn = rawget(t, "Run")
+	if type(runFn) ~= "function" then return false end
+	if type(debug) == "table" and type(debug.info) == "function" then
+		local ok, src = pcall(debug.info, runFn, "s")
+		if ok and type(src) == "string" and string.find(src, "RevealSequence", 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
+local function isScreenFXTable(t)
+	return type(rawget(t, "FadeOut")) == "function"
+		and type(rawget(t, "FadeIn")) == "function"
+		and type(rawget(t, "Cover")) == "function"
+		and type(rawget(t, "Reset")) == "function"
+end
+
+---Character & world location helpers derived from PlotController, ThrowController, TrainingController, ThanksgivingController.
+local function getCharacterRoot()
+	local char = localPlayer.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not (hrp and hum and hum.Health > 0) then
+		return nil, "Character unavailable"
+	end
+	return hrp
+end
+
+local function moveRootTo(hrp, targetCF)
+	if not (hrp and hrp.Parent) then return end
+	hrp.AssemblyLinearVelocity = Vector3.zero
+	hrp.AssemblyAngularVelocity = Vector3.zero
+	hrp.CFrame = targetCF
+end
+
+local function withCharacterAt(targetCF, fn)
+	local hrp, err = getCharacterRoot()
+	if not hrp then return false, err end
+	local savedCF = hrp.CFrame
+	moveRootTo(hrp, targetCF)
+	task.wait(0.12)
+	local ok, r1, r2 = pcall(fn)
+	if hrp and hrp.Parent then
+		moveRootTo(hrp, savedCF)
+	end
+	if not ok then return false, tostring(r1) end
+	return true, r1, r2
+end
+
+local function getPlotBasePos()
+	local plotIdx = localPlayer:GetAttribute("PlotIndex")
+	local plots = workspace:FindFirstChild("Plots")
+	local plot = plots and plotIdx and plots:FindFirstChild(tostring(plotIdx))
+	if not plot then return nil, "Plot not loaded yet" end
+	return plot.Position
+end
+
+local function getTrainingSpotInfo()
+	local props = workspace:FindFirstChild("LocalPlotProps")
+	local area = props and props:FindFirstChild("TrainingArea")
+	local spot = area and (area.PrimaryPart or area:FindFirstChild("TrainingSpot"))
+	if spot and spot:IsA("BasePart") then
+		return spot.Position, math.min(spot.Size.Y, spot.Size.Z) / 2
+	end
+	local plotPos, err = getPlotBasePos()
+	if not plotPos then return nil, err end
+	local ok, cfg = pcall(configModule, "GameConfig")
+	local offset = ok and cfg.Plot and cfg.Plot.TrainingSpotOffset or Vector3.new(-16, 0.5, -30.5)
+	return plotPos + offset, 5
+end
+
+local function getThrowLineCFrame(acrossLine)
+	local starter = workspace:FindFirstChild("StarterArea")
+	if not starter or not starter:IsA("BasePart") then
+		return nil, "StarterArea not found"
+	end
+	local cross = starter:FindFirstChild("CrossLine")
+	local lineZ = cross and cross:IsA("BasePart") and cross.Position.Z or (starter.Position.Z + starter.Size.Z / 2)
+	local y = starter.Position.Y + starter.Size.Y / 2 + 3
+	local z = acrossLine and (lineZ - 1.2) or (lineZ + 1.5)
+	return CFrame.lookAt(Vector3.new(starter.Position.X, y, z), Vector3.new(starter.Position.X, y, z - 10))
+end
+
+local function getFenceSignCFrame()
+	local plotPos, err = getPlotBasePos()
+	if not plotPos then return nil, err end
+	local plotIdx = localPlayer:GetAttribute("PlotIndex")
+	local plot = workspace.Plots:FindFirstChild(tostring(plotIdx))
+	local ok, fenceCfg = pcall(configModule, "FenceConfig")
+	local offset = ok and fenceCfg.SignOffset or Vector3.new(-10, 0, -20)
+	local pos = plotPos + offset
+	local y = plot.Position.Y + plot.Size.Y / 2 + 3
+	return CFrame.new(pos.X, y, pos.Z)
+end
+
+local function getTurkeyChefCFrame()
+	local picnic = workspace:FindFirstChild("ThanksgivingPicnic")
+	local chef = picnic and picnic:FindFirstChild("TurkeyChef")
+	if not chef then return nil, "Turkey Chef not in world" end
+	local pos = chef.PrimaryPart and chef.PrimaryPart.Position or chef:GetPivot().Position
+	return CFrame.lookAt(pos + Vector3.new(0, 3, 4), pos + Vector3.new(0, 3, 0))
+end
+
+local function ensureInvokeHook()
+	if invokeHookInstalled or type(hookfunction) ~= "function" then return end
+	local ok, rf = pcall(Instance.new, "RemoteFunction")
+	if not ok or not rf then return end
+	local fn = rf.InvokeServer
+	pcall(function() rf:Destroy() end)
+	if type(fn) ~= "function" then return end
+	local hookOk, orig = pcall(hookfunction, fn, function(self, ...)
+		if TemplateHub.active and typeof(self) == "Instance" and self:IsA("RemoteFunction") and self.Name == "Throw_Resolve" then
+			local res
+			if TemplateHub.values["Auto Perfect"] then
+				res = originalInvokeServer(self, 1)
+			else
+				res = originalInvokeServer(self, ...)
+			end
+			if TemplateHub.values["Instantly View Throw"] and type(res) == "table" and res.Ok == true and showInstantThrowResult then
+				task.defer(showInstantThrowResult, res)
+			end
+			return res
+		end
+		return originalInvokeServer(self, ...)
+	end)
+	if hookOk and type(orig) == "function" then
+		originalInvokeServer = orig
+		invokeHookInstalled = true
+	end
+end
+
+-- Patch ThrowMeter.Run (locking meter + returning 1.0 + PERFECT rating) and hook InvokeServer when available.
+local function restorePerfect()
+	for _, entry in ipairs(patchedMeterEntries) do
+		if entry.mod and entry.mod.Run == entry.patched then
+			entry.mod.Run = entry.original
+		end
+	end
+	table.clear(patchedMeterEntries)
+end
+TemplateHub.restorePerfect = restorePerfect
+
+local function setPerfect(enabled)
+	if not enabled then restorePerfect(); return true end
+	if game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
+	ensureInvokeHook()
+	local meters = collectModuleTables(clientModule, "ThrowMeter", isThrowMeterTable)
+	if #meters == 0 and not invokeHookInstalled then
+		return false, "ThrowMeter module unavailable"
+	end
+	restorePerfect()
+	local okCfg, gameCfg = pcall(configModule, "GameConfig")
+	for _, meter in ipairs(meters) do
+		local orig = meter.Run
+		local patched
+		patched = function(self, ...)
+			if TemplateHub.active and TemplateHub.values["Auto Perfect"] then
+				if type(self) == "table" and type(self.SetLocked) == "function" then
+					pcall(self.SetLocked, self, true)
+				end
+			end
+			local results = table.pack(orig(self, ...))
+			if TemplateHub.active and TemplateHub.values["Auto Perfect"] and type(results[1]) == "number" then
+				results[1] = 1
+				if okCfg and gameCfg and gameCfg.Throw then
+					if type(gameCfg.Throw.MeterRatings) == "table" and gameCfg.Throw.MeterRatings[1] then
+						results[2] = gameCfg.Throw.MeterRatings[1]
+					end
+					if type(gameCfg.Throw.MeterBonusStuds) == "number" then
+						results[3] = gameCfg.Throw.MeterBonusStuds
+					end
+				end
+				if type(self) == "table" and self.Prompt and results[2] and results[2].Text then
+					pcall(function() self.Prompt.Text = results[2].Text end)
+				end
+			end
+			return table.unpack(results, 1, results.n)
+		end
+		meter.Run = patched
+		table.insert(patchedMeterEntries, { mod = meter, original = orig, patched = patched })
+	end
+	return true
+end
+
+---Run the throw sequence with proper StarterArea positioning, cooldown waiting, retry handling, and training support.
+local function setFarm(enabled)
+	if not enabled then return true end
+	if farmWorker then return false, "Previous farm call is still finishing" end
+	if trainWorker or TemplateHub.values["Auto Train"] then return false, "Stop Auto Train before farming" end
+	for _, name in ipairs({ "Throw_Start", "Throw_MeterStarted", "Throw_Resolve", "Throw_Revealed", "Throw_Complete" }) do
+		local remote, reason = findRemote(name)
+		if not remote then return false, reason end
+	end
+	farmWorker = true
+	task.spawn(function()
+		local function step(name, ...)
+			if not TemplateHub.active or not TemplateHub.values["Farm Animals"] then return false end
+			local ok, result = callRemote(name, false, ...)
+			if not TemplateHub.active or not TemplateHub.values["Farm Animals"] then return false end
+			if not ok or (remoteTypes[name] == "RemoteFunction" and (type(result) ~= "table" or result.Ok ~= true)) then
+				TemplateHub.report(ok and (name .. " returned an unexpected response") or tostring(result), true)
+				TemplateHub.setters["Farm Animals"](false)
+				return false
+			end
+			return true, result
+		end
+		local throwCount, training, throwPending = 0, false, false
+		local ok, errorMessage = xpcall(function()
+			local clientStateOk, clientState = pcall(clientModule, "ClientState")
+			while TemplateHub.active and TemplateHub.values["Farm Animals"] do
+				-- Wait out any active throw cooldown before starting.
+				local readyAt = localPlayer:GetAttribute("ThrowReadyAt")
+				if type(readyAt) == "number" then
+					local waitLeft = readyAt - workspace:GetServerTimeNow()
+					if waitLeft > 0 and not waitEnabled("Farm Animals", waitLeft + 0.1) then break end
+				end
+				if localPlayer:GetAttribute("Training") == true then
+					callRemote("Training_Stop", true)
+					if not waitEnabled("Farm Animals", 0.2) then break end
+				end
+
+				-- Prepare Auto Thanksgiving Index / Auto Index target throw power.
+				local sandwichToUse = nil
+				if TemplateHub.values["Auto Thanksgiving Index"] then
+					local tgOk, tgChoice = pcall(prepareThanksgivingIndex)
+					if tgOk and type(tgChoice) == "string" then
+						sandwichToUse = tgChoice
+					else
+						TemplateHub.report("Thanksgiving Index: " .. tostring(tgChoice), true)
+						TemplateHub.setters["Auto Thanksgiving Index"](false)
+						if TemplateHub.values["Auto Index"] then
+							prepareIndex()
+						end
+					end
+				elseif TemplateHub.values["Auto Index"] then
+					prepareIndex()
+				end
+				if not TemplateHub.active or not TemplateHub.values["Farm Animals"] then break end
+
+				-- Start throw at StarterArea CrossLine (just in front first; cross line with ClientState.Busy guard if TooFar).
+				local lineCF, lineErr = getThrowLineCFrame(false)
+				if not lineCF then error(lineErr) end
+				local startOk, startResult = false, nil
+				for attempt = 1, 2 do
+					local moveOk, sOk, sRes = withCharacterAt(lineCF, function()
+						return callRemote("Throw_Start", false)
+					end)
+					if not moveOk then error(sRes and tostring(sRes) or tostring(sOk)) end
+					startOk, startResult = sOk, sRes
+					if not startOk and tostring(startResult):find("TooFar", 1, true) then
+						local crossCF = getThrowLineCFrame(true)
+						if crossCF then
+							local prevBusy = clientStateOk and clientState.Busy or nil
+							if clientStateOk then clientState.Busy = "HubFarm" end
+							local m2, sOk2, sRes2 = withCharacterAt(crossCF, function()
+								return callRemote("Throw_Start", false)
+							end)
+							if clientStateOk and clientState.Busy == "HubFarm" then clientState.Busy = prevBusy end
+							if m2 then startOk, startResult = sOk2, sRes2 end
+						end
+					end
+					if startOk and type(startResult) == "table" and startResult.Ok == true then
+						break
+					end
+					local reasonStr = tostring(startResult)
+					if reasonStr:find("Cooldown", 1, true) or reasonStr:find("Wait", 1, true) then
+						local rAt = localPlayer:GetAttribute("ThrowReadyAt")
+						local waitFor = (type(rAt) == "number" and math.max(0.25, rAt - workspace:GetServerTimeNow() + 0.1)) or 0.75
+						if not waitEnabled("Farm Animals", waitFor) then break end
+					elseif attempt == 1 and (reasonStr:find("Already", 1, true) or reasonStr:find("InProgress", 1, true)) then
+						callRemote("Throw_Cancel", true, "Reset")
+						if not waitEnabled("Farm Animals", 0.25) then break end
+					else
+						break
+					end
+				end
+				if not TemplateHub.active or not TemplateHub.values["Farm Animals"] then break end
+				if startOk and type(startResult) == "table" and startResult.Ok == true then throwPending = true end
+				if not startOk or not throwPending then
+					TemplateHub.report(startOk and "Throw_Start returned an unexpected response" or tostring(startResult), true)
+					TemplateHub.setters["Farm Animals"](false)
+					break
+				end
+
+				if not step("Throw_MeterStarted") then break end
+				if sandwichToUse then
+					callRemote("Throw_UseSandwich", false, sandwichToUse)
+				end
+				if not waitEnabled("Farm Animals", TemplateHub.values["Meter Delay"]) then break end
+				-- Power meter always resolves to 1 (+20 bonus studs).
+				local resolvedOk, resolvedResult = step("Throw_Resolve", 1)
+				if not resolvedOk then break end
+				if TemplateHub.values["Instantly View Throw"] and type(resolvedResult) == "table" and showInstantThrowResult then
+					task.defer(showInstantThrowResult, resolvedResult)
+				end
+				local revealWait = TemplateHub.values["Reveal Delay"]
+				if not TemplateHub.values["Instant Throw"] and type(resolvedResult) == "table" and type(resolvedResult.FlightTime) == "number" then
+					revealWait = math.max(revealWait, resolvedResult.FlightTime + 0.25)
+				end
+				if not waitEnabled("Farm Animals", revealWait) then break end
+				if not step("Throw_Revealed") then break end
+				if not waitEnabled("Farm Animals", TemplateHub.values["Complete Delay"]) then break end
+				if not step("Throw_Complete") then break end
+				throwPending = false
+				throwCount += 1
+
+				if TemplateHub.values["Train Between Farms"] and throwCount >= TemplateHub.values["Train After Throws"] then
+					local data = playerData()
+					if (tonumber(data.Stand) or 0) >= 1 then
+						local spotPos = getTrainingSpotInfo()
+						if not spotPos then error("Training spot unavailable") end
+						local hrp, hrpErr = getCharacterRoot()
+						if not hrp then error(hrpErr) end
+						local savedCF = hrp.CFrame
+						local prevBusy = clientStateOk and clientState.Busy or nil
+						if clientStateOk then clientState.Busy = "HubTrain" end
+						local trainOk, response = false, nil
+						for attempt = 1, 3 do
+							if not TemplateHub.active or not TemplateHub.values["Farm Animals"] then break end
+							moveRootTo(hrp, CFrame.new(spotPos + Vector3.new(0, 3, 0)))
+							task.wait(0.15)
+							trainOk, response = callRemote("Training_Start", false)
+							if trainOk and type(response) == "table" and response.Ok == true then
+								break
+							end
+							local errStr = tostring(response)
+							if not (errStr:find("TooFar", 1, true) or errStr:find("Busy", 1, true) or errStr:find("Cooldown", 1, true)) then
+								break
+							end
+							task.wait(0.15)
+						end
+						if not trainOk or type(response) ~= "table" or response.Ok ~= true then
+							moveRootTo(hrp, savedCF)
+							if clientStateOk and clientState.Busy == "HubTrain" then clientState.Busy = prevBusy end
+							error(trainOk and "Training_Start returned an unexpected response" or tostring(response))
+						end
+						training = true
+						waitEnabled("Farm Animals", TemplateHub.values["Train for(s)"])
+						local stopOk, stopResult = callRemote("Training_Stop", true)
+						training = false
+						moveRootTo(hrp, savedCF)
+						if clientStateOk and clientState.Busy == "HubTrain" then clientState.Busy = prevBusy end
+						if not stopOk then error(tostring(stopResult)) end
+					else
+						TemplateHub.report("Buy a pull-up bar to use Train Between Farms", true)
+					end
+					throwCount = 0
+				end
+				if not waitEnabled("Farm Animals", TemplateHub.values["Farm Delay"]) then break end
+			end
+		end, function(errorMessage) return tostring(errorMessage) end)
+		if training then callRemote("Training_Stop", true) end
+		if throwPending then callRemote("Throw_Cancel", true) end
+		farmWorker = false
+		if not ok and TemplateHub.active then
+			TemplateHub.setters["Farm Animals"](false)
+			TemplateHub.report("Farm stopped: " .. errorMessage, true)
+		end
+	end)
+	return true
+end
+
+---Keep one training session active until the toggle is turned off (moves to TrainingSpot cleanly without camera lock).
+local function setAutoTrain(enabled)
+	if not enabled then return true end
+	if trainWorker then return false, "Previous training call is still finishing" end
+	if farmWorker or TemplateHub.values["Farm Animals"] then return false, "Stop farming before training" end
+	for _, name in ipairs({ "Training_Start", "Training_Stop" }) do
+		local remote, reason = findRemote(name)
+		if not remote then return false, reason end
+	end
+	local okData, data = pcall(playerData)
+	if okData and (tonumber(data.Stand) or 0) < 1 then
+		return false, "Buy a pull-up bar first"
+	end
+	trainWorker = true
+	task.spawn(function()
+		local started = false
+		local savedCF = nil
+		local clientStateOk, clientState = pcall(clientModule, "ClientState")
+		local prevBusy = nil
+		local function startAtSpot()
+			local spotPos = getTrainingSpotInfo()
+			if not spotPos then return false, "Training spot unavailable" end
+			local hrp, hrpErr = getCharacterRoot()
+			if not hrp then return false, hrpErr end
+			if not savedCF then savedCF = hrp.CFrame end
+			if clientStateOk and clientState.Busy ~= "HubTrain" then
+				prevBusy = clientState.Busy
+				clientState.Busy = "HubTrain"
+			end
+			local accepted, result = false, nil
+			for attempt = 1, 3 do
+				moveRootTo(hrp, CFrame.new(spotPos + Vector3.new(0, 3, 0)))
+				task.wait(0.15)
+				accepted, result = callRemote("Training_Start", false)
+				if accepted then break end
+				if not tostring(result):find("TooFar", 1, true) then break end
+			end
+			return accepted, result
+		end
+		local ok, errorMessage = xpcall(function()
+			local accepted, result = startAtSpot()
+			if not accepted then
+				if TemplateHub.active then
+					TemplateHub.setters["Auto Train"](false)
+					TemplateHub.report(tostring(result), true)
+				end
+				return
+			end
+			started = true
+			while TemplateHub.active and TemplateHub.values["Auto Train"] do
+				task.wait(0.25)
+				if TemplateHub.active and TemplateHub.values["Auto Train"] and localPlayer:GetAttribute("Training") == false then
+					local reOk = startAtSpot()
+					if not reOk then break end
+				end
+			end
+		end, function(message) return tostring(message) end)
+		if started then
+			local stopped, result = callRemote("Training_Stop", true)
+			if not stopped and TemplateHub.active then TemplateHub.report(tostring(result), true) end
+		end
+		if savedCF then
+			local hrp = getCharacterRoot()
+			if hrp then moveRootTo(hrp, savedCF) end
+		end
+		if clientStateOk and clientState.Busy == "HubTrain" then
+			clientState.Busy = prevBusy
+		end
+		trainWorker = false
+		if not ok and TemplateHub.active then
+			TemplateHub.setters["Auto Train"](false)
+			TemplateHub.report("Training stopped: " .. errorMessage, true)
+		end
+	end)
+	return true
+end
+
+local lightingSnapshot
+local function restoreLighting()
+	if not lightingSnapshot then return end
+	for key, value in pairs(lightingSnapshot) do lighting[key] = value end
+	lightingSnapshot = nil
+end
+TemplateHub.restoreLighting = restoreLighting
+local function setFullbright(enabled)
+	if not enabled then restoreLighting(); return true end
+	lightingSnapshot = { Brightness = lighting.Brightness, ClockTime = lighting.ClockTime, GlobalShadows = lighting.GlobalShadows, Ambient = lighting.Ambient, OutdoorAmbient = lighting.OutdoorAmbient }
+	local ok, errorMessage = pcall(function()
+		lighting.Brightness = 2
+		lighting.ClockTime = 14
+		lighting.GlobalShadows = false
+		lighting.Ambient = Color3.fromRGB(178, 178, 178)
+		lighting.OutdoorAmbient = Color3.fromRGB(178, 178, 178)
+	end)
+	if not ok then pcall(restoreLighting); return false, tostring(errorMessage) end
+	return true
+end
+TemplateHub.featureCallbacks["Auto Perfect"] = setPerfect
+TemplateHub.featureCallbacks["Farm Animals"] = setFarm
+TemplateHub.featureCallbacks["Auto Train"] = setAutoTrain
+TemplateHub.featureCallbacks["Fullbright"] = setFullbright
+
+---Show requested features that need additional captures, rather than fake toggles.
+local function addUnavailable(parent, text)
+	local holder = createCard("Frame", parent, text, 38)
+	create("TextLabel", {
+		Size = UDim2.new(1, -16, 1, -4), Position = UDim2.fromOffset(8, 2), BackgroundTransparency = 1,
+		Text = text .. "\nNeeds capture", TextColor3 = DIM_TEXT_COLOR, TextSize = 11, Font = TEXT_FONT,
+		TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+	}, holder)
+	table.insert(TemplateHub.searchables, holder)
+end
+
+-- Game module access follows the paths found in the provided client export.
+-- We only require modules already present in the live place, and validate the API.
+local moduleCache = {}
+local function gameModule(root, ...)
+	local path = table.pack(...)
+	local key = tostring(root) .. ":" .. table.concat(path, ".")
+	if moduleCache[key] then return moduleCache[key] end
+	local object = root
+	for i = 1, path.n do
+		object = object and object:FindFirstChild(path[i])
+	end
+	if not object or not object:IsA("ModuleScript") then error("Game module missing: " .. table.concat(path, ".")) end
+	local ok, result = pcall(require, object)
+	if not ok or type(result) ~= "table" then error("Game module unavailable: " .. table.concat(path, ".")) end
+	moduleCache[key] = result
+	return result
+end
+clientModule = function(name)
+	return gameModule(localPlayer, "PlayerScripts", "Client", "Controllers", name)
+end
+sharedModule = function(name) return gameModule(replicatedStorage, "Shared", name) end
+configModule = function(name) return gameModule(replicatedStorage, "Config", name) end
+playerData = function()
+	local data = clientModule("DataController"):GetPlayerData()
+	if type(data) ~= "table" then error("Player data not ready") end
+	return data
+end
+doCall = function(name, ...)
+	local ok, result = callRemote(name, false, ...)
+	if not ok then error(tostring(result)) end
+	if type(result) ~= "table" or result.Ok ~= true then error(name .. ": unexpected response; stopped") end
+	return result
+end
+
+-- No worker is allowed to overlap itself, even across quick off/on transitions.
+local workers = {}
+local function periodic(name, interval, callback, setup)
+	TemplateHub.featureCallbacks[name] = function(enabled)
+		if not enabled then return true end
+		if workers[name] then return false, "Previous " .. name .. " call is still finishing" end
+		if game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
+		local context
+		if setup then
+			local ok, value = pcall(setup)
+			if not ok then return false, tostring(value) end
+			context = value
+		end
+		workers[name] = true
+		task.spawn(function()
+			local ok, message = xpcall(function()
+				while TemplateHub.active and TemplateHub.values[name] do
+					callback(context)
+					if not waitEnabled(name, type(interval) == "function" and interval() or interval) then break end
+				end
+			end, function(err) return tostring(err) end)
+			workers[name] = nil
+			if not ok and TemplateHub.active then
+				TemplateHub.setters[name](false)
+				TemplateHub.report(name .. " stopped: " .. message, true)
+			end
+		end)
+		return true
+	end
+end
+
+-- Instant Throw auto-taps the meter, collapses flight arc duration, skips RevealSequence, and suppresses ScreenFX white/black fades.
+local instantMeterEntries = {}
+local function restoreInstant()
+	for _, entry in ipairs(instantMeterEntries) do
+		if entry.mod then entry.mod.TestAutoTap = entry.oldAutoTap end
+	end
+	table.clear(instantMeterEntries)
+	for _, entry in ipairs(patchedArcEntries) do
+		if entry.mod and entry.mod.CreateArc == entry.patched then entry.mod.CreateArc = entry.original end
+	end
+	table.clear(patchedArcEntries)
+	for _, entry in ipairs(patchedRevealEntries) do
+		if entry.mod and entry.mod.Run == entry.patched then entry.mod.Run = entry.original end
+	end
+	table.clear(patchedRevealEntries)
+	for _, entry in ipairs(patchedScreenFXEntries) do
+		if entry.mod and entry.mod[entry.key] == entry.patched then
+			entry.mod[entry.key] = entry.original
+		end
+	end
+	table.clear(patchedScreenFXEntries)
+end
+TemplateHub.restoreInstant = restoreInstant
+
+TemplateHub.featureCallbacks["Instant Throw"] = function(enabled)
+	if not enabled then restoreInstant(); return true end
+	if game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
+	restoreInstant()
+	local meters = collectModuleTables(clientModule, "ThrowMeter", isThrowMeterTable)
+	if #meters == 0 then return false, "ThrowMeter module unavailable" end
+	for _, meter in ipairs(meters) do
+		table.insert(instantMeterEntries, { mod = meter, oldAutoTap = meter.TestAutoTap })
+		meter.TestAutoTap = 0.05
+	end
+	local arcs = collectModuleTables(sharedModule, "ProjectileMath", isProjectileMathTable)
+	for _, pm in ipairs(arcs) do
+		local orig = pm.CreateArc
+		local patched = function(p1, p2, dur, grav)
+			if TemplateHub.active and TemplateHub.values["Instant Throw"] then
+				return orig(p1, p2, 0.05, nil)
+			end
+			return orig(p1, p2, dur, grav)
+		end
+		pm.CreateArc = patched
+		table.insert(patchedArcEntries, { mod = pm, original = orig, patched = patched })
+	end
+	local screenFXList = collectModuleTables(clientModule, "ScreenFX", isScreenFXTable)
+	for _, sf in ipairs(screenFXList) do
+		pcall(sf.Reset)
+		for _, fnName in ipairs({ "FadeOut", "FadeIn", "Cover", "Flash" }) do
+			local orig = sf[fnName]
+			if type(orig) == "function" then
+				local patched = function(...)
+					if TemplateHub.active and TemplateHub.values["Instant Throw"] then
+						pcall(sf.Reset)
+						return nil
+					end
+					return orig(...)
+				end
+				sf[fnName] = patched
+				table.insert(patchedScreenFXEntries, { mod = sf, key = fnName, original = orig, patched = patched })
+			end
+		end
+	end
+	local reveals = collectModuleTables(clientModule, "RevealSequence", isRevealSequenceTable)
+	for _, rs in ipairs(reveals) do
+		local orig = rs.Run
+		local patched = function(...)
+			if TemplateHub.active and TemplateHub.values["Instant Throw"] then
+				for _, sf in ipairs(screenFXList) do pcall(sf.Reset) end
+				return nil
+			end
+			return orig(...)
+		end
+		rs.Run = patched
+		table.insert(patchedRevealEntries, { mod = rs, original = orig, patched = patched })
+	end
+	return true
+end
+
+local bonusConnection
+TemplateHub.featureCallbacks["Auto 2x Press"] = function(enabled)
+	if bonusConnection then bonusConnection:Disconnect(); bonusConnection = nil end
+	if not enabled then return true end
+	local event, reason = findRemote("Training_Bonus")
+	if not event then return false, reason end
+	local fn, why = findRemote("Training_TapBonus")
+	if not fn then return false, why end
+	bonusConnection = event.OnClientEvent:Connect(function(id, expires)
+		if not TemplateHub.active or not TemplateHub.values["Auto 2x Press"] then return end
+		if type(id) ~= "number" or type(expires) ~= "number" or expires <= workspace:GetServerTimeNow() then return end
+		task.spawn(function()
+			-- Wait briefly so TrainingController can spawn the UI button if manual training is open.
+			task.wait(0.12)
+			if not TemplateHub.active or not TemplateHub.values["Auto 2x Press"] then return end
+			if expires <= workspace:GetServerTimeNow() then return end
+			local pgui = localPlayer:FindFirstChild("PlayerGui")
+			local seq = pgui and pgui:FindFirstChild("TrainingSequence")
+			local layer = seq and seq:FindFirstChild("TapBonusLayer")
+			local tapBtn = layer and layer:FindFirstChild("TapBonus")
+			if tapBtn and tapBtn:IsA("GuiButton") and type(firesignal) == "function" then
+				local fired = pcall(firesignal, tapBtn.Activated)
+				if fired then return end
+			end
+			local ok, result = callRemote("Training_TapBonus", false, id)
+			if tapBtn and tapBtn.Parent then pcall(function() tapBtn:Destroy() end) end
+			if not ok and TemplateHub.active and not tostring(result):find("Expired", 1, true) then
+				TemplateHub.report(tostring(result), true)
+			end
+		end)
+	end)
+	table.insert(TemplateHub.connections, bonusConnection)
+	return true
+end
+
+-- Auto Index adjusts the game's persistent power setting before each farm throw.
+prepareIndex = function()
+	local data = playerData()
+	if type(data.Index) ~= "table" then error("Index data unavailable") end
+	local idx = sharedModule("IndexRewards")
+	local areas = configModule("AreasConfig")
+	local areaUtil = sharedModule("AreaUtil")
+	local levels = configModule("LevelConfig")
+	local gameConfig = configModule("GameConfig")
+	local collections = idx.Collections("World")
+	if type(collections) ~= "table" then error("Index collections unavailable") end
+	local max = levels.ThrowPowerForLevel(tonumber(data.Level) or 1)
+	local min = math.min(levels.MinThrowPower, max)
+	local bonus = gameConfig.Throw.MeterBonusStuds or 20
+	local selected, desired, selectedProgress
+	for i = 1, areaUtil.Count() do
+		local area = areas.Get(i)
+		if area then
+			for _, collection in ipairs(collections) do
+				if collection.Area == area.Key and idx.IsOpen(collection) and idx.IsUnlockedFor(data, collection) then
+					local done, total = idx.Progress(data.Index, collection)
+					local power = math.floor(math.clamp(areaUtil.DistanceToAreaCenter(i) - bonus, min, max) + 0.5)
+					local _, landing = areaUtil.ComputeLanding(power + bonus, 0)
+					if type(done) == "number" and type(total) == "number" and total > 0 and done < total and landing == i then
+						local progress = done / total
+						if not selected or (TemplateHub.values["Index Priority"] == "Most complete" and progress > selectedProgress) then
+							selected, desired, selectedProgress = area.Key, power >= max and 0 or power, progress
+						end
+					end
+				end
+			end
+		end
+	end
+	if not selected then error("No reachable incomplete world index area") end
+	if TemplateHub.active and TemplateHub.values["Farm Animals"] and TemplateHub.values["Auto Index"] and (tonumber(data.ThrowPower) or 0) ~= desired then doCall("Player_SetThrowPower", desired) end
+end
+TemplateHub.featureCallbacks["Auto Index"] = function(enabled)
+	if enabled and game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
+	return true
+end
+
+-- Auto Thanksgiving Index picks missing Thanksgiving animals, sets throw power to their zone/section, and arms a sandwich.
+prepareThanksgivingIndex = function()
+	local data = playerData()
+	local tg = sharedModule("Thanksgiving")
+	local tgCfg = configModule("ThanksgivingConfig")
+	if not tg.IsEligible(localPlayer) or tg.State().Open ~= true then
+		error("Thanksgiving picnic is not open")
+	end
+	local tgState = type(data.Thanksgiving) == "table" and data.Thanksgiving or {}
+	local chosenSandwich = nil
+	for _, size in ipairs({ "Mega", "Big", "Regular" }) do
+		if tg.SandwichCount(tgState, size) > 0 then
+			chosenSandwich = size
+			break
+		end
+	end
+	if not chosenSandwich then
+		error("No sandwiches available")
+	end
+	local index = type(data.Index) == "table" and data.Index or {}
+	local areas = configModule("AreasConfig")
+	local areaUtil = sharedModule("AreaUtil")
+	local levels = configModule("LevelConfig")
+	local gameConfig = configModule("GameConfig")
+	local max = levels.ThrowPowerForLevel(tonumber(data.Level) or 1)
+	local min = math.min(levels.MinThrowPower, max)
+	local bonus = gameConfig.Throw.MeterBonusStuds or 20
+	local launchZ = areaUtil.GetLaunchPosition().Z
+	local targetPower = nil
+	for _, animal in ipairs(tgCfg.Animals) do
+		if index[animal.ModelName] ~= true then
+			local area = areas.ByKey and areas.ByKey[animal.Zone]
+			if area and areas.IsPlayable(area) then
+				local depth = animal.Section == 3 and 0.85 or 0.5
+				local targetZ = area.ZStart - (area.ZStart - area.ZEnd) * depth
+				local targetDist = launchZ - targetZ
+				local power = math.floor(math.clamp(targetDist - bonus, min, max) + 0.5)
+				local landPos, landingArea = areaUtil.ComputeLanding(power + bonus, 0)
+				if landingArea == area.Index then
+					local sub = areaUtil.SubAreaForZ(area.Index, landPos.Z)
+					if not animal.Section or sub >= animal.Section then
+						targetPower = power >= max and 0 or power
+						break
+					end
+				end
+			end
+		end
+	end
+	if not targetPower and tgState.GobblerCaught ~= true then
+		local area = areas.ByKey and areas.ByKey[tgCfg.Gobbler.Zone]
+		if area and areas.IsPlayable(area) then
+			local power = math.floor(math.clamp(areaUtil.DistanceToAreaCenter(area.Index) - bonus, min, max) + 0.5)
+			local _, landingArea = areaUtil.ComputeLanding(power + bonus, 0)
+			if landingArea == area.Index then
+				targetPower = power >= max and 0 or power
+			end
+		end
+	end
+	if not targetPower then error("No reachable missing Thanksgiving animal") end
+	if TemplateHub.active and TemplateHub.values["Farm Animals"] and TemplateHub.values["Auto Thanksgiving Index"] and (tonumber(data.ThrowPower) or 0) ~= targetPower then
+		doCall("Player_SetThrowPower", targetPower)
+	end
+	return chosenSandwich
+end
+TemplateHub.featureCallbacks["Auto Thanksgiving Index"] = function(enabled)
+	if enabled and game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
+	return true
+end
+
+periodic("Auto Equip Best", function() return TemplateHub.values["Equip Delay"] end, function()
+	doCall("Plot_EquipBest")
+end)
+periodic("Auto Claim Index Rewards", 5, function()
+	local data = playerData()
+	local index = sharedModule("IndexRewards")
+	local claimable = index.Claimable(data)
+	if type(claimable) ~= "table" then error("Claimable index list unavailable") end
+	for _, key in ipairs(claimable) do
+		if not TemplateHub.active or not TemplateHub.values["Auto Claim Index Rewards"] then break end
+		if type(key) == "string" then doCall("IndexRewards_Claim", key); task.wait(0.5) end
+	end
+end)
+periodic("Auto Equip Best Trails", 10, function()
+	local data = playerData()
+	local cfg = configModule("IndexRewardsConfig")
+	local trails = data.Trails
+	local owned = type(trails) == "table" and trails.Owned
+	if type(owned) ~= "table" or type(cfg.Trails) ~= "table" then error("Trail ownership unavailable") end
+	local bestKey, bestScore
+	local objective = TemplateHub.values["Trail Priority"]
+	for key, isOwned in pairs(owned) do
+		local t = cfg.Trails[key]
+		if type(key) == "string" and isOwned == true and type(t) == "table" and type(t.Bonus) == "table" then
+			local score = tonumber(t.Bonus[objective]) or 0
+			if score > 0 and (not bestScore or score > bestScore or (score == bestScore and key < bestKey)) then
+				bestKey, bestScore = key, score
+			end
+		end
+	end
+	if TemplateHub.active and TemplateHub.values["Auto Equip Best Trails"] and bestKey and trails.Equipped ~= bestKey then doCall("IndexRewards_Equip", bestKey) end
+end)
+
+periodic("Auto Upgrade Bars", 5, function()
+	local data = playerData()
+	local stands = configModule("StandsConfig")
+	local nextStand = stands.Get((tonumber(data.Stand) or 0) + 1)
+	if not nextStand then return end
+	local balance = sharedModule("BalanceCurve")
+	local price = balance.GetItemPrice(localPlayer, nextStand)
+	if TemplateHub.active and TemplateHub.values["Auto Upgrade Bars"] and type(price) == "number" and type(data.Money) == "number" and data.Money >= price then doCall("Stand_Upgrade") end
+end)
+periodic("Auto Upgrade Plot", 5, function()
+	local data = playerData()
+	local cfg = configModule("FenceConfig")
+	local nextLevel = cfg.Get((tonumber(data.FenceLevel) or 0) + 1)
+	if TemplateHub.active and TemplateHub.values["Auto Upgrade Plot"] and nextLevel and type(nextLevel.Price) == "number" and type(data.Money) == "number" and data.Money >= nextLevel.Price then
+		local signCF, signErr = getFenceSignCFrame()
+		if not signCF then error(signErr) end
+		local moveOk, resOrErr = withCharacterAt(signCF, function()
+			return doCall("Plot_UpgradeFence")
+		end)
+		if not moveOk then error(resOrErr) end
+	end
+end)
+periodic("Auto Upgrade Food", 5, function()
+	local data = playerData()
+	local cfg = configModule("FoodsConfig")
+	if type(data.OwnedFoods) ~= "table" or type(data.Money) ~= "number" then error("Food ownership or money unavailable") end
+	for i = 1, cfg.Count() do
+		local food = cfg.Get(i)
+		if food and data.OwnedFoods[food.Index] ~= true and data.OwnedFoods[tostring(food.Index)] ~= true then
+			local price = sharedModule("BalanceCurve").GetItemPrice(localPlayer, food)
+			if TemplateHub.active and TemplateHub.values["Auto Upgrade Food"] and type(price) == "number" and data.Money >= price then
+				doCall("Shop_Buy", i)
+				callRemote("Shop_Equip", false, i)
+			end
+			break -- buy in progression order; don't guess at restricted/locked entries
+		end
+	end
+end)
+periodic("Auto Event (claim chef rewards)", 10, function()
+	local state = playerData().Thanksgiving
+	if type(state) ~= "table" then error("Thanksgiving data unavailable") end
+	if sharedModule("Thanksgiving").RewardsPending(state) > 0 and TemplateHub.active and TemplateHub.values["Auto Event (claim chef rewards)"] then
+		local chefCF, chefErr = getTurkeyChefCFrame()
+		if not chefCF then error(chefErr) end
+		local moveOk, resOrErr = withCharacterAt(chefCF, function()
+			if state.Talked ~= true then callRemote("Thanksgiving_Action", false, "Talked") end
+			return doCall("Thanksgiving_Action", "Claim")
+		end)
+		if not moveOk then error(resOrErr) end
+	end
+end)
+periodic("Auto Cook Sandwich", 5, function()
+	local thanksgiving = sharedModule("Thanksgiving")
+	local state = playerData().Thanksgiving
+	if type(state) ~= "table" then error("Thanksgiving data unavailable") end
+	local size = TemplateHub.values["Cook Size"]
+	if size == "Best" then
+		for _, candidate in ipairs({ "Mega", "Big", "Regular" }) do
+			if thanksgiving.CanCook(state, candidate) then size = candidate; break end
+		end
+	end
+	if size ~= "Best" and thanksgiving.CanCook(state, size) and TemplateHub.active and TemplateHub.values["Auto Cook Sandwich"] then
+		local chefCF, chefErr = getTurkeyChefCFrame()
+		if not chefCF then error(chefErr) end
+		local moveOk, resOrErr = withCharacterAt(chefCF, function()
+			if state.Talked ~= true then callRemote("Thanksgiving_Action", false, "Talked") end
+			return doCall("Thanksgiving_Action", "Cook", size)
+		end)
+		if not moveOk then error(resOrErr) end
+	end
+end)
+
+-- Visuals: Instantly View Throw (bottom-center menu-styled notification) and Animal ESP (all local-only & cleaned up on toggle off / unload).
+local patchedRemotesInvoke = {}
+local lastShownThrowResult, lastShownThrowAt = nil, 0
+local instantThrowBannerGui, instantThrowBannerSeq = nil, 0
+
+local function cleanupInstantViewThrow()
+	for _, entry in ipairs(patchedRemotesInvoke) do
+		if entry.mod and entry.mod.Invoke == entry.patched then
+			entry.mod.Invoke = entry.original
+		end
+	end
+	table.clear(patchedRemotesInvoke)
+	instantThrowBannerSeq += 1
+	if instantThrowBannerGui and instantThrowBannerGui.Parent then
+		instantThrowBannerGui:Destroy()
+	end
+	instantThrowBannerGui = nil
+end
+
+showInstantThrowResult = function(res)
+	if not TemplateHub.active or not TemplateHub.values["Instantly View Throw"] then return end
+	if type(res) ~= "table" or res.Ok ~= true then return end
+	local now = os.clock()
+	if res == lastShownThrowResult and (now - lastShownThrowAt) < 0.25 then return end
+	lastShownThrowResult, lastShownThrowAt = res, now
+
+	local modelName = res.ModelName or res.DisplayName
+	if not modelName then return end
+	local okEcon, econ = pcall(configModule, "AnimalEconomy")
+	local okMut, mut = pcall(sharedModule, "Mutations")
+	local okRarity, rarityCfg = pcall(configModule, "RarityConfig")
+	local okAreas, areasCfg = pcall(configModule, "AreasConfig")
+	local okFmt, numFmt = pcall(sharedModule, "NumberFormat")
+	local okBoosts, boosts = pcall(sharedModule, "Boosts")
+
+	local info = okEcon and econ.Get(modelName)
+	local rarity = res.Rarity or (info and info.Rarity) or "Common"
+	local rarityCol = (okRarity and rarityCfg.Get(rarity).Color) or ACCENT_A
+	local displayName = res.DisplayName or modelName
+	local mutation = res.Mutation
+	local size = tonumber(res.Size) or 1
+	local income = tonumber(res.Income)
+	if not income and okMut then
+		income = mut.Income(modelName, mutation, size)
+	end
+	local weight = tonumber(res.Weight)
+	if not weight and okMut then
+		weight = mut.Weight(modelName, size)
+	end
+
+	local titleParts = {}
+	if res.IsNew then table.insert(titleParts, "[NEW]") end
+	if type(mutation) == "string" and mutation ~= "" and mutation ~= "Normal" then
+		table.insert(titleParts, mutation)
+	end
+	table.insert(titleParts, tostring(displayName))
+	local titleText = table.concat(titleParts, " ") .. "  [" .. tostring(rarity) .. "]"
+
+	local statsParts = {}
+	if income and income > 0 then
+		local incStr
+		if okBoosts and type(boosts.IncomeText) == "function" then
+			local okT, txt = pcall(boosts.IncomeText, income, localPlayer)
+			if okT and type(txt) == "string" then
+				incStr = txt:gsub("<[^>]+>", "")
+			end
+		end
+		if not incStr then
+			incStr = okFmt and numFmt.PerSecond(income) or ("$" .. tostring(math.floor(income + 0.5)) .. "/s")
+		end
+		table.insert(statsParts, incStr)
+	end
+	if weight and weight > 0 then
+		local wStr = okFmt and (numFmt.Abbreviate(weight, 1) .. " kg") or string.format("%.1f kg", weight)
+		table.insert(statsParts, wStr)
+	end
+	if size > 1.05 then
+		local sizeTitle = (okMut and type(mut.SizeTitle) == "function") and mut.SizeTitle(size) or nil
+		if type(sizeTitle) == "table" and sizeTitle.Name then
+			table.insert(statsParts, string.format("%s (x%.2f)", sizeTitle.Name, size))
+		else
+			table.insert(statsParts, string.format("Size x%.2f", size))
+		end
+	end
+	if res.AreaIndex then
+		local area = okAreas and areasCfg.Get(res.AreaIndex)
+		local areaName = area and area.Name or ("Area " .. tostring(res.AreaIndex))
+		if type(res.Distance) == "number" then
+			table.insert(statsParts, string.format("%s (%dm)", areaName, math.floor(res.Distance + 0.5)))
+		else
+			table.insert(statsParts, areaName)
+		end
+	end
+	if res.Dream then
+		table.insert(statsParts, "Dream")
+	end
+
+	local parentGui = shared and shared.ThrowFoodHubGui or localPlayer:FindFirstChild("PlayerGui")
+	if not parentGui then return end
+	if instantThrowBannerGui and instantThrowBannerGui.Parent then
+		instantThrowBannerGui:Destroy()
+	end
+	instantThrowBannerSeq += 1
+	local mySeq = instantThrowBannerSeq
+
+	local card = Instance.new("Frame")
+	card.Name = "InstantThrowNotification"
+	card.AnchorPoint = Vector2.new(0.5, 1)
+	card.Position = UDim2.new(0.5, 0, 1, 10)
+	card.Size = UDim2.fromOffset(370, 62)
+	card.BackgroundColor3 = Color3.new(1, 1, 1)
+	card.BorderSizePixel = 0
+	card.ZIndex = 25
+	card.Parent = parentGui
+	instantThrowBannerGui = card
+	Instance.new("UICorner", card).CornerRadius = UDim.new(0, 8)
+	local bgGrad = Instance.new("UIGradient", card)
+	bgGrad.Color = ColorSequence.new(BACKGROUND_TOP, BACKGROUND_BOTTOM)
+	bgGrad.Rotation = 90
+	local cardStroke = Instance.new("UIStroke", card)
+	cardStroke.Color = Color3.fromRGB(115, 115, 122)
+	cardStroke.Thickness = 1.2
+
+	local accentBar = Instance.new("Frame", card)
+	accentBar.Size = UDim2.new(0, 4, 1, -14)
+	accentBar.Position = UDim2.fromOffset(7, 7)
+	accentBar.BackgroundColor3 = rarityCol
+	accentBar.BorderSizePixel = 0
+	accentBar.ZIndex = 26
+	Instance.new("UICorner", accentBar).CornerRadius = UDim.new(1, 0)
+
+	local headerLbl = Instance.new("TextLabel", card)
+	headerLbl.Size = UDim2.new(1, -26, 0, 22)
+	headerLbl.Position = UDim2.fromOffset(18, 8)
+	headerLbl.BackgroundTransparency = 1
+	headerLbl.Font = BOLD_FONT
+	headerLbl.TextSize = 14
+	headerLbl.TextColor3 = rarityCol
+	headerLbl.TextXAlignment = Enum.TextXAlignment.Left
+	headerLbl.TextTruncate = Enum.TextTruncate.AtEnd
+	headerLbl.Text = titleText
+	headerLbl.ZIndex = 26
+
+	local detailLbl = Instance.new("TextLabel", card)
+	detailLbl.Size = UDim2.new(1, -26, 0, 22)
+	detailLbl.Position = UDim2.fromOffset(18, 32)
+	detailLbl.BackgroundTransparency = 1
+	detailLbl.Font = TEXT_FONT
+	detailLbl.TextSize = 12
+	detailLbl.TextColor3 = TEXT_COLOR
+	detailLbl.TextXAlignment = Enum.TextXAlignment.Left
+	detailLbl.TextTruncate = Enum.TextTruncate.AtEnd
+	detailLbl.Text = #statsParts > 0 and table.concat(statsParts, "  •  ") or "Thrown animal resolved"
+	detailLbl.ZIndex = 26
+
+	tween(card, POP_TWEEN, { Position = UDim2.new(0.5, 0, 1, -18) })
+	task.delay(4.5, function()
+		if instantThrowBannerSeq ~= mySeq or not card.Parent then return end
+		tween(card, MEDIUM_TWEEN, { Position = UDim2.new(0.5, 0, 1, 80), BackgroundTransparency = 1 })
+		tween(cardStroke, MEDIUM_TWEEN, { Transparency = 1 })
+		tween(accentBar, MEDIUM_TWEEN, { BackgroundTransparency = 1 })
+		tween(headerLbl, MEDIUM_TWEEN, { TextTransparency = 1 })
+		tween(detailLbl, MEDIUM_TWEEN, { TextTransparency = 1 })
+		task.wait(0.26)
+		if instantThrowBannerSeq == mySeq and card.Parent then
+			card:Destroy()
+			if instantThrowBannerGui == card then instantThrowBannerGui = nil end
+		end
+	end)
+end
+
+local function isRemotesModuleTable(t)
+	return type(rawget(t, "Invoke")) == "function"
+		and type(rawget(t, "Function")) == "function"
+		and type(rawget(t, "Event")) == "function"
+end
+
+local function setInstantlyViewThrow(enabled)
+	cleanupInstantViewThrow()
+	if not enabled then return true end
+	if game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
+	ensureInvokeHook()
+	local remotesMods = collectModuleTables(sharedModule, "Remotes", isRemotesModuleTable)
+	for _, rm in ipairs(remotesMods) do
+		local orig = rm.Invoke
+		local patched = function(name, ...)
+			local res = orig(name, ...)
+			if TemplateHub.active and TemplateHub.values["Instantly View Throw"]
+				and name == "Throw_Resolve" and type(res) == "table" and res.Ok == true then
+				task.defer(showInstantThrowResult, res)
+			end
+			return res
+		end
+		rm.Invoke = patched
+		table.insert(patchedRemotesInvoke, { mod = rm, original = orig, patched = patched })
+	end
+	return true
+end
+
+local animalEspFolder, animalEspConns = nil, {}
+local function cleanupAnimalEsp()
+	for _, c in ipairs(animalEspConns) do pcall(function() c:Disconnect() end) end
+	table.clear(animalEspConns)
+	if animalEspFolder then animalEspFolder:Destroy(); animalEspFolder = nil end
+end
+local function setAnimalEsp(enabled)
+	cleanupAnimalEsp()
+	if not enabled then return true end
+	if game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
+	local okEcon, econ = pcall(configModule, "AnimalEconomy")
+	local okRarity, rarityCfg = pcall(configModule, "RarityConfig")
+	local folder = Instance.new("Folder")
+	folder.Name = "Hub_AnimalESP"
+	folder.Parent = workspace
+	animalEspFolder = folder
+
+	local tagged = {}
+	local function attach(obj)
+		if tagged[obj] or not obj:IsDescendantOf(workspace) then return end
+		local adornee = obj:IsA("Model") and (obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart", true)) or (obj:IsA("BasePart") and obj)
+		if not adornee then return end
+		tagged[obj] = true
+		local modelName = obj:GetAttribute("ModelName") or obj.Name
+		local mutation = obj:GetAttribute("Mutation")
+		local info = okEcon and econ.Get(modelName)
+		local col = (okRarity and info and info.Rarity and rarityCfg.Get(info.Rarity).Color) or Color3.fromRGB(220, 220, 235)
+
+		local hl = Instance.new("Highlight")
+		hl.Adornee = obj
+		hl.FillColor = col
+		hl.FillTransparency = 0.72
+		hl.OutlineColor = col
+		hl.OutlineTransparency = 0.1
+		hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		hl.Parent = folder
+
+		local bb = Instance.new("BillboardGui")
+		bb.Adornee = adornee
+		bb.Size = UDim2.fromOffset(170, 24)
+		bb.StudsOffset = Vector3.new(0, 3.5, 0)
+		bb.AlwaysOnTop = true
+		bb.MaxDistance = 220
+		bb.Parent = folder
+		local lbl = Instance.new("TextLabel")
+		lbl.Size = UDim2.fromScale(1, 1)
+		lbl.BackgroundTransparency = 1
+		lbl.TextColor3 = col
+		lbl.Font = BOLD_FONT
+		lbl.TextSize = 13
+		lbl.Text = (mutation and mutation ~= "" and (mutation .. " ") or "") .. tostring(modelName)
+		lbl.Parent = bb
+		local textStroke = Instance.new("UIStroke")
+		textStroke.Color = Color3.new(0, 0, 0)
+		textStroke.Thickness = 1.6
+		textStroke.Transparency = 0.15
+		textStroke.Parent = lbl
+
+		obj.AncestryChanged:Connect(function(_, parent)
+			if not parent then
+				tagged[obj] = nil
+				if hl.Parent then hl:Destroy() end
+				if bb.Parent then bb:Destroy() end
+			end
+		end)
+	end
+
+	for _, tag in ipairs({ "PlotAnimal", "Animal" }) do
+		for _, inst in ipairs(collectionService:GetTagged(tag)) do attach(inst) end
+		table.insert(animalEspConns, collectionService:GetInstanceAddedSignal(tag):Connect(attach))
+	end
+	return true
+end
+
+TemplateHub.restoreVisuals = function()
+	cleanupInstantViewThrow()
+	cleanupAnimalEsp()
+end
+TemplateHub.featureCallbacks["Instantly View Throw"] = setInstantlyViewThrow
+TemplateHub.featureCallbacks["Animal ESP"] = setAnimalEsp
+
+-- Movement: WalkSpeed and Fly (local-only, cleaned up on toggle off or GUI unload).
+local walkSpeedConn, defaultWalkSpeed = nil, nil
+local function restoreWalkSpeed()
+	if walkSpeedConn then walkSpeedConn:Disconnect(); walkSpeedConn = nil end
+	local char = localPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if hum and defaultWalkSpeed then
+		pcall(function() hum.WalkSpeed = defaultWalkSpeed end)
+	end
+	defaultWalkSpeed = nil
+end
+local function setWalkSpeed(enabled)
+	if not enabled then restoreWalkSpeed(); return true end
+	local char = localPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if hum and not defaultWalkSpeed then defaultWalkSpeed = hum.WalkSpeed end
+	if not walkSpeedConn then
+		walkSpeedConn = runService.Heartbeat:Connect(function()
+			if not TemplateHub.active or not TemplateHub.values["WalkSpeed"] then return end
+			local c = localPlayer.Character
+			local h = c and c:FindFirstChildOfClass("Humanoid")
+			if h then
+				if not defaultWalkSpeed then defaultWalkSpeed = h.WalkSpeed end
+				local target = tonumber(TemplateHub.values["WalkSpeed Value"]) or 32
+				if h.WalkSpeed ~= target then h.WalkSpeed = target end
+			end
+		end)
+	end
+	return true
+end
+
+local flyConn, flyBV, flyBG = nil, nil, nil
+local function restoreFly()
+	if flyConn then flyConn:Disconnect(); flyConn = nil end
+	if flyBV and flyBV.Parent then flyBV:Destroy() end
+	if flyBG and flyBG.Parent then flyBG:Destroy() end
+	flyBV, flyBG = nil, nil
+	local char = localPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if hum then pcall(function() hum.PlatformStand = false end) end
+end
+local function setFly(enabled)
+	restoreFly()
+	if not enabled then return true end
+	flyConn = runService.RenderStepped:Connect(function()
+		if not TemplateHub.active or not TemplateHub.values["Fly"] then restoreFly(); return end
+		local char = localPlayer.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if not (hrp and hum and hum.Health > 0) then
+			if flyBV and flyBV.Parent then flyBV:Destroy(); flyBV = nil end
+			if flyBG and flyBG.Parent then flyBG:Destroy(); flyBG = nil end
+			return
+		end
+		hum.PlatformStand = true
+		if not (flyBV and flyBV.Parent == hrp) then
+			if flyBV then flyBV:Destroy() end
+			flyBV = Instance.new("BodyVelocity")
+			flyBV.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+			flyBV.P = 1250
+			flyBV.Velocity = Vector3.zero
+			flyBV.Parent = hrp
+		end
+		if not (flyBG and flyBG.Parent == hrp) then
+			if flyBG then flyBG:Destroy() end
+			flyBG = Instance.new("BodyGyro")
+			flyBG.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
+			flyBG.P = 9e4
+			flyBG.D = 500
+			flyBG.CFrame = hrp.CFrame
+			flyBG.Parent = hrp
+		end
+		local cam = workspace.CurrentCamera
+		local camCF = cam and cam.CFrame or hrp.CFrame
+		flyBG.CFrame = camCF
+		local move = Vector3.zero
+		if not userInputService:GetFocusedTextBox() then
+			if userInputService:IsKeyDown(Enum.KeyCode.W) then move += camCF.LookVector end
+			if userInputService:IsKeyDown(Enum.KeyCode.S) then move -= camCF.LookVector end
+			if userInputService:IsKeyDown(Enum.KeyCode.D) then move += camCF.RightVector end
+			if userInputService:IsKeyDown(Enum.KeyCode.A) then move -= camCF.RightVector end
+			if userInputService:IsKeyDown(Enum.KeyCode.Space) then move += Vector3.new(0, 1, 0) end
+			if userInputService:IsKeyDown(Enum.KeyCode.LeftControl) or userInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
+				move -= Vector3.new(0, 1, 0)
+			end
+		end
+		local speed = tonumber(TemplateHub.values["Fly Speed"]) or 60
+		flyBV.Velocity = move.Magnitude > 0 and (move.Unit * speed) or Vector3.zero
+	end)
+	return true
+end
+
+TemplateHub.restoreMovement = function()
+	restoreWalkSpeed()
+	restoreFly()
+end
+TemplateHub.featureCallbacks["WalkSpeed"] = setWalkSpeed
+TemplateHub.featureCallbacks["Fly"] = setFly
+
+-- Single-select dropdown using template styling.
+local function addDropdown(parent, text, options, default)
+	local holder = createCard("Frame", parent, text, 30)
+	local headerBtn = create("TextButton", {
+		Size = UDim2.new(1, 0, 0, 30),
+		BackgroundTransparency = 1,
+		Text = "",
+		AutoButtonColor = false,
+	}, holder)
+	create("TextLabel", {
+		Size = UDim2.new(0.55, -8, 1, 0),
+		Position = UDim2.fromOffset(10, 0),
+		BackgroundTransparency = 1,
+		Text = text,
+		TextColor3 = TEXT_COLOR,
+		TextSize = 13,
+		Font = TEXT_FONT,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, headerBtn)
+	local valueLbl = create("TextLabel", {
+		Size = UDim2.new(0.45, -12, 1, 0),
+		Position = UDim2.new(0.55, 0, 0, 0),
+		BackgroundTransparency = 1,
+		Text = "",
+		TextColor3 = ACCENT_A,
+		TextSize = 12,
+		Font = BOLD_FONT,
+		TextXAlignment = Enum.TextXAlignment.Right,
+	}, headerBtn)
+
+	local listHeight = math.min(#options * 24 + 8, 140)
+	local panel = create("Frame", {
+		Size = UDim2.new(1, -12, 0, listHeight),
+		Position = UDim2.fromOffset(6, 32),
+		BackgroundColor3 = ELEMENT_COLOR,
+		BorderSizePixel = 0,
+		Visible = false,
+	}, holder)
+	create("UICorner", { CornerRadius = UDim.new(0, 4) }, panel)
+	addStroke(panel, DIM_TEXT_COLOR, 0.5)
+
+	local scroll = create("ScrollingFrame", {
+		Size = UDim2.new(1, -6, 1, -6),
+		Position = UDim2.fromOffset(3, 3),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 4,
+		ScrollBarImageColor3 = ACCENT_B,
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	}, panel)
+	create("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, scroll)
+
+	local current = default or options[1]
+	local expanded = false
+	local rowLabels = {}
+	TemplateHub.values[text] = current
+	TemplateHub.defaults[text] = current
+
+	local function refresh()
+		valueLbl.Text = tostring(current) .. (expanded and " ▴" or " ▾")
+		for opt, lbl in pairs(rowLabels) do
+			lbl.TextColor3 = opt == current and ACCENT_A or OFF_TEXT_COLOR
+			lbl.Font = opt == current and BOLD_FONT or TEXT_FONT
+		end
+	end
+
+	local function setOpen(open)
+		expanded = open
+		panel.Visible = expanded
+		tween(holder, FAST_TWEEN, { Size = UDim2.new(1, 0, 0, expanded and (36 + listHeight) or 30) })
+		refresh()
+	end
+
+	TemplateHub.setters[text] = function(val)
+		if table.find(options, val) then
+			current = val
+			TemplateHub.values[text] = val
+			refresh()
+		end
+	end
+
+	for i, opt in ipairs(options) do
+		local row = create("TextButton", {
+			Size = UDim2.new(1, -2, 0, 22),
+			BackgroundColor3 = ROW_COLOR,
+			BackgroundTransparency = 0.45,
+			BorderSizePixel = 0,
+			Text = "",
+			LayoutOrder = i,
+			AutoButtonColor = false,
+		}, scroll)
+		create("UICorner", { CornerRadius = UDim.new(0, 3) }, row)
+		local lbl = create("TextLabel", {
+			Size = UDim2.new(1, -14, 1, 0),
+			Position = UDim2.fromOffset(8, 0),
+			BackgroundTransparency = 1,
+			Text = tostring(opt),
+			TextColor3 = OFF_TEXT_COLOR,
+			TextSize = 12,
+			Font = TEXT_FONT,
+			TextXAlignment = Enum.TextXAlignment.Left,
+		}, row)
+		rowLabels[opt] = lbl
+		row.MouseButton1Click:Connect(function()
+			TemplateHub.setters[text](opt)
+			setOpen(false)
+		end)
+	end
+
+	headerBtn.MouseButton1Click:Connect(function()
+		setOpen(not expanded)
+	end)
+
+	refresh()
+	table.insert(TemplateHub.searchables, holder)
+end
+
+-- Multi-select dropdown using template styling.
+local function addMultiDropdown(parent, text, optionsProvider)
+	local holder = createCard("Frame", parent, text, 30)
+	local headerBtn = create("TextButton", {
+		Size = UDim2.new(1, 0, 0, 30),
+		BackgroundTransparency = 1,
+		Text = "",
+		AutoButtonColor = false,
+	}, holder)
+	create("TextLabel", {
+		Size = UDim2.new(0.45, -8, 1, 0),
+		Position = UDim2.fromOffset(10, 0),
+		BackgroundTransparency = 1,
+		Text = text,
+		TextColor3 = TEXT_COLOR,
+		TextSize = 13,
+		Font = TEXT_FONT,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, headerBtn)
+	local summaryLbl = create("TextLabel", {
+		Size = UDim2.new(0.55, -12, 1, 0),
+		Position = UDim2.new(0.45, 0, 0, 0),
+		BackgroundTransparency = 1,
+		Text = "Any ▾",
+		TextColor3 = DIM_TEXT_COLOR,
+		TextSize = 12,
+		Font = TEXT_FONT,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+	}, headerBtn)
+
+	local panel = create("Frame", {
+		Size = UDim2.new(1, -12, 0, 166),
+		Position = UDim2.fromOffset(6, 32),
+		BackgroundColor3 = ELEMENT_COLOR,
+		BorderSizePixel = 0,
+		Visible = false,
+	}, holder)
+	create("UICorner", { CornerRadius = UDim.new(0, 4) }, panel)
+	addStroke(panel, DIM_TEXT_COLOR, 0.5)
+
+	local searchInput = create("TextBox", {
+		Size = UDim2.new(1, -58, 0, 22),
+		Position = UDim2.fromOffset(4, 4),
+		BackgroundColor3 = ROW_COLOR,
+		BorderSizePixel = 0,
+		Text = "",
+		PlaceholderText = "Search...",
+		TextColor3 = TEXT_COLOR,
+		PlaceholderColor3 = DIM_TEXT_COLOR,
+		TextSize = 12,
+		Font = TEXT_FONT,
+		ClearTextOnFocus = false,
+	}, panel)
+	create("UICorner", { CornerRadius = UDim.new(0, 4) }, searchInput)
+
+	local clearBtn = create("TextButton", {
+		Size = UDim2.fromOffset(46, 22),
+		Position = UDim2.new(1, -50, 0, 4),
+		BackgroundColor3 = ROW_COLOR,
+		BorderSizePixel = 0,
+		Text = "Clear",
+		TextColor3 = OFF_TEXT_COLOR,
+		TextSize = 11,
+		Font = BOLD_FONT,
+		AutoButtonColor = false,
+	}, panel)
+	create("UICorner", { CornerRadius = UDim.new(0, 4) }, clearBtn)
+
+	local scroll = create("ScrollingFrame", {
+		Size = UDim2.new(1, -8, 1, -34),
+		Position = UDim2.fromOffset(4, 30),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 4,
+		ScrollBarImageColor3 = ACCENT_B,
+		CanvasSize = UDim2.new(0, 0, 0, 0),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+	}, panel)
+	create("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, scroll)
+
+	local selected = {}
+	local expanded = false
+	local rowButtons = {}
+	TemplateHub.values[text] = selected
+	TemplateHub.defaults[text] = {}
+
+	local function updateSummary()
+		local count, firstLabel = 0, nil
+		for k, v in pairs(selected) do
+			if v == true then
+				count += 1
+				if not firstLabel then firstLabel = k end
+			end
+		end
+		local arrow = expanded and " ▴" or " ▾"
+		if count == 0 then
+			summaryLbl.Text = "Any" .. arrow
+			summaryLbl.TextColor3 = DIM_TEXT_COLOR
+		elseif count == 1 then
+			summaryLbl.Text = tostring(firstLabel) .. arrow
+			summaryLbl.TextColor3 = ACCENT_A
+		else
+			summaryLbl.Text = tostring(count) .. " selected" .. arrow
+			summaryLbl.TextColor3 = ACCENT_A
+		end
+		for key, info in pairs(rowButtons) do
+			local on = selected[key] == true
+			info.check.Visible = on
+			info.label.TextColor3 = on and TEXT_COLOR or OFF_TEXT_COLOR
+		end
+	end
+
+	local function buildList()
+		for _, c in ipairs(scroll:GetChildren()) do
+			if c:IsA("GuiObject") then c:Destroy() end
+		end
+		table.clear(rowButtons)
+		local opts = type(optionsProvider) == "function" and optionsProvider() or optionsProvider
+		local query = string.lower((searchInput.Text or ""):match("^%s*(.-)%s*$"))
+		for i, item in ipairs(opts) do
+			local key = type(item) == "table" and item.key or tostring(item)
+			local labelText = type(item) == "table" and item.label or tostring(item)
+			if query == "" or string.find(string.lower(labelText), query, 1, true) or string.find(string.lower(key), query, 1, true) then
+				local row = create("TextButton", {
+					Size = UDim2.new(1, -4, 0, 22),
+					BackgroundColor3 = ROW_COLOR,
+					BackgroundTransparency = 0.45,
+					BorderSizePixel = 0,
+					Text = "",
+					LayoutOrder = i,
+					AutoButtonColor = false,
+				}, scroll)
+				create("UICorner", { CornerRadius = UDim.new(0, 3) }, row)
+				local box = create("Frame", {
+					Size = UDim2.fromOffset(12, 12),
+					Position = UDim2.new(0, 6, 0.5, -6),
+					BackgroundColor3 = ELEMENT_COLOR,
+					BorderSizePixel = 0,
+				}, row)
+				create("UICorner", { CornerRadius = UDim.new(0, 3) }, box)
+				addStroke(box, DIM_TEXT_COLOR, 0.4)
+				local chk = create("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					Position = UDim2.fromScale(0.5, 0.5),
+					Size = UDim2.fromOffset(8, 8),
+					BackgroundColor3 = ACCENT_A,
+					BorderSizePixel = 0,
+					Visible = selected[key] == true,
+				}, box)
+				create("UICorner", { CornerRadius = UDim.new(0, 2) }, chk)
+				local lbl = create("TextLabel", {
+					Size = UDim2.new(1, -26, 1, 0),
+					Position = UDim2.fromOffset(24, 0),
+					BackgroundTransparency = 1,
+					Text = labelText,
+					TextColor3 = selected[key] == true and TEXT_COLOR or OFF_TEXT_COLOR,
+					TextSize = 12,
+					Font = TEXT_FONT,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+				}, row)
+				rowButtons[key] = { check = chk, label = lbl }
+				row.MouseButton1Click:Connect(function()
+					if selected[key] then selected[key] = nil else selected[key] = true end
+					updateSummary()
+				end)
+			end
+		end
+	end
+
+	TemplateHub.setters[text] = function(value)
+		table.clear(selected)
+		if type(value) == "table" then
+			for k, v in pairs(value) do
+				if v == true and type(k) == "string" then selected[k] = true end
+			end
+		elseif type(value) == "string" and value ~= "" and string.lower(value) ~= "any" then
+			for term in value:gmatch("[^,]+") do
+				local trimmed = term:match("^%s*(.-)%s*$")
+				if trimmed ~= "" then selected[trimmed] = true end
+			end
+		end
+		updateSummary()
+	end
+
+	headerBtn.MouseButton1Click:Connect(function()
+		expanded = not expanded
+		if expanded then
+			buildList()
+		end
+		panel.Visible = expanded
+		tween(holder, FAST_TWEEN, { Size = UDim2.new(1, 0, 0, expanded and 204 or 30) })
+		updateSummary()
+	end)
+	searchInput:GetPropertyChangedSignal("Text"):Connect(function()
+		if expanded then buildList() end
+	end)
+	clearBtn.MouseButton1Click:Connect(function()
+		table.clear(selected)
+		updateSummary()
+	end)
+
+	updateSummary()
+	table.insert(TemplateHub.searchables, holder)
+end
+
+local function getMutationOptions()
+	local opts = { "Normal" }
+	local seen = { Normal = true }
+	local ok, cfg = pcall(configModule, "MutationsConfig")
+	if ok and type(cfg.List) == "table" then
+		for _, m in ipairs(cfg.List) do
+			if type(m.Name) == "string" and not seen[m.Name] then
+				seen[m.Name] = true
+				table.insert(opts, m.Name)
+			end
+		end
+	else
+		for _, name in ipairs({ "Gold", "Diamond", "Emerald", "Ruby", "Rainbow", "Champion", "Lucid", "Gobble" }) do
+			table.insert(opts, name)
+		end
+	end
+	return opts
+end
+
+local function getRarityOptions()
+	local opts = {}
+	local ok, cfg = pcall(configModule, "RarityConfig")
+	if ok and type(cfg.List) == "table" then
+		for _, r in ipairs(cfg.List) do
+			if type(r.Name) == "string" then table.insert(opts, r.Name) end
+		end
+	else
+		opts = { "Common", "Uncommon", "Rare", "Epic", "Legendary", "Mythic", "Secret", "Divine", "Celestial", "Eternal", "Cosmic", "Supreme", "Sovereign", "Astral" }
+	end
+	return opts
+end
+
+local function getAnimalOptions()
+	local displayNames = {}
+	local okData, animalsData = pcall(require, replicatedStorage:WaitForChild("AnimalsData", 2))
+	if okData and type(animalsData) == "table" then
+		for _, list in pairs(animalsData) do
+			if type(list) == "table" then
+				for _, entry in ipairs(list) do
+					if type(entry.ModelName) == "string" and type(entry.Name) == "string" then
+						displayNames[entry.ModelName] = entry.Name
+					end
+				end
+			end
+		end
+	end
+	local okTg, tgCfg = pcall(configModule, "ThanksgivingConfig")
+	if okTg and type(tgCfg.Animals) == "table" then
+		for _, entry in ipairs(tgCfg.Animals) do
+			if type(entry.ModelName) == "string" and type(entry.Name) == "string" then
+				displayNames[entry.ModelName] = entry.Name
+			end
+		end
+		if type(tgCfg.Gobbler) == "table" and type(tgCfg.Gobbler.ModelName) == "string" then
+			displayNames[tgCfg.Gobbler.ModelName] = tgCfg.Gobbler.Name or tgCfg.Gobbler.ModelName
+		end
+	end
+
+	local opts = {}
+	local seen = {}
+	local okEcon, econ = pcall(configModule, "AnimalEconomy")
+	if okEcon and type(econ.List) == "table" then
+		for modelName in pairs(econ.List) do
+			seen[modelName] = true
+			local disp = displayNames[modelName]
+			local label = (disp and disp ~= modelName) and (disp .. " (" .. modelName .. ")") or modelName
+			table.insert(opts, { key = modelName, label = label })
+		end
+	end
+	for modelName, disp in pairs(displayNames) do
+		if not seen[modelName] then
+			local label = (disp ~= modelName) and (disp .. " (" .. modelName .. ")") or modelName
+			table.insert(opts, { key = modelName, label = label })
+		end
+	end
+	table.sort(opts, function(a, b) return string.lower(a.label) < string.lower(b.label) end)
+	return opts
+end
+
+local function hasSelections(tbl)
+	if type(tbl) ~= "table" then return false end
+	for _, v in pairs(tbl) do
+		if v == true then return true end
+	end
+	return false
+end
+local function matchesSet(selectedSet, value)
+	if not hasSelections(selectedSet) then return true end
+	return selectedSet[tostring(value or "")] == true
+end
+local function filters(prefix)
+	return {
+		mutation = TemplateHub.values[prefix .. " Mutations"],
+		rarity = TemplateHub.values[prefix .. " Rarities"],
+		animal = TemplateHub.values[prefix .. " Animals"],
+	}
+end
+local function isRestricted(f)
+	return hasSelections(f.mutation) or hasSelections(f.rarity) or hasSelections(f.animal)
+end
+local function filterSignature(f)
+	local parts = {}
+	for _, tbl in ipairs({ f.mutation, f.rarity, f.animal }) do
+		local keys = {}
+		if type(tbl) == "table" then
+			for k, v in pairs(tbl) do
+				if v == true then table.insert(keys, k) end
+			end
+		end
+		table.sort(keys)
+		table.insert(parts, table.concat(keys, ","))
+	end
+	return table.concat(parts, "|")
+end
+local function animalStats(entry)
+	if type(entry) ~= "table" or type(entry.ModelName) ~= "string" then return nil end
+	local economy = configModule("AnimalEconomy")
+	local details = economy.Get(entry.ModelName)
+	if type(details) ~= "table" or type(details.Rarity) ~= "string" then return nil end
+	return { name = entry.ModelName, mutation = entry.Mutation or "Normal", rarity = details.Rarity }
+end
+local function matchesAnimal(f, stats)
+	return stats ~= nil and matchesSet(f.mutation, stats.mutation) and matchesSet(f.rarity, stats.rarity) and matchesSet(f.animal, stats.name)
+end
+local sellBusy = false
+local function sellMatches(auto)
+	if sellBusy then error("Sell already running") end
+	local f = filters("Sell")
+	if not isRestricted(f) then error("Select at least one sell filter first") end
+	local sig = filterSignature(f)
+	local animals = playerData().Animals
+	if type(animals) ~= "table" then error("Animal inventory unavailable") end
+	local mutations = sharedModule("Mutations")
+	if type(mutations.EventOnlyNames) ~= "function" then error("Event protection unavailable") end
+	sellBusy = true
+	local ok, result = xpcall(function()
+		local count = 0
+		for id, entry in pairs(animals) do
+			if not TemplateHub.active or (auto and not TemplateHub.values["Auto Sell"]) then break end
+			if filterSignature(filters("Sell")) ~= sig then break end
+			-- Re-read each animal so an inventory change cannot sell a stale entry.
+			local current = playerData().Animals
+			entry = type(current) == "table" and current[id] or nil
+			if type(id) == "string" and type(entry) == "table" and not entry.Placed and not entry.Bought and not entry.Locked then
+				local protected = mutations.EventOnlyNames(entry)
+				if type(protected) == "table" and #protected == 0 and matchesAnimal(f, animalStats(entry)) and TemplateHub.active and (not auto or TemplateHub.values["Auto Sell"]) and filterSignature(filters("Sell")) == sig then
+					doCall("Plot_SellAnimal", id)
+					count += 1
+					task.wait(0.5)
+				end
+			end
+		end
+		return count
+	end, function(err) return tostring(err) end)
+	sellBusy = false
+	if not ok then error(result) end
+	return result
+end
+periodic("Auto Sell", 10, function() sellMatches(true) end, function()
+	if not isRestricted(filters("Sell")) then error("Select at least one sell filter first") end
+end)
+local function sellOnce()
+	local ok, result = pcall(sellMatches, false)
+	TemplateHub.report(ok and ("Sold " .. result .. " matching animals") or tostring(result), not ok)
+end
+
+---Build the whole interface.
+local function initializeScript()
+	-- Remove a previous copy of the GUI when the script runs again.
+	if typeof(shared) == "table" and shared.ThrowFoodHubGui then
+		pcall(function()
+			shared.ThrowFoodHubGui:Destroy()
+		end)
+	end
+
+	-- Prefer the hidden GUI container when the executor provides one.
+	local guiParent = localPlayer:WaitForChild("PlayerGui")
+
+	if typeof(gethui) == "function" then
+		local success, hiddenParent = pcall(gethui)
+
+		if success and hiddenParent then
+			guiParent = hiddenParent
+		end
+	end
+
+	local screenGui = create("ScreenGui", {
+		Name = "ThrowFoodHub",
+		ResetOnSpawn = false,
+		IgnoreGuiInset = true,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	}, guiParent)
+
+	if typeof(shared) == "table" then
+		shared.ThrowFoodHubGui = screenGui
+		shared.ThrowFoodHub = TemplateHub
+	end
+
+	-- Stop every global listener when the GUI is destroyed.
+	screenGui.Destroying:Connect(function()
+		TemplateHub.active = false
+		TemplateHub.values["Farm Animals"] = false
+		TemplateHub.values["Auto Train"] = false
+		TemplateHub.values["Auto Perfect"] = false
+		TemplateHub.values["Instant Throw"] = false
+		TemplateHub.values["Instantly View Throw"] = false
+		TemplateHub.values["Animal ESP"] = false
+		TemplateHub.values["WalkSpeed"] = false
+		TemplateHub.values["Fly"] = false
+		if TemplateHub.restoreLighting then pcall(TemplateHub.restoreLighting) end
+		if TemplateHub.restoreInstant then pcall(TemplateHub.restoreInstant) end
+		if TemplateHub.restorePerfect then pcall(TemplateHub.restorePerfect) end
+		if TemplateHub.restoreVisuals then pcall(TemplateHub.restoreVisuals) end
+		if TemplateHub.restoreMovement then pcall(TemplateHub.restoreMovement) end
+		if typeof(shared) == "table" and shared.ThrowFoodHubGui == screenGui then
+			shared.ThrowFoodHubGui = nil
+			shared.ThrowFoodHub = nil
+		end
+		for _, connection in TemplateHub.connections do
+			connection:Disconnect()
+		end
+
+		table.clear(TemplateHub.connections)
+	end)
+
+	-- Stacked notifications in the bottom right corner.
+	local toastHolder = create("Frame", {
+		AnchorPoint = Vector2.new(1, 1),
+		Position = UDim2.new(1, -16, 1, -16),
+		Size = UDim2.fromOffset(230, 320),
+		BackgroundTransparency = 1,
+		ZIndex = 20,
+	}, screenGui)
+
+	create("UIListLayout", {
+		Padding = UDim.new(0, 6),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+		HorizontalAlignment = Enum.HorizontalAlignment.Right,
+		VerticalAlignment = Enum.VerticalAlignment.Bottom,
+	}, toastHolder)
+
+	---Show a toast for a toggled feature.
+	TemplateHub.notify = function(name, enabled, messageOnly)
+		if not toastHolder.Parent then
+			return
+		end
+
+		local toast = create("CanvasGroup", {
+			Size = UDim2.fromOffset(230, 34),
+			BackgroundColor3 = Color3.fromRGB(18, 18, 20),
+			BorderSizePixel = 0,
+			GroupTransparency = 1,
+		}, toastHolder)
+
+		create("UICorner", { CornerRadius = UDim.new(0, 7) }, toast)
+		addStroke(toast, Color3.new(1, 1, 1), 0.8)
+
+		create("Frame", {
+			Size = UDim2.new(0, 3, 1, -12),
+			Position = UDim2.fromOffset(6, 6),
+			BackgroundColor3 = enabled and Color3.fromRGB(120, 220, 140) or Color3.fromRGB(230, 100, 100),
+			BorderSizePixel = 0,
+		}, toast)
+
+		create("TextLabel", {
+			Size = UDim2.new(1, -80, 1, 0),
+			Position = UDim2.fromOffset(18, 0),
+			BackgroundTransparency = 1,
+			Text = name,
+			TextColor3 = TEXT_COLOR,
+			TextSize = 13,
+			Font = TEXT_FONT,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+		}, toast)
+
+		create("TextLabel", {
+			Size = UDim2.fromOffset(46, 34),
+			Position = UDim2.new(1, -54, 0, 0),
+			BackgroundTransparency = 1,
+			Text = messageOnly and "" or (enabled and "ON" or "OFF"),
+			TextColor3 = enabled and Color3.fromRGB(120, 220, 140) or Color3.fromRGB(230, 100, 100),
+			TextSize = 12,
+			Font = BOLD_FONT,
+			TextXAlignment = Enum.TextXAlignment.Right,
+		}, toast)
+
+		tween(toast, FAST_TWEEN, { GroupTransparency = 0 })
+
+		task.delay(2, function()
+			tween(toast, MEDIUM_TWEEN, { GroupTransparency = 1 }).Completed:Wait()
+			toast:Destroy()
+		end)
+	end
+
+	TemplateHub.report = function(message, isError)
+		print("[Throw Food Hub] " .. tostring(message))
+		if TemplateHub.notify then TemplateHub.notify(tostring(message), not isError, true) end
+	end
+
+	local window = create("Frame", {
+		Size = UDim2.fromOffset(WINDOW_WIDTH, WINDOW_HEIGHT),
+		Position = UDim2.new(0.5, -WINDOW_WIDTH / 2, 0.5, -WINDOW_HEIGHT / 2),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0,
+		ClipsDescendants = true,
+	}, screenGui)
+
+	create("UICorner", { CornerRadius = UDim.new(0, 8) }, window)
+
+	create("UIGradient", {
+		Color = ColorSequence.new(BACKGROUND_TOP, BACKGROUND_BOTTOM),
+		Rotation = 90,
+	}, window)
+
+	local windowStroke = addStroke(window, Color3.new(1, 1, 1), 0.2, 1.5)
+	addGradient(windowStroke, 45)
+
+	local windowScale = create("UIScale", { Scale = 0.85 }, window)
+	tween(windowScale, POP_TWEEN, { Scale = 1 })
+
+	-- Top sheen for depth.
+	local sheen = create("Frame", {
+		Size = UDim2.new(1, 0, 0, 140),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0,
+	}, window)
+
+	create("UIGradient", {
+		Transparency = NumberSequence.new(0.965, 1),
+		Rotation = 90,
+	}, sheen)
+
+	local titleBar = create("Frame", {
+		Size = UDim2.new(1, 0, 0, TITLE_HEIGHT),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0,
+	}, window)
+
+	local titleGradient = addGradient(titleBar, 0)
+	titleGradient.Transparency = NumberSequence.new(0.8, 0.92)
+
+	local titleLine = create("Frame", {
+		Size = UDim2.new(1, 0, 0, 1),
+		Position = UDim2.new(0, 0, 1, -1),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0,
+	}, titleBar)
+
+	addGradient(titleLine, 0)
+
+	create("TextLabel", {
+		Size = UDim2.new(1, -260, 1, 0),
+		Position = UDim2.fromOffset(12, 0),
+		BackgroundTransparency = 1,
+		RichText = true,
+		Text = "<b>" .. TITLE_TEXT .. "</b>",
+		TextColor3 = TEXT_COLOR,
+		TextSize = 14,
+		Font = BOLD_FONT,
+		TextXAlignment = Enum.TextXAlignment.Left,
+	}, titleBar)
+
+	local searchBox = create("TextBox", {
+		Size = UDim2.fromOffset(130, 22),
+		Position = UDim2.new(1, -200, 0.5, -11),
+		BackgroundColor3 = ELEMENT_COLOR,
+		BackgroundTransparency = 0.2,
+		BorderSizePixel = 0,
+		PlaceholderText = "Search",
+		PlaceholderColor3 = DIM_TEXT_COLOR,
+		Text = "",
+		TextColor3 = TEXT_COLOR,
+		TextSize = 12,
+		Font = TEXT_FONT,
+		ClearTextOnFocus = false,
+	}, titleBar)
+
+	create("UICorner", { CornerRadius = UDim.new(0, 5) }, searchBox)
+	local searchStroke = addStroke(searchBox, ACCENT_A, 1)
+
+	searchBox.Focused:Connect(function()
+		tween(searchStroke, FAST_TWEEN, { Transparency = 0 })
+	end)
+
+	searchBox.FocusLost:Connect(function()
+		tween(searchStroke, FAST_TWEEN, { Transparency = 1 })
+	end)
+
+	local minimizeButton = createTitleButton(titleBar, "-", -60, ACCENT_B)
+	local closeButton = createTitleButton(titleBar, "X", -32, Color3.fromRGB(230, 60, 70))
+
+	makeDraggable(titleBar, window)
+
+	local minimized = false
+	local windowWidth = WINDOW_WIDTH
+	local windowHeight = WINDOW_HEIGHT
+
+	minimizeButton.Activated:Connect(function()
+		minimized = not minimized
+		TemplateHub.resizeHandle.Visible = not minimized
+		tween(window, MEDIUM_TWEEN, { Size = UDim2.fromOffset(windowWidth, minimized and TITLE_HEIGHT or windowHeight) })
+	end)
+
+	closeButton.Activated:Connect(function()
+		tween(windowScale, FAST_TWEEN, { Scale = 0 }).Completed:Connect(function()
+			screenGui:Destroy()
+		end)
+	end)
+
+	-- Tab bar with an animated indicator.
+	local tabBar = create("Frame", {
+		Size = UDim2.new(1, 0, 0, TAB_HEIGHT),
+		Position = UDim2.fromOffset(0, TITLE_HEIGHT),
+		BackgroundTransparency = 1,
+	}, window)
+
+	local indicator = create("Frame", {
+		Size = UDim2.new(1 / #TAB_NAMES, -12, 1, -6),
+		Position = UDim2.new(0, 6, 0, 3),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BackgroundTransparency = 0.9,
+		BorderSizePixel = 0,
+	}, tabBar)
+
+	create("UICorner", { CornerRadius = UDim.new(0, 6) }, indicator)
+	addStroke(indicator, Color3.new(1, 1, 1), 0.8)
+
+	local underline = create("Frame", {
+		AnchorPoint = Vector2.new(0.5, 1),
+		Size = UDim2.new(0.5, 0, 0, 2),
+		Position = UDim2.fromScale(0.5, 1),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0,
+	}, indicator)
+
+	create("UICorner", { CornerRadius = UDim.new(1, 0) }, underline)
+	addGradient(underline, 0)
+	TemplateHub.indicator = indicator
+
+	local contentTop = TITLE_HEIGHT + TAB_HEIGHT + 8
+
+	local content = create("Frame", {
+		Size = UDim2.new(1, -20, 1, -(contentTop + 10)),
+		Position = UDim2.fromOffset(10, contentTop),
+		BackgroundTransparency = 1,
+	}, window)
+
+	-- Resize grip in the bottom right corner.
+	local resizeHandle = create("TextButton", {
+		AnchorPoint = Vector2.new(1, 1),
+		Size = UDim2.fromOffset(18, 18),
+		Position = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Text = "",
+		ZIndex = 10,
+	}, window)
+
+	TemplateHub.resizeHandle = resizeHandle
+
+	for gripIndex = 1, 3 do
+		create("Frame", {
+			AnchorPoint = Vector2.new(1, 1),
+			Size = UDim2.fromOffset(gripIndex * 4, 1),
+			Position = UDim2.new(1, -3, 1, -3 - (3 - gripIndex) * 4 - 2),
+			BackgroundColor3 = DIM_TEXT_COLOR,
+			BorderSizePixel = 0,
+		}, resizeHandle)
+	end
+
+	local resizing = false
+	local resizeStart, startWidth, startHeight
+
+	resizeHandle.MouseEnter:Connect(function()
+		for _, grip in resizeHandle:GetChildren() do
+			tween(grip, FAST_TWEEN, { BackgroundColor3 = ACCENT_A })
+		end
+	end)
+
+	resizeHandle.MouseLeave:Connect(function()
+		if resizing then
+			return
+		end
+
+		for _, grip in resizeHandle:GetChildren() do
+			tween(grip, FAST_TWEEN, { BackgroundColor3 = DIM_TEXT_COLOR })
+		end
+	end)
+
+	resizeHandle.InputBegan:Connect(function(input)
+		if not isPress(input) then
+			return
+		end
+
+		resizing = true
+		resizeStart = input.Position
+		startWidth, startHeight = windowWidth, windowHeight
+	end)
+
+	connectInput(userInputService.InputChanged, function(input)
+		if not resizing or not isMove(input) then
+			return
+		end
+
+		local delta = input.Position - resizeStart
+		windowWidth = math.clamp(startWidth + delta.X, MIN_WIDTH, MAX_WIDTH)
+		windowHeight = math.clamp(startHeight + delta.Y, MIN_HEIGHT, MAX_HEIGHT)
+		window.Size = UDim2.fromOffset(windowWidth, windowHeight)
+	end)
+
+	connectInput(userInputService.InputEnded, function(input)
+		if not resizing or not isPress(input) then
+			return
+		end
+
+		resizing = false
+
+		for _, grip in resizeHandle:GetChildren() do
+			tween(grip, FAST_TWEEN, { BackgroundColor3 = DIM_TEXT_COLOR })
+		end
+	end)
+
+	for index, name in TAB_NAMES do
+		local button = create("TextButton", {
+			Size = UDim2.fromScale(1 / #TAB_NAMES, 1),
+			Position = UDim2.fromScale((index - 1) / #TAB_NAMES, 0),
+			BackgroundTransparency = 1,
+			Text = name,
+			TextColor3 = DIM_TEXT_COLOR,
+			TextSize = 13,
+			Font = BOLD_FONT,
+			AutoButtonColor = false,
+		}, tabBar)
+
+		local page = create("CanvasGroup", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			Visible = false,
+		}, content)
+
+		button.MouseEnter:Connect(function()
+			if TemplateHub.selected ~= name then
+				tween(button, FAST_TWEEN, { TextColor3 = OFF_TEXT_COLOR })
+			end
+		end)
+
+		button.MouseLeave:Connect(function()
+			if TemplateHub.selected ~= name then
+				tween(button, FAST_TWEEN, { TextColor3 = DIM_TEXT_COLOR })
+			end
+		end)
+
+		button.Activated:Connect(function()
+			switchTab(name)
+		end)
+
+		TemplateHub.pages[name] = page
+		TemplateHub.tabButtons[name] = button
+		TemplateHub.tabIndex[name] = index
+	end
+
+	-- Main: throw, training, animal and reward features.
+	local mainLeft = createColumn(TemplateHub.pages.Main, UDim2.fromOffset(0, 0))
+	local mainRight = createColumn(TemplateHub.pages.Main, UDim2.new(0.5, 6, 0, 0))
+
+	addSection(mainLeft, "Throw")
+	addToggle(mainLeft, "Auto Perfect", nil, false)
+	addToggle(mainLeft, "Instant Throw", nil, false)
+	addSection(mainLeft, "Training")
+	addToggle(mainLeft, "Auto Train", nil, false)
+	addToggle(mainLeft, "Auto 2x Press", nil, false)
+	addSection(mainRight, "Equip Animals")
+	addToggle(mainRight, "Auto Equip Best", nil, false)
+	addSlider(mainRight, "Equip Delay", 5, 120, 30, 0)
+	addSection(mainRight, "Rewards")
+	addToggle(mainRight, "Auto Claim Index Rewards", nil, false)
+	addToggle(mainRight, "Auto Equip Best Trails", nil, false)
+	addDropdown(mainRight, "Trail Priority", { "Xp", "Cash" }, "Xp")
+
+	-- Extra: the observed farming sequence and reference features awaiting data.
+	local extraLeft = createColumn(TemplateHub.pages.Extra, UDim2.fromOffset(0, 0))
+	local extraRight = createColumn(TemplateHub.pages.Extra, UDim2.new(0.5, 6, 0, 0))
+	addSection(extraLeft, "Farm")
+	addToggle(extraLeft, "Farm Animals", nil, false)
+	addSlider(extraLeft, "Meter Delay", 0.1, 20, 1.5, 1)
+	addSlider(extraLeft, "Reveal Delay", 0.1, 30, 8, 1)
+	addSlider(extraLeft, "Complete Delay", 0.1, 30, 8, 1)
+	addSlider(extraLeft, "Farm Delay", 0.1, 60, 3, 1)
+	addCycle(extraLeft, "Index Priority", { "First incomplete", "Most complete" })
+	addToggle(extraLeft, "Auto Index", nil, false)
+	addToggle(extraLeft, "Train Between Farms", nil, false)
+	addSlider(extraLeft, "Train After Throws", 1, 100, 30, 0)
+	addSlider(extraLeft, "Train for(s)", 1, 300, 30, 0)
+	addSection(extraLeft, "Thanksgiving")
+	addToggle(extraLeft, "Auto Event (claim chef rewards)", nil, false)
+	addToggle(extraLeft, "Auto Thanksgiving Index", nil, false)
+	addToggle(extraLeft, "Auto Cook Sandwich", nil, false)
+	addDropdown(extraLeft, "Cook Size", { "Best", "Regular", "Big", "Mega" }, "Best")
+
+	addSection(extraRight, "Movement")
+	addToggle(extraRight, "WalkSpeed", nil, false)
+	addSlider(extraRight, "WalkSpeed Value", 16, 200, 32, 0)
+	addToggle(extraRight, "Fly", nil, false)
+	addSlider(extraRight, "Fly Speed", 20, 300, 60, 0)
+	addSection(extraRight, "Upgrades")
+	addToggle(extraRight, "Auto Upgrade Bars", nil, false)
+	addToggle(extraRight, "Auto Upgrade Plot", nil, false)
+	addToggle(extraRight, "Auto Upgrade Food", nil, false)
+	addButton(extraRight, "Upgrade Stand", function()
+		task.spawn(function()
+			local ok, result = callRemote("Stand_Upgrade", false)
+			if ok then
+				TemplateHub.report(type(result) == "table" and result.Ok == true and "Stand upgrade accepted" or "Stand call returned; check game")
+			else
+				TemplateHub.report(tostring(result), true)
+			end
+		end)
+	end)
+	addSection(extraRight, "Selling (filters are AND)")
+	addMultiDropdown(extraRight, "Sell Mutations", getMutationOptions)
+	addMultiDropdown(extraRight, "Sell Rarities", getRarityOptions)
+	addMultiDropdown(extraRight, "Sell Animals", getAnimalOptions)
+	addButton(extraRight, "Sell Match", function()
+		local valid, f = pcall(filters, "Sell")
+		if not valid or not isRestricted(f) then
+			return TemplateHub.report(valid and "Select at least one sell filter first" or tostring(f), true)
+		end
+		task.spawn(sellOnce)
+	end)
+	addToggle(extraRight, "Auto Sell", nil, false)
+
+	-- Visuals are local-only and restored when disabled or unloaded.
+	local visualsLeft = createColumn(TemplateHub.pages.Visuals, UDim2.fromOffset(0, 0))
+	local visualsRight = createColumn(TemplateHub.pages.Visuals, UDim2.new(0.5, 6, 0, 0))
+	addSection(visualsLeft, "Environment")
+	addToggle(visualsLeft, "Fullbright", nil, false)
+	addSection(visualsRight, "Game Visuals")
+	addToggle(visualsRight, "Instantly View Throw", nil, false)
+	addToggle(visualsRight, "Animal ESP", nil, false)
+
+	-- Config tab.
+	local configLeft = createColumn(TemplateHub.pages.Config, UDim2.fromOffset(0, 0))
+	local configRight = createColumn(TemplateHub.pages.Config, UDim2.new(0.5, 6, 0, 0))
+
+	local statusLabel = create("TextLabel", {
+		Size = UDim2.new(1, -8, 0, 18),
+		Position = UDim2.new(0, 4, 1, -20),
+		BackgroundTransparency = 1,
+		Text = "",
+		TextColor3 = DIM_TEXT_COLOR,
+		TextSize = 12,
+		Font = TEXT_FONT,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ZIndex = 5,
+	}, TemplateHub.pages.Config)
+
+	---Show a short status message.
+	local function setStatus(message)
+		statusLabel.Text = message
+		statusLabel.TextTransparency = 0
+
+		task.delay(3, function()
+			if statusLabel.Text == message then
+				tween(statusLabel, MEDIUM_TWEEN, { TextTransparency = 1 })
+			end
+		end)
+	end
+
+	---Save every setting to a file.
+	local function saveSettings()
+		if not writefile then
+			return setStatus("Saving is not supported here.")
+		end
+
+		local ok, result = pcall(function()
+			if makefolder and isfolder and not isfolder(CONFIG_FOLDER) then
+				makefolder(CONFIG_FOLDER)
+			end
+
+			writefile(CONFIG_FILE, httpService:JSONEncode(TemplateHub.values))
+		end)
+
+		setStatus(ok and "Settings saved." or ("Save failed: " .. tostring(result)))
+	end
+
+	---Load every setting from the file.
+	local function loadSettings()
+		if not (readfile and isfile and isfile(CONFIG_FILE)) then
+			return setStatus("No saved settings found.")
+		end
+
+		local ok, data = pcall(function()
+			return httpService:JSONDecode(readfile(CONFIG_FILE))
+		end)
+
+		if not ok or typeof(data) ~= "table" then
+			return setStatus("Settings file is corrupted.")
+		end
+
+		local safeVisuals = { Fullbright = true, ["Instantly View Throw"] = true, ["Animal ESP"] = true }
+		for name, value in data do
+			-- Never start actions just because a settings file was loaded.
+			if TemplateHub.featureCallbacks[name] and not safeVisuals[name] then value = false end
+			local setter = TemplateHub.setters[name]
+
+			if setter then
+				pcall(setter, value)
+			end
+		end
+
+		setStatus("Settings loaded.")
+	end
+
+	---Reset every setting to its default.
+	local function resetSettings()
+		for name, value in TemplateHub.defaults do
+			TemplateHub.setters[name](value)
+		end
+
+		setStatus("Settings reset.")
+	end
+
+	addSection(configLeft, "Settings")
+	addButton(configLeft, "Save Settings", saveSettings)
+	addButton(configLeft, "Load Settings", loadSettings)
+	addButton(configLeft, "Reset Settings", resetSettings)
+	addButton(configLeft, "Copy Settings", function()
+		if not setclipboard then
+			return setStatus("Clipboard is not supported here.")
+		end
+
+		setclipboard(httpService:JSONEncode(TemplateHub.values))
+		setStatus("Settings copied.")
+	end)
+	addToggle(configLeft, "Auto Save", nil, false)
+
+	addSection(configRight, "Interface")
+	addCycle(configRight, "Menu Keybind", { "RightShift", "Insert", "RightControl", "Delete", "End" })
+	addButton(configRight, "Reset Window", function()
+		windowWidth, windowHeight = WINDOW_WIDTH, WINDOW_HEIGHT
+		minimized = false
+		TemplateHub.resizeHandle.Visible = true
+
+		tween(window, MEDIUM_TWEEN, {
+			Size = UDim2.fromOffset(windowWidth, windowHeight),
+			Position = UDim2.new(0.5, -windowWidth / 2, 0.5, -windowHeight / 2),
+		})
+	end)
+	addButton(configRight, "Unload GUI", function()
+		tween(windowScale, FAST_TWEEN, { Scale = 0 }).Completed:Connect(function()
+			screenGui:Destroy()
+		end)
+	end)
+
+	-- Apply the menu keybind and autosave when enabled.
+	task.spawn(function()
+		while screenGui.Parent do
+			local keyName = TemplateHub.values["Menu Keybind"]
+			TemplateHub.menuKey = Enum.KeyCode.RightShift
+
+			for _, item in Enum.KeyCode:GetEnumItems() do
+				if item.Name == keyName then
+					TemplateHub.menuKey = item
+					break
+				end
+			end
+
+			if TemplateHub.values["Auto Save"] and writefile then
+				pcall(function()
+					if makefolder and isfolder and not isfolder(CONFIG_FOLDER) then
+						makefolder(CONFIG_FOLDER)
+					end
+
+					writefile(CONFIG_FILE, httpService:JSONEncode(TemplateHub.values))
+				end)
+			end
+
+			task.wait(5)
+		end
+	end)
+
+	searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+		local query = string.lower(searchBox.Text)
+
+		for _, element in TemplateHub.searchables do
+			element.Visible = (query == "" or string.find(string.lower(element.Name), query, 1, true) ~= nil) and not element:GetAttribute("GroupHidden")
+		end
+
+		for _, section in TemplateHub.sections do
+			section.Visible = query == ""
+		end
+
+		for _, box in TemplateHub.boxes do
+			local anyVisible = query == ""
+
+			for _, child in box:GetChildren() do
+				if child:IsA("GuiObject") and child.Visible and not table.find(TemplateHub.sections, child) then
+					anyVisible = true
+					break
+				end
+			end
+
+			box.Visible = anyVisible
+		end
+	end)
+
+	-- The menu keybind hides and shows the menu.
+	connectInput(userInputService.InputBegan, function(input, gameProcessed)
+		if input.UserInputType ~= Enum.UserInputType.Keyboard then
+			return
+		end
+
+		-- A keybind button is waiting for the next key.
+		if TemplateHub.listening then
+			return TemplateHub.listening(input.KeyCode)
+		end
+
+		if gameProcessed then
+			return
+		end
+
+		if input.KeyCode == TemplateHub.menuKey then
+			screenGui.Enabled = not screenGui.Enabled
+			return
+		end
+
+		-- Toggle any feature bound to this key.
+		for featureName, keyCode in TemplateHub.keybinds do
+			if keyCode == input.KeyCode then
+				TemplateHub.setters[featureName](not TemplateHub.values[featureName])
+				TemplateHub.notify(featureName, TemplateHub.values[featureName])
+			end
+		end
+	end)
+
+	-- Keybind Hints shows or hides the keybind labels.
+	task.spawn(function()
+		while screenGui.Parent do
+			local visible = TemplateHub.values["Keybind Hints"] ~= false
+
+			for _, keybindButton in TemplateHub.keyLabels do
+				keybindButton.Visible = visible
+			end
+
+			task.wait(0.5)
+		end
+	end)
+
+	switchTab("Main")
+end
+
+---Called when initialization errors.
+local function onInitializeError(error)
+	warn("Failed to initialize.")
+	warn(error)
+	warn(debug.traceback())
+end
+
+xpcall(initializeScript, onInitializeError)
