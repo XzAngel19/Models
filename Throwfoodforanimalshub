@@ -1218,9 +1218,258 @@ local function setPerfect(enabled)
 end
 
 ---Run the throw sequence with proper StarterArea positioning, cooldown waiting, retry handling, and training support.
+-- Auto Equip Best bookkeeping (declared early: the farm requests a re-equip after every catch).
+local equipState = { busy = false, lastOkAt = 0, lastAttemptAt = 0, want = false, wantAt = 0, failures = 0, lastCatchAt = 0 }
+local requestEquip
+
+-- Only one heavy action may run at a time: the game rejects overlapping throws,
+-- training sessions and chef actions, and overlapping teleports broke the events.
+local actionOwner = nil
+local function actionAcquire(name, timeout)
+	local deadline = os.clock() + (timeout or 25)
+	while actionOwner and actionOwner ~= name and os.clock() < deadline do
+		task.wait(0.05)
+	end
+	if actionOwner and actionOwner ~= name then return false end
+	actionOwner = name
+	return true
+end
+local function actionRelease(name)
+	if actionOwner == name then actionOwner = nil end
+end
+
+---Wait in slices while the caller still wants to keep going.
+local function waitStep(keepGoing, seconds)
+	local deadline = os.clock() + math.max(0, tonumber(seconds) or 0)
+	while os.clock() < deadline do
+		if keepGoing and not keepGoing() then return false end
+		task.wait(math.min(0.1, math.max(0, deadline - os.clock())))
+	end
+	return not keepGoing or keepGoing()
+end
+
+---The game refuses remote calls while its own ClientState.Busy is set (mid throw, cutscene...).
+local function waitGameIdle(timeout)
+	local ok, clientState = pcall(clientModule, "ClientState")
+	if not ok or type(clientState) ~= "table" then return true end
+	local deadline = os.clock() + (timeout or 8)
+	local function busy()
+		return type(clientState.Busy) == "string" and clientState.Busy ~= ""
+	end
+	while busy() and os.clock() < deadline do
+		task.wait(0.1)
+	end
+	return not busy()
+end
+
+---Arm a sandwich before Throw_Start, the same order the in-game picker uses.
+local function armSandwich(size)
+	if type(size) ~= "string" or size == "" then return true end
+	local ok, result = callRemote("Throw_UseSandwich", false, size)
+	if not ok then return false, tostring(result) end
+	return true
+end
+
+---Full throw cycle: line, start, sandwich, meter, resolve, reveal, complete.
+---Returns true when the server accepted every step.
+local function throwOnce(opts)
+	opts = opts or {}
+	local keepGoing = opts.keepGoing or function() return TemplateHub.active end
+	if not actionAcquire("throw", 30) then
+		return false, "Another action is still running"
+	end
+	waitGameIdle(6)
+
+	local hrp, hrpErr = getCharacterRoot()
+	if not hrp then
+		actionRelease("throw")
+		return false, hrpErr or "Character unavailable"
+	end
+	local savedCF = hrp.CFrame
+
+	local pending = false
+	local ok, message = xpcall(function()
+		local lineCF, lineErr = getThrowLineCFrame(false)
+		if not lineCF then error(lineErr or "Throw line unavailable") end
+
+		-- Stay on the line for the whole sequence, exactly like a player standing there.
+		moveRootTo(hrp, lineCF)
+		task.wait(0.15)
+
+		local startOk, startResult = false, nil
+		for attempt = 1, 3 do
+			startOk, startResult = callRemote("Throw_Start", false)
+			if startOk and type(startResult) == "table" and startResult.Ok == true then break end
+
+			local why = tostring(startResult)
+			if why:find("TooFar", 1, true) and attempt == 1 then
+				local crossCF = getThrowLineCFrame(true)
+				if crossCF then
+					moveRootTo(hrp, crossCF)
+					task.wait(0.2)
+				end
+			elseif why:find("Cooldown", 1, true) or why:find("Wait", 1, true) then
+				local readyAt = localPlayer:GetAttribute("ThrowReadyAt")
+				local waitFor = type(readyAt) == "number" and (readyAt - workspace:GetServerTimeNow() + 0.15) or 1
+				if not waitStep(keepGoing, math.min(math.max(waitFor, 0.3), 6)) then return end
+			elseif why:find("Already", 1, true) or why:find("InProgress", 1, true) or why:find("Busy", 1, true) then
+				callRemote("Throw_Cancel", true, "Reset")
+				if not waitStep(keepGoing, 0.4) then return end
+			else
+				break
+			end
+			if not keepGoing() then return end
+		end
+		if not (startOk and type(startResult) == "table" and startResult.Ok == true) then
+			error(tostring(startResult))
+		end
+		pending = true
+
+		if opts.sandwich then
+			local armed, armErr = armSandwich(opts.sandwich)
+			if not armed then error("Sandwich rejected: " .. tostring(armErr)) end
+		end
+
+		local meterOk, meterRes = callRemote("Throw_MeterStarted", false)
+		if not meterOk then error(tostring(meterRes)) end
+		if not waitStep(keepGoing, tonumber(TemplateHub.values["Meter Delay"]) or 1.5) then return end
+
+		-- Power 1 = full meter (+MeterBonusStuds); Auto Perfect makes the game agree.
+		local resolveOk, resolveResult = callRemote("Throw_Resolve", false, 1)
+		if not resolveOk or type(resolveResult) ~= "table" or resolveResult.Ok ~= true then
+			error(tostring(resolveResult))
+		end
+		if captureThrowResult then captureThrowResult(resolveResult) end
+
+		local flight = tonumber(resolveResult.FlightTime) or 0
+		local revealWait = math.max(tonumber(TemplateHub.values["Reveal Delay"]) or 8, flight + 0.8)
+		if not waitStep(keepGoing, revealWait) then return end
+
+		local revealOk, revealRes = callRemote("Throw_Revealed", false)
+		if not revealOk then error(tostring(revealRes)) end
+
+		-- Throw_Complete is gated by the reveal duration on the server. With Instant Throw the
+		-- animation is skipped locally, so start sooner and let the retries find the window.
+		local completeWait = tonumber(TemplateHub.values["Complete Delay"]) or 14
+		if TemplateHub.values["Instant Throw"] then
+			completeWait = math.min(completeWait, math.max(2, flight + 1))
+		end
+		if not waitStep(keepGoing, completeWait) then return end
+
+		local completeOk, completeResult = false, nil
+		local completeDeadline = os.clock() + 20
+		while os.clock() < completeDeadline and keepGoing() do
+			completeOk, completeResult = callRemote("Throw_Complete", false)
+			if completeOk and type(completeResult) == "table" and completeResult.Ok == true then break end
+			local why = tostring(completeResult)
+			if why:find("NotActive", 1, true) or why:find("NoThrow", 1, true) or why:find("Expired", 1, true)
+				or why:find("Invalid", 1, true) then
+				break
+			end
+			if not waitStep(keepGoing, 2) then break end
+		end
+		if not (completeOk and type(completeResult) == "table" and completeResult.Ok == true) then
+			error(tostring(completeResult))
+		end
+		pending = false
+	end, function(err) return tostring(err) end)
+
+	if pending then callRemote("Throw_Cancel", true) end
+	if hrp and hrp.Parent then moveRootTo(hrp, savedCF) end
+	actionRelease("throw")
+	if not ok then return false, message end
+	return true
+end
+
+---Training is driven by the game's own controller so the server session, camera,
+---tap bonuses and XP popup all behave like a real training run.
+local function getTrainingController()
+	local ok, mod = pcall(clientModule, "TrainingController")
+	if ok and type(mod) == "table" and type(mod.Start) == "function" then return mod end
+	return nil
+end
+
+---Centre of LocalPlotProps.TrainingArea (the circle pollCircle checks) + 3 studs.
+local function trainingCirclePoint()
+	local okSpot, spotPos, _halfSize = pcall(getTrainingSpotInfo)
+	if okSpot and typeof(spotPos) == "Vector3" then
+		return spotPos + Vector3.new(0, 3, 0)
+	end
+	local plotPos, err = getPlotBasePos()
+	if not plotPos then return nil, err end
+	local okCfg, cfg = pcall(configModule, "GameConfig")
+	local offset = okCfg and cfg.Plot and cfg.Plot.TrainingSpotOffset or Vector3.new(-16, 0.5, -30.5)
+	local okVector = pcall(function() return plotPos + offset end)
+	return (okVector and (plotPos + offset) or plotPos) + Vector3.new(0, 3, 0)
+end
+
+---Run one training session and stop it cleanly. Returns true when the server started it.
+local function runTrainingSession(seconds, keepGoing)
+	keepGoing = keepGoing or function() return TemplateHub.active end
+	local okData, data = pcall(playerData)
+	if not okData or type(data) ~= "table" then return false, "Player data unavailable" end
+	if (tonumber(data.Stand) or 0) < 1 then return false, "Buy a pull-up bar first" end
+
+	local point, pointErr = trainingCirclePoint()
+	if not point then return false, pointErr or "Training spot unavailable" end
+	if not actionAcquire("train", 30) then return false, "Another action is still running" end
+
+	local hrp, hrpErr = getCharacterRoot()
+	if not hrp then
+		actionRelease("train")
+		return false, hrpErr or "Character unavailable"
+	end
+	local savedCF = hrp.CFrame
+	local controller = getTrainingController()
+
+	local finished, message = xpcall(function()
+		-- Step into the circle; the game's pollCircle starts training from there.
+		moveRootTo(hrp, CFrame.new(point))
+		task.wait(0.25)
+		if controller and not (controller.IsRunning and controller.IsRunning()) then
+			task.spawn(function() pcall(controller.Start) end)
+		end
+
+		local started = false
+		for _ = 1, 50 do
+			if localPlayer:GetAttribute("Training") == true then started = true; break end
+			if controller and controller.IsRunning and controller.IsRunning() then started = true; break end
+			if not keepGoing() then break end
+			task.wait(0.1)
+		end
+		if not started then
+			local startedOk, startedRes = callRemote("Training_Start", false)
+			if not startedOk or type(startedRes) ~= "table" or startedRes.Ok ~= true then
+				error(tostring(startedRes))
+			end
+		end
+
+		local deadline = os.clock() + math.max(3, tonumber(seconds) or 30)
+		while os.clock() < deadline and keepGoing() do
+			task.wait(0.1)
+		end
+	end, function(err) return tostring(err) end)
+
+	-- Unwind the game's session, then step out of the circle so it cannot restart.
+	if controller and type(controller.Stop) == "function" then pcall(controller.Stop, true) end
+	for _ = 1, 30 do
+		if localPlayer:GetAttribute("Training") ~= true then break end
+		task.wait(0.1)
+	end
+	if localPlayer:GetAttribute("Training") == true then callRemote("Training_Stop", true) end
+	local char = getCharacterRoot()
+	if char then moveRootTo(char, savedCF) end
+	task.wait(0.25)
+	actionRelease("train")
+
+	if not finished then return false, message end
+	return true
+end
+
 local function setFarm(enabled)
 	if not enabled then return true end
-	if farmWorker then return false, "Previous farm call is still finishing" end
+	if farmWorker then return false, "Previous farm run is still finishing" end
+	if TemplateHub.values["Farm Thanksgiving"] then return false, "Stop Farm Thanksgiving first" end
 	if trainWorker or TemplateHub.values["Auto Train"] then return false, "Stop Auto Train before farming" end
 	for _, name in ipairs({ "Throw_Start", "Throw_MeterStarted", "Throw_Resolve", "Throw_Revealed", "Throw_Complete" }) do
 		local remote, reason = findRemote(name)
@@ -1228,22 +1477,13 @@ local function setFarm(enabled)
 	end
 	farmWorker = true
 	task.spawn(function()
-		local function step(name, ...)
-			if not TemplateHub.active or not TemplateHub.values["Farm Animals"] then return false end
-			local ok, result = callRemote(name, false, ...)
-			if not TemplateHub.active or not TemplateHub.values["Farm Animals"] then return false end
-			if not ok or (remoteTypes[name] == "RemoteFunction" and (type(result) ~= "table" or result.Ok ~= true)) then
-				TemplateHub.report(ok and (name .. " returned an unexpected response") or tostring(result), true)
-				TemplateHub.setters["Farm Animals"](false)
-				return false
-			end
-			return true, result
+		local function keepGoing()
+			return TemplateHub.active and TemplateHub.values["Farm Animals"] == true
 		end
-		local throwCount, training, throwPending = 0, false, false
+		local throwCount = 0
 		local ok, errorMessage = xpcall(function()
-			local clientStateOk, clientState = pcall(clientModule, "ClientState")
-			while TemplateHub.active and TemplateHub.values["Farm Animals"] do
-				-- Wait out any active throw cooldown before starting.
+			while keepGoing() do
+				-- Wait out the throw cooldown before asking for a new throw.
 				local readyAt = localPlayer:GetAttribute("ThrowReadyAt")
 				if type(readyAt) == "number" then
 					local waitLeft = readyAt - workspace:GetServerTimeNow()
@@ -1251,220 +1491,91 @@ local function setFarm(enabled)
 				end
 				if localPlayer:GetAttribute("Training") == true then
 					callRemote("Training_Stop", true)
-					if not waitEnabled("Farm Animals", 0.2) then break end
+					if not waitEnabled("Farm Animals", 0.3) then break end
 				end
 
-				-- Prepare Auto Thanksgiving Index / Auto Index target throw power.
-				local sandwichToUse = nil
+				-- Pick the throw target before moving, so a missing target never wastes a throw.
+				local sandwich = nil
 				if TemplateHub.values["Auto Thanksgiving Index"] then
-					local tgOk, tgChoice = pcall(prepareThanksgivingIndex)
-					if tgOk and type(tgChoice) == "string" then
-						sandwichToUse = tgChoice
-					else
-						TemplateHub.report("Thanksgiving Index: " .. tostring(tgChoice), true)
-						TemplateHub.setters["Auto Thanksgiving Index"](false)
-						if TemplateHub.values["Auto Index"] then
-							prepareIndex()
+					local tgOk, tgSandwich = pcall(prepareThanksgivingIndex)
+					if tgOk then
+						sandwich = tgSandwich
+						if not sandwich then
+							TemplateHub.report("Thanksgiving Index: no sandwiches - cook at the chef (or use Farm Thanksgiving)")
+							TemplateHub.setters["Auto Thanksgiving Index"](false)
 						end
+					else
+						TemplateHub.report("Thanksgiving Index: " .. tostring(tgSandwich), true)
+						TemplateHub.setters["Auto Thanksgiving Index"](false)
 					end
 				elseif TemplateHub.values["Auto Index"] then
-					prepareIndex()
+					local idxOk, idxErr = pcall(prepareIndex)
+					if not idxOk then TemplateHub.report("Auto Index: " .. tostring(idxErr), true) end
 				end
-				if not TemplateHub.active or not TemplateHub.values["Farm Animals"] then break end
+				if not keepGoing() then break end
 
-				-- Start throw at StarterArea CrossLine (just in front first; cross line with ClientState.Busy guard if TooFar).
-				local lineCF, lineErr = getThrowLineCFrame(false)
-				if not lineCF then error(lineErr) end
-				local startOk, startResult = false, nil
-				for attempt = 1, 2 do
-					local moveOk, sOk, sRes = withCharacterAt(lineCF, function()
-						return callRemote("Throw_Start", false)
-					end)
-					if not moveOk then error(sRes and tostring(sRes) or tostring(sOk)) end
-					startOk, startResult = sOk, sRes
-					if not startOk and tostring(startResult):find("TooFar", 1, true) then
-						local crossCF = getThrowLineCFrame(true)
-						if crossCF then
-							local prevBusy = clientStateOk and clientState.Busy or nil
-							if clientStateOk then clientState.Busy = "HubFarm" end
-							local m2, sOk2, sRes2 = withCharacterAt(crossCF, function()
-								return callRemote("Throw_Start", false)
-							end)
-							if clientStateOk and clientState.Busy == "HubFarm" then clientState.Busy = prevBusy end
-							if m2 then startOk, startResult = sOk2, sRes2 end
-						end
-					end
-					if startOk and type(startResult) == "table" and startResult.Ok == true then
-						break
-					end
-					local reasonStr = tostring(startResult)
-					if reasonStr:find("Cooldown", 1, true) or reasonStr:find("Wait", 1, true) then
-						local rAt = localPlayer:GetAttribute("ThrowReadyAt")
-						local waitFor = (type(rAt) == "number" and math.max(0.25, rAt - workspace:GetServerTimeNow() + 0.1)) or 0.75
-						if not waitEnabled("Farm Animals", waitFor) then break end
-					elseif attempt == 1 and (reasonStr:find("Already", 1, true) or reasonStr:find("InProgress", 1, true)) then
-						callRemote("Throw_Cancel", true, "Reset")
-						if not waitEnabled("Farm Animals", 0.25) then break end
-					else
-						break
-					end
-				end
-				if not TemplateHub.active or not TemplateHub.values["Farm Animals"] then break end
-				if startOk and type(startResult) == "table" and startResult.Ok == true then throwPending = true end
-				if not startOk or not throwPending then
-					TemplateHub.report(startOk and "Throw_Start returned an unexpected response" or tostring(startResult), true)
-					TemplateHub.setters["Farm Animals"](false)
+				local threw, throwErr = throwOnce({ sandwich = sandwich, keepGoing = keepGoing })
+				if not threw then
+					if keepGoing() then error(throwErr or "Throw failed") end
 					break
 				end
-
-				if not step("Throw_MeterStarted") then break end
-				if sandwichToUse then
-					callRemote("Throw_UseSandwich", false, sandwichToUse)
-				end
-				if not waitEnabled("Farm Animals", TemplateHub.values["Meter Delay"]) then break end
-				-- Power meter always resolves to 1 (+20 bonus studs).
-				local resolvedOk, resolvedResult = step("Throw_Resolve", 1)
-				if not resolvedOk then break end
-				if captureThrowResult then captureThrowResult(resolvedResult) end
-				local revealWait = TemplateHub.values["Reveal Delay"]
-				if not TemplateHub.values["Instant Throw"] and type(resolvedResult) == "table" and type(resolvedResult.FlightTime) == "number" then
-					revealWait = math.max(revealWait, resolvedResult.FlightTime + 0.25)
-				end
-				if not waitEnabled("Farm Animals", revealWait) then break end
-				if not step("Throw_Revealed") then break end
-				if not waitEnabled("Farm Animals", TemplateHub.values["Complete Delay"]) then break end
-				if not step("Throw_Complete") then break end
-				throwPending = false
 				throwCount += 1
 
-				if TemplateHub.values["Train Between Farms"] and throwCount >= TemplateHub.values["Train After Throws"] then
-					local data = playerData()
-					if (tonumber(data.Stand) or 0) >= 1 then
-						local spotPos = getTrainingSpotInfo()
-						if not spotPos then error("Training spot unavailable") end
-						local hrp, hrpErr = getCharacterRoot()
-						if not hrp then error(hrpErr) end
-						local savedCF = hrp.CFrame
-						local prevBusy = clientStateOk and clientState.Busy or nil
-						if clientStateOk then clientState.Busy = "HubTrain" end
-						local trainOk, response = false, nil
-						for attempt = 1, 3 do
-							if not TemplateHub.active or not TemplateHub.values["Farm Animals"] then break end
-							moveRootTo(hrp, CFrame.new(spotPos + Vector3.new(0, 3, 0)))
-							task.wait(0.15)
-							trainOk, response = callRemote("Training_Start", false)
-							if trainOk and type(response) == "table" and response.Ok == true then
-								break
-							end
-							local errStr = tostring(response)
-							if not (errStr:find("TooFar", 1, true) or errStr:find("Busy", 1, true) or errStr:find("Cooldown", 1, true)) then
-								break
-							end
-							task.wait(0.15)
-						end
-						if not trainOk or type(response) ~= "table" or response.Ok ~= true then
-							moveRootTo(hrp, savedCF)
-							if clientStateOk and clientState.Busy == "HubTrain" then clientState.Busy = prevBusy end
-							error(trainOk and "Training_Start returned an unexpected response" or tostring(response))
-						end
-						training = true
-						waitEnabled("Farm Animals", TemplateHub.values["Train for(s)"])
-						local stopOk, stopResult = callRemote("Training_Stop", true)
-						training = false
-						moveRootTo(hrp, savedCF)
-						if clientStateOk and clientState.Busy == "HubTrain" then clientState.Busy = prevBusy end
-						if not stopOk then error(tostring(stopResult)) end
-					else
-						TemplateHub.report("Buy a pull-up bar to use Train Between Farms", true)
-					end
+				-- Re-equip after every catch so Auto Sell never sees a half-moved plot.
+				if TemplateHub.values["Auto Equip Best"] then requestEquip() end
+
+				if TemplateHub.values["Train Between Farms"]
+					and throwCount >= (tonumber(TemplateHub.values["Train After Throws"]) or 30) then
 					throwCount = 0
+					local trained, trainErr = runTrainingSession(tonumber(TemplateHub.values["Train for(s)"]) or 30, keepGoing)
+					if not trained then
+						TemplateHub.report("Train between farms: " .. tostring(trainErr), true)
+						TemplateHub.setters["Train Between Farms"](false)
+					end
 				end
+
 				if not waitEnabled("Farm Animals", TemplateHub.values["Farm Delay"]) then break end
 			end
-		end, function(errorMessage) return tostring(errorMessage) end)
-		if training then callRemote("Training_Stop", true) end
-		if throwPending then callRemote("Throw_Cancel", true) end
+		end, function(err) return tostring(err) end)
 		farmWorker = false
 		if not ok and TemplateHub.active then
 			TemplateHub.setters["Farm Animals"](false)
-			TemplateHub.report("Farm stopped: " .. errorMessage, true)
+			TemplateHub.report("Farm stopped: " .. tostring(errorMessage), true)
 		end
 	end)
 	return true
 end
 
----Keep one training session active until the toggle is turned off (moves to TrainingSpot cleanly without camera lock).
+---Keep training running until the toggle is turned off.
 local function setAutoTrain(enabled)
 	if not enabled then return true end
 	if trainWorker then return false, "Previous training call is still finishing" end
-	if farmWorker or TemplateHub.values["Farm Animals"] then return false, "Stop farming before training" end
+	if farmWorker or TemplateHub.values["Farm Animals"] or TemplateHub.values["Farm Thanksgiving"] then
+		return false, "Stop farming before training"
+	end
 	for _, name in ipairs({ "Training_Start", "Training_Stop" }) do
 		local remote, reason = findRemote(name)
 		if not remote then return false, reason end
 	end
 	local okData, data = pcall(playerData)
-	if okData and (tonumber(data.Stand) or 0) < 1 then
+	if okData and type(data) == "table" and (tonumber(data.Stand) or 0) < 1 then
 		return false, "Buy a pull-up bar first"
 	end
 	trainWorker = true
 	task.spawn(function()
-		local started = false
-		local savedCF = nil
-		local clientStateOk, clientState = pcall(clientModule, "ClientState")
-		local prevBusy = nil
-		local function startAtSpot()
-			local spotPos = getTrainingSpotInfo()
-			if not spotPos then return false, "Training spot unavailable" end
-			local hrp, hrpErr = getCharacterRoot()
-			if not hrp then return false, hrpErr end
-			if not savedCF then savedCF = hrp.CFrame end
-			if clientStateOk and clientState.Busy ~= "HubTrain" then
-				prevBusy = clientState.Busy
-				clientState.Busy = "HubTrain"
-			end
-			local accepted, result = false, nil
-			for attempt = 1, 3 do
-				moveRootTo(hrp, CFrame.new(spotPos + Vector3.new(0, 3, 0)))
-				task.wait(0.15)
-				accepted, result = callRemote("Training_Start", false)
-				if accepted then break end
-				if not tostring(result):find("TooFar", 1, true) then break end
-			end
-			return accepted, result
-		end
-		local ok, errorMessage = xpcall(function()
-			local accepted, result = startAtSpot()
-			if not accepted then
-				if TemplateHub.active then
-					TemplateHub.setters["Auto Train"](false)
-					TemplateHub.report(tostring(result), true)
-				end
-				return
-			end
-			started = true
+		local ok, message = xpcall(function()
 			while TemplateHub.active and TemplateHub.values["Auto Train"] do
-				task.wait(0.25)
-				if TemplateHub.active and TemplateHub.values["Auto Train"] and localPlayer:GetAttribute("Training") == false then
-					local reOk = startAtSpot()
-					if not reOk then break end
-				end
+				local trained, trainErr = runTrainingSession(60, function()
+					return TemplateHub.active and TemplateHub.values["Auto Train"] == true
+				end)
+				if not trained then error(trainErr) end
+				task.wait(0.5)
 			end
-		end, function(message) return tostring(message) end)
-		if started then
-			local stopped, result = callRemote("Training_Stop", true)
-			if not stopped and TemplateHub.active then TemplateHub.report(tostring(result), true) end
-		end
-		if savedCF then
-			local hrp = getCharacterRoot()
-			if hrp then moveRootTo(hrp, savedCF) end
-		end
-		if clientStateOk and clientState.Busy == "HubTrain" then
-			clientState.Busy = prevBusy
-		end
+		end, function(err) return tostring(err) end)
 		trainWorker = false
 		if not ok and TemplateHub.active then
 			TemplateHub.setters["Auto Train"](false)
-			TemplateHub.report("Training stopped: " .. errorMessage, true)
+			TemplateHub.report("Training stopped: " .. tostring(message), true)
 		end
 	end)
 	return true
@@ -1571,6 +1682,30 @@ local function periodic(name, interval, callback, setup)
 	end
 end
 
+---Like periodic(), but a refusal is reported instead of turning the toggle off:
+---Equip Best, the chef and the event farm can all be rejected temporarily by the server.
+local function resilientWorker(name, interval, callback)
+	TemplateHub.featureCallbacks[name] = function(enabled)
+		if not enabled then return true end
+		if workers[name] then return false, "Previous " .. name .. " call is still finishing" end
+		if game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
+		workers[name] = true
+		task.spawn(function()
+			while TemplateHub.active and TemplateHub.values[name] do
+				local ok, message = pcall(callback)
+				if not ok then
+					if not TemplateHub.active then break end
+					TemplateHub.report(name .. ": " .. tostring(message), true)
+					if not waitEnabled(name, 3) then break end
+				end
+				if not waitEnabled(name, type(interval) == "function" and interval() or interval) then break end
+			end
+			workers[name] = nil
+		end)
+		return true
+	end
+end
+
 -- Instant Throw auto-taps the meter, collapses flight arc duration, skips RevealSequence, and suppresses ScreenFX white/black fades.
 local instantMeterEntries = {}
 local function restoreInstant()
@@ -1651,34 +1786,105 @@ TemplateHub.featureCallbacks["Instant Throw"] = function(enabled)
 	return true
 end
 
-local bonusConnection
+---Auto 2x Press: the server broadcasts Training_Bonus [repIndex, fireTime, 2] a few
+---seconds before the tap window opens. The in-game button lives from that moment until
+---fireTime, so we claim right away through the game's own button (keeps the x2 popup and
+---the ExtraReps roll) and fall back to the remote if the button is not there.
+local bonusConnection = nil
+local bonusClaimed = {}
+local bonusStats = { claimed = 0, failed = 0 }
+TemplateHub.bonusStats = bonusStats
+
+local function findTapButton()
+	local pgui = localPlayer:FindFirstChild("PlayerGui")
+	if not pgui then return nil end
+	local seq = pgui:FindFirstChild("TrainingSequence")
+	local layer = seq and seq:FindFirstChild("TapBonusLayer")
+	local button = layer and layer:FindFirstChild("TapBonus")
+	if button and button:IsA("GuiButton") then return button end
+	local deep = pgui:FindFirstChild("TapBonus", true)
+	if deep and deep:IsA("GuiButton") then return deep end
+	return nil
+end
+
+local function claimTapBonus(id, key)
+	if bonusClaimed[key] then return true end
+	bonusClaimed[key] = true
+
+	-- Preferred path: the game's own claim (x2 popup, screen flash, extra reps).
+	local button = findTapButton()
+	if button and type(firesignal) == "function" then
+		local fired = pcall(firesignal, button.Activated)
+		if fired then
+			bonusStats.claimed += 1
+			return true
+		end
+	end
+
+	local ok, result = callRemote("Training_TapBonus", false, id)
+	if ok then
+		bonusStats.claimed += 1
+		if button and button.Parent then pcall(function() button:Destroy() end) end
+		return true
+	end
+
+	local why = tostring(result)
+	-- The server only accepts a bonus once it is the live one: retry when it says so.
+	if why:find("Early", 1, true) or why:find("Wait", 1, true) or why:find("Ready", 1, true) then
+		bonusClaimed[key] = nil
+	elseif why:find("Expired", 1, true) or why:find("Claimed", 1, true) or why:find("Used", 1, true) then
+		return true
+	else
+		bonusStats.failed += 1
+		if bonusStats.failed % 5 == 1 then
+			TemplateHub.report("2x press: " .. why, true)
+		end
+	end
+	return false
+end
+
 TemplateHub.featureCallbacks["Auto 2x Press"] = function(enabled)
-	if bonusConnection then bonusConnection:Disconnect(); bonusConnection = nil end
+	if bonusConnection then
+		bonusConnection:Disconnect()
+		bonusConnection = nil
+	end
 	if not enabled then return true end
 	local event, reason = findRemote("Training_Bonus")
 	if not event then return false, reason end
-	local fn, why = findRemote("Training_TapBonus")
-	if not fn then return false, why end
-	bonusConnection = event.OnClientEvent:Connect(function(id, expires)
+	local tapRemote, tapReason = findRemote("Training_TapBonus")
+	if not tapRemote then return false, tapReason end
+
+	if localPlayer:GetAttribute("Training") ~= true then
+		TemplateHub.report("Auto 2x Press is armed - it fires during training (turn on Auto Train)")
+	end
+
+	bonusConnection = event.OnClientEvent:Connect(function(id, fireTime)
 		if not TemplateHub.active or not TemplateHub.values["Auto 2x Press"] then return end
-		if type(id) ~= "number" or type(expires) ~= "number" or expires <= workspace:GetServerTimeNow() then return end
+		if type(id) ~= "number" then return end
+		if type(fireTime) ~= "number" or fireTime <= workspace:GetServerTimeNow() then return end
+		-- Rep indexes repeat between sessions: the key is the bonus id + its fire time.
+		local key = tostring(id) .. "@" .. string.format("%.2f", fireTime)
+		local count = 0
+		for _ in pairs(bonusClaimed) do count += 1 end
+		if count > 200 then table.clear(bonusClaimed) end
 		task.spawn(function()
-			-- Wait briefly so TrainingController can spawn the UI button if manual training is open.
-			task.wait(0.12)
-			if not TemplateHub.active or not TemplateHub.values["Auto 2x Press"] then return end
-			if expires <= workspace:GetServerTimeNow() then return end
-			local pgui = localPlayer:FindFirstChild("PlayerGui")
-			local seq = pgui and pgui:FindFirstChild("TrainingSequence")
-			local layer = seq and seq:FindFirstChild("TapBonusLayer")
-			local tapBtn = layer and layer:FindFirstChild("TapBonus")
-			if tapBtn and tapBtn:IsA("GuiButton") and type(firesignal) == "function" then
-				local fired = pcall(firesignal, tapBtn.Activated)
-				if fired then return end
+			-- Let TrainingController build its button first, then claim like a player would.
+			local window = math.max(0, fireTime - workspace:GetServerTimeNow())
+			for _ = 1, 6 do
+				if not TemplateHub.active or not TemplateHub.values["Auto 2x Press"] then return end
+				if findTapButton() then break end
+				if workspace:GetServerTimeNow() >= fireTime then break end
+				task.wait(math.min(0.1, math.max(0.02, window / 20)))
 			end
-			local ok, result = callRemote("Training_TapBonus", false, id)
-			if tapBtn and tapBtn.Parent then pcall(function() tapBtn:Destroy() end) end
-			if not ok and TemplateHub.active and not tostring(result):find("Expired", 1, true) then
-				TemplateHub.report(tostring(result), true)
+			if not TemplateHub.active or not TemplateHub.values["Auto 2x Press"] then return end
+			if claimTapBonus(id, key) then return end
+			-- Rejected: retry once when the bonus actually goes live.
+			local waitLeft = fireTime - workspace:GetServerTimeNow()
+			if waitLeft > 0 and waitLeft < 6 then
+				task.wait(waitLeft + 0.05)
+				if TemplateHub.active and TemplateHub.values["Auto 2x Press"] then
+					claimTapBonus(id, key)
+				end
 			end
 		end)
 	end)
@@ -1728,7 +1934,7 @@ TemplateHub.featureCallbacks["Auto Index"] = function(enabled)
 end
 
 -- Auto Thanksgiving Index picks missing Thanksgiving animals, sets throw power to their zone/section, and arms a sandwich.
-prepareThanksgivingIndex = function()
+prepareThanksgivingIndex = function(force)
 	local data = playerData()
 	local tg = sharedModule("Thanksgiving")
 	local tgCfg = configModule("ThanksgivingConfig")
@@ -1736,16 +1942,6 @@ prepareThanksgivingIndex = function()
 		error("Thanksgiving picnic is not open")
 	end
 	local tgState = type(data.Thanksgiving) == "table" and data.Thanksgiving or {}
-	local chosenSandwich = nil
-	for _, size in ipairs({ "Mega", "Big", "Regular" }) do
-		if tg.SandwichCount(tgState, size) > 0 then
-			chosenSandwich = size
-			break
-		end
-	end
-	if not chosenSandwich then
-		error("No sandwiches available")
-	end
 	local index = type(data.Index) == "table" and data.Index or {}
 	local areas = configModule("AreasConfig")
 	local areaUtil = sharedModule("AreaUtil")
@@ -1785,19 +1981,78 @@ prepareThanksgivingIndex = function()
 			end
 		end
 	end
-	if not targetPower then error("No reachable missing Thanksgiving animal") end
-	if TemplateHub.active and TemplateHub.values["Farm Animals"] and TemplateHub.values["Auto Thanksgiving Index"] and (tonumber(data.ThrowPower) or 0) ~= targetPower then
+	if not targetPower then error("Thanksgiving index complete - nothing left to catch") end
+	-- Throw power is what the server uses for the distance, so set it before the throw.
+	local farmRunning = TemplateHub.values["Farm Animals"] or TemplateHub.values["Farm Thanksgiving"]
+	if (force or (TemplateHub.active and farmRunning)) and (tonumber(data.ThrowPower) or 0) ~= targetPower then
 		doCall("Player_SetThrowPower", targetPower)
 	end
-	return chosenSandwich
+	-- Best sandwich we own (may be nil: the event farm still throws to earn ingredients).
+	local chosenSandwich = nil
+	for _, size in ipairs({ "Mega", "Big", "Regular" }) do
+		if tg.SandwichCount(tgState, size) > 0 then
+			chosenSandwich = size
+			break
+		end
+	end
+	return chosenSandwich, targetPower
 end
 TemplateHub.featureCallbacks["Auto Thanksgiving Index"] = function(enabled)
 	if enabled and game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
 	return true
 end
 
-periodic("Auto Equip Best", function() return TemplateHub.values["Equip Delay"] end, function()
-	doCall("Plot_EquipBest")
+-- Auto Equip Best only counts as "done" when the server answers Ok: Auto Sell keys off that.
+function requestEquip()
+	equipState.want = true
+	equipState.wantAt = os.clock() + 1
+	equipState.lastCatchAt = os.clock()
+end
+TemplateHub.requestEquip = requestEquip
+local function equipBestOnce()
+	if equipState.busy then return false, "Equip Best is still running" end
+	equipState.busy = true
+	local ok, result = callRemote("Plot_EquipBest", false)
+	equipState.busy = false
+	equipState.lastAttemptAt = os.clock()
+	if ok and type(result) == "table" and result.Ok == true then
+		equipState.lastOkAt = os.clock()
+		equipState.failures = 0
+		equipState.lastPlaced = tonumber(result.Placed) or 0
+		equipState.lastRemoved = tonumber(result.Removed) or 0
+		return true, result
+	end
+	equipState.failures += 1
+	return false, tostring(result)
+end
+TemplateHub.equipBestOnce = equipBestOnce
+
+resilientWorker("Auto Equip Best", 1, function()
+	local now = os.clock()
+	local interval = tonumber(TemplateHub.values["Equip Delay"]) or 30
+	local due = (equipState.want and now >= equipState.wantAt)
+		or (now - equipState.lastAttemptAt) >= interval
+		or equipState.lastAttemptAt <= 0
+	if not due then return end
+	equipState.want = false
+	-- Let the catch we just resolved replicate into Animals before re-equipping.
+	if now - (equipState.lastCatchAt or 0) < 0.6 then return end
+	local ok, result = equipBestOnce()
+	if not ok then
+		-- Retry a couple of times before waiting the full Equip Delay.
+		if equipState.failures <= 3 then
+			equipState.want = true
+			equipState.wantAt = now + 4
+		end
+		if equipState.failures % 4 == 1 then
+			TemplateHub.report("Equip Best failed: " .. tostring(result), true)
+		end
+		return
+	end
+	local placed, removed = equipState.lastPlaced or 0, equipState.lastRemoved or 0
+	if placed + removed > 0 then
+		TemplateHub.report(string.format("Equip Best: %d placed, %d swapped", placed, removed))
+	end
 end)
 periodic("Auto Claim Index Rewards", 5, function()
 	local data = playerData()
@@ -1867,39 +2122,196 @@ periodic("Auto Upgrade Food", 5, function()
 		end
 	end
 end)
-periodic("Auto Event (claim chef rewards)", 10, function()
-	local state = playerData().Thanksgiving
-	if type(state) ~= "table" then error("Thanksgiving data unavailable") end
-	if sharedModule("Thanksgiving").RewardsPending(state) > 0 and TemplateHub.active and TemplateHub.values["Auto Event (claim chef rewards)"] then
-		local chefCF, chefErr = getTurkeyChefCFrame()
-		if not chefCF then error(chefErr) end
-		local moveOk, resOrErr = withCharacterAt(chefCF, function()
-			if state.Talked ~= true then callRemote("Thanksgiving_Action", false, "Talked") end
-			return doCall("Thanksgiving_Action", "Claim")
-		end)
-		if not moveOk then error(resOrErr) end
+---One chef interaction: talk, then claim a reward or cook a sandwich.
+---Returns (didSomething, message, fatal). Rate limited so the server never sees a spam burst.
+local chefCooldown = 0
+local function chefDo(mode)
+	local okTg, thanksgiving = pcall(sharedModule, "Thanksgiving")
+	if not okTg or type(thanksgiving) ~= "table" then return false, "Thanksgiving module unavailable", true end
+	local okData, state = pcall(function() return playerData().Thanksgiving end)
+	if not okData or type(state) ~= "table" then return false, "Thanksgiving data unavailable" end
+	local okState, eventState = pcall(thanksgiving.State)
+	if not okState or type(eventState) ~= "table" or eventState.Open ~= true then
+		return false, "The picnic is closed right now"
 	end
-end)
-periodic("Auto Cook Sandwich", 5, function()
-	local thanksgiving = sharedModule("Thanksgiving")
-	local state = playerData().Thanksgiving
-	if type(state) ~= "table" then error("Thanksgiving data unavailable") end
-	local size = TemplateHub.values["Cook Size"]
-	if size == "Best" then
-		for _, candidate in ipairs({ "Mega", "Big", "Regular" }) do
-			if thanksgiving.CanCook(state, candidate) then size = candidate; break end
+	if os.clock() < chefCooldown then return false, nil end
+
+	local action, actionSize = nil, nil
+	if (mode == "claim" or mode == "both") and (tonumber(thanksgiving.RewardsPending(state)) or 0) > 0 then
+		action = "Claim"
+	elseif mode == "cook" or mode == "both" then
+		local size = TemplateHub.values["Cook Size"]
+		if size == "Best" then
+			for _, candidate in ipairs({ "Mega", "Big", "Regular" }) do
+				if thanksgiving.CanCook(state, candidate) then size = candidate; break end
+			end
+		end
+		if size ~= "Best" and size ~= nil and thanksgiving.CanCook(state, size) then
+			action, actionSize = "Cook", size
 		end
 	end
-	if size ~= "Best" and thanksgiving.CanCook(state, size) and TemplateHub.active and TemplateHub.values["Auto Cook Sandwich"] then
-		local chefCF, chefErr = getTurkeyChefCFrame()
-		if not chefCF then error(chefErr) end
-		local moveOk, resOrErr = withCharacterAt(chefCF, function()
-			if state.Talked ~= true then callRemote("Thanksgiving_Action", false, "Talked") end
-			return doCall("Thanksgiving_Action", "Cook", size)
-		end)
-		if not moveOk then error(resOrErr) end
+	if not action then return false, nil end
+
+	if not actionAcquire("chef", 30) then return false, "Another action is still running" end
+	waitGameIdle(6)
+	local chefCF, chefErr = getTurkeyChefCFrame()
+	if not chefCF then
+		actionRelease("chef")
+		return false, chefErr or "Turkey Chef not found"
 	end
-end)
+	local moveOk, callOk, callRes = withCharacterAt(chefCF, function()
+		if type(state) == "table" and state.Talked ~= true then
+			callRemote("Thanksgiving_Action", false, "Talked")
+		end
+		if action == "Cook" then
+			return callRemote("Thanksgiving_Action", false, "Cook", actionSize)
+		end
+		return callRemote("Thanksgiving_Action", false, "Claim")
+	end)
+	actionRelease("chef")
+	chefCooldown = os.clock() + 10
+
+	if not moveOk then return false, tostring(callOk), true end
+	if callOk then return true, action end
+
+	local why = tostring(callRes)
+	if why:find("TooFast", 1, true) or why:find("Cooldown", 1, true) or why:find("Wait", 1, true) then
+		chefCooldown = os.clock() + 8
+		return false, nil
+	end
+	if why:find("NotEnough", 1, true) or why:find("Nothing", 1, true) or why:find("Closed", 1, true)
+		or why:find("Empty", 1, true) or why:find("Max", 1, true) then
+		chefCooldown = os.clock() + 12
+		return false, nil
+	end
+	if why:find("TooFar", 1, true) or why:find("Busy", 1, true) then
+		return false, nil
+	end
+	return false, why, true
+end
+
+TemplateHub.featureCallbacks["Auto Event (claim chef rewards)"] = function(enabled)
+	if not enabled then return true end
+	if workers["Auto Event (claim chef rewards)"] then return false, "Previous claim run is still finishing" end
+	if game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
+	local remote, reason = findRemote("Thanksgiving_Action")
+	if not remote then return false, reason end
+	workers["Auto Event (claim chef rewards)"] = true
+	task.spawn(function()
+		while TemplateHub.active and TemplateHub.values["Auto Event (claim chef rewards)"] do
+			local done, message, fatal = chefDo("claim")
+			if done then
+				TemplateHub.report("Claimed a chef reward")
+			elseif fatal then
+				if TemplateHub.active then
+					TemplateHub.setters["Auto Event (claim chef rewards)"](false)
+					TemplateHub.report("Chef rewards: " .. tostring(message), true)
+				end
+				break
+			end
+			if not waitEnabled("Auto Event (claim chef rewards)", 5) then break end
+		end
+		workers["Auto Event (claim chef rewards)"] = nil
+	end)
+	return true
+end
+
+TemplateHub.featureCallbacks["Auto Cook Sandwich"] = function(enabled)
+	if not enabled then return true end
+	if workers["Auto Cook Sandwich"] then return false, "Previous cooking run is still finishing" end
+	if game.PlaceId ~= GAME_PLACE_ID then return false, "Join Throw Food for Animals first" end
+	local remote, reason = findRemote("Thanksgiving_Action")
+	if not remote then return false, reason end
+	workers["Auto Cook Sandwich"] = true
+	task.spawn(function()
+		while TemplateHub.active and TemplateHub.values["Auto Cook Sandwich"] do
+			local done, message, fatal = chefDo("cook")
+			if done then
+				TemplateHub.report("Cooked a " .. tostring(message) .. " sandwich")
+			elseif fatal then
+				if TemplateHub.active then
+					TemplateHub.setters["Auto Cook Sandwich"](false)
+					TemplateHub.report("Cooking: " .. tostring(message), true)
+				end
+				break
+			end
+			if not waitEnabled("Auto Cook Sandwich", 6) then break end
+		end
+		workers["Auto Cook Sandwich"] = nil
+	end)
+	return true
+end
+
+---Farm the Thanksgiving event: chef chores plus sandwich throws aimed at missing event animals.
+local thanksgivingWorker = false
+local function setFarmThanksgiving(enabled)
+	if not enabled then return true end
+	if thanksgivingWorker then return false, "Previous event farm is still finishing" end
+	if farmWorker or TemplateHub.values["Farm Animals"] then return false, "Stop Farm Animals first" end
+	if trainWorker or TemplateHub.values["Auto Train"] then return false, "Stop Auto Train before farming" end
+	for _, name in ipairs({ "Throw_Start", "Throw_MeterStarted", "Throw_Resolve", "Throw_Revealed", "Throw_Complete", "Throw_UseSandwich", "Thanksgiving_Action" }) do
+		local remote, reason = findRemote(name)
+		if not remote then return false, reason end
+	end
+	local okEvent, isOpen = pcall(function()
+		local thanksgiving = sharedModule("Thanksgiving")
+		return thanksgiving.IsEligible(localPlayer) and thanksgiving.State().Open == true
+	end)
+	if not okEvent then return false, "Thanksgiving module unavailable" end
+	if not isOpen then return false, "The Thanksgiving picnic is not open right now" end
+	thanksgivingWorker = true
+	task.spawn(function()
+		local function keepGoing()
+			return TemplateHub.active and TemplateHub.values["Farm Thanksgiving"] == true
+		end
+		local throws = 0
+		local ok, message = xpcall(function()
+			while keepGoing() do
+				-- Chores first (claim rewards, cook sandwiches) so throws can use them.
+				local cooked = chefDo("both")
+				if not keepGoing() then break end
+
+				local prepOk, sandwich = pcall(prepareThanksgivingIndex, true)
+				if not prepOk then
+					local why = tostring(sandwich)
+					if why:find("complete", 1, true) then
+						TemplateHub.report("Thanksgiving index complete - event farm stopped")
+						break
+					end
+					error(why)
+				end
+				if cooked then
+					-- Freshly cooked sandwich: let the server replicate it before throwing.
+					if not waitStep(keepGoing, 1) then break end
+				end
+
+				-- No sandwich yet: a plain throw still earns ingredients/XP and keeps the loop alive.
+				local threw, throwErr = throwOnce({ sandwich = sandwich, keepGoing = keepGoing })
+				if not threw then
+					if keepGoing() then error(throwErr or "Throw failed") end
+					break
+				end
+				throws += 1
+				if throws % 10 == 0 then
+					local state = playerData().Thanksgiving
+					local tg = sharedModule("Thanksgiving")
+					if type(state) == "table" then
+						TemplateHub.report(string.format("Thanksgiving: %d animals caught, %d sandwiches, %d ingredients",
+							tg.UniqueCount(state) or 0, tg.TotalSandwiches(state) or 0, tg.TotalIngredients(state) or 0))
+					end
+				end
+				if not waitStep(keepGoing, tonumber(TemplateHub.values["Farm Delay"]) or 3) then break end
+			end
+		end, function(err) return tostring(err) end)
+		thanksgivingWorker = false
+		if not ok and TemplateHub.active then
+			TemplateHub.setters["Farm Thanksgiving"](false)
+			TemplateHub.report("Thanksgiving farm stopped: " .. tostring(message), true)
+		end
+	end)
+	return true
+end
+TemplateHub.featureCallbacks["Farm Thanksgiving"] = setFarmThanksgiving
 
 -- Visuals: Instantly View Throw (bottom-center menu-styled notification) and Animal ESP (all local-only & cleaned up on toggle off / unload).
 local patchedRemotesInvoke = {}
@@ -2860,6 +3272,78 @@ end
 local function matchesAnimal(f, stats)
 	return stats ~= nil and matchesSet(f.mutation, stats.mutation) and matchesSet(f.rarity, stats.rarity) and matchesSet(f.animal, stats.name)
 end
+---The N most valuable animals (N = plot slots). While Equip Best is on these are never
+---auto-sold, which is what used to delete rare pets when Equip Best failed silently.
+local function mostValuableIds(slots)
+	local okData, animals = pcall(function() return playerData().Animals end)
+	if not okData or type(animals) ~= "table" then return nil end
+	local okMut, mutations = pcall(sharedModule, "Mutations")
+	local incomeOf = okMut and type(mutations) == "table" and mutations.IncomeOf or nil
+	if type(incomeOf) ~= "function" then return nil end
+	local scored = {}
+	for id, entry in pairs(animals) do
+		if type(id) == "string" and type(entry) == "table" then
+			local okIncome, income = pcall(incomeOf, entry)
+			table.insert(scored, { id = id, value = okIncome and (tonumber(income) or 0) or 0 })
+		end
+	end
+	table.sort(scored, function(a, b) return a.value > b.value end)
+	local protected = {}
+	for i = 1, math.min(#scored, slots) do
+		protected[scored[i].id] = true
+	end
+	return protected, #scored
+end
+
+local function plotSlotCount()
+	local okFence, fence = pcall(configModule, "FenceConfig")
+	if okFence and type(fence) == "table" and type(fence.SlotsFor) == "function" then
+		local okData, data = pcall(playerData)
+		local level = okData and type(data) == "table" and (tonumber(data.FenceLevel) or 0) or 0
+		local okSlots, slots = pcall(fence.SlotsFor, level)
+		if okSlots and type(slots) == "number" then return slots end
+	end
+	return 12
+end
+
+---(placedCount, lowest placed income, best unplaced income): used to prove the plot is
+---really equipped before Auto Sell deletes anything.
+local function plotState()
+	local okData, animals = pcall(function() return playerData().Animals end)
+	if not okData or type(animals) ~= "table" then return 0, math.huge, 0 end
+	local okMut, mutations = pcall(sharedModule, "Mutations")
+	local incomeOf = okMut and type(mutations) == "table" and mutations.IncomeOf or nil
+	local placedCount, lowestPlaced, bestUnplaced = 0, math.huge, 0
+	for _, entry in pairs(animals) do
+		if type(entry) == "table" then
+			local income = 0
+			if type(incomeOf) == "function" then
+				local okIncome, value = pcall(incomeOf, entry)
+				income = okIncome and (tonumber(value) or 0) or 0
+			end
+			if entry.Placed then
+				placedCount += 1
+				lowestPlaced = math.min(lowestPlaced, income)
+			else
+				bestUnplaced = math.max(bestUnplaced, income)
+			end
+		end
+	end
+	return placedCount, lowestPlaced, bestUnplaced
+end
+
+-- ids that stayed unplaced long enough to be a real candidate (not mid-replication)
+local sellSeen = {}
+local function sellableNow(id)
+	local now = os.clock()
+	local firstSeen = sellSeen[id]
+	if not firstSeen then
+		sellSeen[id] = now
+		return false
+	end
+	return now - firstSeen >= 1
+end
+
 local sellBusy = false
 local function sellMatches(auto)
 	if sellBusy then error("Sell already running") end
@@ -2870,33 +3354,111 @@ local function sellMatches(auto)
 	if type(animals) ~= "table" then error("Animal inventory unavailable") end
 	local mutations = sharedModule("Mutations")
 	if type(mutations.EventOnlyNames) ~= "function" then error("Event protection unavailable") end
+
+	-- Ordering guarantee: Auto Sell only runs on a plot that Equip Best just confirmed.
+	if auto and TemplateHub.values["Auto Equip Best"] then
+		if equipState.busy then return 0 end
+		local equipOk, equipRes = equipBestOnce()
+		if not equipOk then
+			equipState.sellBlocked = (equipState.sellBlocked or 0) + 1
+			if equipState.sellBlocked == 1 or equipState.sellBlocked % 6 == 0 then
+				TemplateHub.report("Auto Sell on hold: Equip Best failed (" .. tostring(equipRes) .. ")", true)
+			end
+			return 0
+		end
+		equipState.sellBlocked = 0
+		-- Give the server a moment to replicate the swap before touching the inventory.
+		local settle = tonumber(TemplateHub.values["Sell Safety (s)"]) or 2
+		if settle > 0 and not waitStep(function()
+			return TemplateHub.active and (not auto or TemplateHub.values["Auto Sell"] == true)
+		end, settle) then
+			return 0
+		end
+		if equipState.busy or (equipState.failures or 0) > 0 then return 0 end
+
+		-- Proof, not trust: the plot must actually show the animals Equip Best reported.
+		local slots = plotSlotCount()
+		local expected = math.min(tonumber(equipRes.Count) or 0, slots)
+		local placedCount, lowestPlaced, bestUnplaced = plotState()
+		if placedCount < expected then
+			equipState.verifyBlocked = (equipState.verifyBlocked or 0) + 1
+			if equipState.verifyBlocked == 1 or equipState.verifyBlocked % 6 == 0 then
+				TemplateHub.report(string.format("Auto Sell on hold: plot shows %d/%d animals after Equip Best", placedCount, expected), true)
+			end
+			return 0
+		end
+		if placedCount > 0 and bestUnplaced > lowestPlaced then
+			equipState.verifyBlocked = (equipState.verifyBlocked or 0) + 1
+			if equipState.verifyBlocked == 1 or equipState.verifyBlocked % 6 == 0 then
+				TemplateHub.report("Auto Sell on hold: a better animal is still off the plot", true)
+			end
+			-- Ask for another Equip Best and try again on the next pass.
+			requestEquip()
+			return 0
+		end
+		equipState.verifyBlocked = 0
+	end
+
+	-- Value protection only applies to the automatic pass; "Sell Match" stays manual.
+	local guardedIds, animalCount = nil, nil
+	if auto and TemplateHub.values["Auto Equip Best"] then
+		local slots = plotSlotCount()
+		guardedIds, animalCount = mostValuableIds(slots)
+		-- Everything the player owns already fits on the plot: nothing is safe to sell.
+		if guardedIds and animalCount and animalCount <= slots then
+			equipState.allProtected = (equipState.allProtected or 0) + 1
+			if equipState.allProtected == 1 or equipState.allProtected % 12 == 0 then
+				TemplateHub.report("Auto Sell: every animal fits on the plot, so nothing is sold")
+			end
+			return 0
+		end
+	end
+
 	sellBusy = true
-	local ok, result = xpcall(function()
-		local count = 0
+	local ok, report = xpcall(function()
+		local count, blocked = 0, 0
 		for id, entry in pairs(animals) do
 			if not TemplateHub.active or (auto and not TemplateHub.values["Auto Sell"]) then break end
 			if filterSignature(filters("Sell")) ~= sig then break end
 			-- Re-read each animal so an inventory change cannot sell a stale entry.
 			local current = playerData().Animals
 			entry = type(current) == "table" and current[id] or nil
-			if type(id) == "string" and type(entry) == "table" and not entry.Placed and not entry.Bought and not entry.Locked then
+			if type(id) ~= "string" or type(entry) ~= "table" then
+				sellSeen[id] = nil
+			elseif entry.Placed or entry.Bought or entry.Locked then
+				sellSeen[id] = nil
+			elseif guardedIds and guardedIds[id] then
+				blocked += 1
+			elseif not sellableNow(id) then
+				blocked += 1
+			else
 				local protected = mutations.EventOnlyNames(entry)
-				if type(protected) == "table" and #protected == 0 and matchesAnimal(f, animalStats(entry)) and TemplateHub.active and (not auto or TemplateHub.values["Auto Sell"]) and filterSignature(filters("Sell")) == sig then
-					doCall("Plot_SellAnimal", id)
-					count += 1
-					task.wait(0.5)
+				local wanted = type(protected) == "table" and #protected == 0 and matchesAnimal(f, animalStats(entry))
+				if wanted and TemplateHub.active and (not auto or TemplateHub.values["Auto Sell"]) and filterSignature(filters("Sell")) == sig then
+					local sellOk, sellRes = callRemote("Plot_SellAnimal", false, id)
+					if sellOk then
+						count += 1
+						sellSeen[id] = nil
+						task.wait(0.45)
+					else
+						local why = tostring(sellRes)
+						if why:find("Placed", 1, true) or why:find("TooFast", 1, true) or why:find("Locked", 1, true)
+							or why:find("Busy", 1, true) or why:find("Protected", 1, true) or why:find("NotOwned", 1, true) then
+							sellSeen[id] = nil
+							blocked += 1
+						else
+							error(why)
+						end
+					end
 				end
 			end
 		end
-		return count
+		return { count = count, blocked = blocked }
 	end, function(err) return tostring(err) end)
 	sellBusy = false
-	if not ok then error(result) end
-	return result
+	if not ok then error(report) end
+	return report.count, report.blocked
 end
-periodic("Auto Sell", 10, function() sellMatches(true) end, function()
-	if not isRestricted(filters("Sell")) then error("Select at least one sell filter first") end
-end)
 local function sellOnce()
 	local ok, result = pcall(sellMatches, false)
 	TemplateHub.report(ok and ("Sold " .. result .. " matching animals") or tostring(result), not ok)
@@ -3322,17 +3884,18 @@ local function initializeScript()
 	addToggle(extraLeft, "Farm Animals", nil, false)
 	addSlider(extraLeft, "Meter Delay", 0.1, 20, 1.5, 1)
 	addSlider(extraLeft, "Reveal Delay", 0.1, 30, 8, 1)
-	addSlider(extraLeft, "Complete Delay", 0.1, 30, 8, 1)
+	addSlider(extraLeft, "Complete Delay", 0.1, 30, 14, 1)
 	addSlider(extraLeft, "Farm Delay", 0.1, 60, 3, 1)
 	addCycle(extraLeft, "Index Priority", { "First incomplete", "Most complete" })
 	addToggle(extraLeft, "Auto Index", nil, false)
 	addToggle(extraLeft, "Train Between Farms", nil, false)
-	addSlider(extraLeft, "Train After Throws", 1, 100, 30, 0)
+	addSlider(extraLeft, "Train After Throws", 1, 100, 10, 0)
 	addSlider(extraLeft, "Train for(s)", 1, 300, 30, 0)
 	addSection(extraLeft, "Thanksgiving")
-	addToggle(extraLeft, "Auto Event (claim chef rewards)", nil, false)
+	addToggle(extraLeft, "Farm Thanksgiving", nil, false)
 	addToggle(extraLeft, "Auto Thanksgiving Index", nil, false)
 	addToggle(extraLeft, "Auto Cook Sandwich", nil, false)
+	addToggle(extraLeft, "Auto Event (claim chef rewards)", nil, false)
 	addDropdown(extraLeft, "Cook Size", { "Best", "Regular", "Big", "Mega" }, "Best")
 
 	addSection(extraRight, "Movement")
@@ -3355,6 +3918,7 @@ local function initializeScript()
 		end)
 	end)
 	addSection(extraRight, "Selling (filters are AND)")
+	addSlider(extraRight, "Sell Safety (s)", 0, 30, 2, 0)
 	addMultiDropdown(extraRight, "Sell Mutations", getMutationOptions)
 	addMultiDropdown(extraRight, "Sell Rarities", getRarityOptions)
 	addMultiDropdown(extraRight, "Sell Animals", getAnimalOptions)
