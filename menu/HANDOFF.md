@@ -7,6 +7,7 @@ columna de Clearance · Division · Balance · Time Played · Online Friends).
 ```
 menu/
 ├── ZenithMenu.lua        ← el menú completo (772 líneas, sin dependencias)
+├── ZenithLoader.lua      ← loader de una línea (descarga y ejecuta el menú)
 ├── make_icons.py         ← genera los PNG transparentes (128x128)
 ├── assets/               ← PNGs ya generados, listos para subir a Roblox
 │   ├── division-logo.png         logo original, fondo blanco ya quitado
@@ -74,7 +75,26 @@ Paleta del logo (medida sobre el PNG original): `#D8C1D8`, `#B676B6`, `#A24BA2`.
 Acento del menú: `#F6A520`. Panel `#07080B` al 10 % de transparencia, borde `#94979F` al 45 %.
 Tipografías: `Oswald` (títulos/valores), `SourceSans` (descripción), `RobotoMono` (reloj).
 
-## 4. Cómo usarlo
+## 4. Loader (ejecutar en Roblox)
+
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/XzAngel19/Models/arena/e960acb9-models/menu/ZenithLoader.lua"))()
+```
+
+`ZenithLoader.lua` descarga `ZenithMenu.lua` de una lista de URLs (`SOURCES`), valida
+que el cuerpo tenga más de 5000 bytes y contenga `Zenith` (para no ejecutar una página
+de error), compila con `loadstring` y corre con `pcall`. Si falla, imprime el motivo
+exacto en la consola.
+
+Notas:
+- El repo `XzAngel19/Models` es público → la URL `raw.githubusercontent.com` funciona
+  sin token.
+- Esa URL apunta a la rama de la sesión (`arena/e960acb9-models`). Si la rama se borra,
+  cambiá `SOURCES` por tu propia URL (gist, tu repo, pastebin).
+- **Método directo** (si el executor no tiene `loadstring` o `HttpGet`): pegar
+  `ZenithMenu.lua` completo en el executor. El menú no necesita red para funcionar.
+
+## 5. Cómo usarlo
 
 ```lua
 -- 1. Pegar menu/ZenithMenu.lua en el executor (o en un LocalScript).
@@ -93,7 +113,7 @@ Los PNG se regeneran desde el logo original con:
 python3 menu/make_icons.py download.png menu/assets
 ```
 
-## 5. Pendientes
+## 6. Pendientes
 
 - [ ] Subir los 5 PNG a Roblox y pegar las ids (único punto donde aún no es 100 %
       idéntico: los vectoriales se ven bien pero no son los originales).
@@ -101,7 +121,7 @@ python3 menu/make_icons.py download.png menu/assets
 - [ ] (Opcional) integrarlo como pantalla inicial de `Throwfoodforanimalshub`.
 - [ ] (Opcional) pantallas detrás de los tabs (Home/News/Updates con listas y scroll).
 
-## 6. Referencias
+## 7. Referencias
 
 - Captura de referencia: `542d5bdaa05f00117c4dc50bdb9200ff783bf534.jpeg`
   (adjunta en la conversación original).
