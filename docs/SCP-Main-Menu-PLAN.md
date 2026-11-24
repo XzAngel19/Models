@@ -1,6 +1,6 @@
 # ZNTH Main Menu — Implemented Specification
 
-> Reference: supplied Roblox screenshots. Deliverable: one client-sided, executor-compatible Luau file at `SCP-Main-Menu/SCPMainMenu.lua`. Status: **implemented, revision 3**.
+> Reference: supplied Roblox screenshots. Deliverable: one client-sided, executor-compatible Luau file at `SCP-Main-Menu/SCPMainMenu.lua`. Status: **implemented, revision 4**.
 
 ---
 
@@ -10,21 +10,25 @@
 |---|---|
 | True 3D side panels | Interactive `SurfaceGui` panels on invisible camera-relative Parts |
 | Smooth orientation control | Drag/touch updates shared yaw and pitch through exponential interpolation |
-| Cube must match original | Exact Back/Right Studio selector extracted from the first supplied screenshot, black sky removed, embedded as transparent PNG |
+| Real 3D orientation cube | Compact `ViewportFrame`/`WorldModel` scene built from face plates, edge bars, axes, lighting, and a dedicated Camera; no PNG or painted imitation |
+| Synchronized motion | The cube Model and both menu planes use the same interpolated yaw/pitch state each rendered frame |
+| Aligned panel height | Both panel centers derive from one shared visible top line |
 | Monochrome Zenith branding | Logo repainted white/light gray/medium gray/charcoal and embedded |
 | Remove orange | Global accent, hover colors, labels, dates, hints, and selected tab changed to neutral grayscale |
 | Remove Friends icon | People tab no longer constructed; Home and Document each occupy half the strip |
 | Fix mobile Key System | Editable TextBox moved to ScreenGui and projected over the moving 3D key bar every rendered frame |
-| Key acceptance | Any non-whitespace input + Enter displays `Succes!` and closes |
+| Key acceptance | Standard Remaining is `Pending...` first; any non-whitespace input + Enter displays `Success!`, starts the 12-hour countdown, and closes |
+| Date attribution | Existing game date renders as `16/03/2019 | Zenith Supported` |
+| Remove visible Z | No standalone upper-left Z label; the useful Z shortcut remains |
 | X copies link | Keyboard X and tappable Key Link call clipboard API with exactly `Zenith.com` |
 | Blur/CoreGui lifecycle | Blur only while active; CoreGui All, individual states, and Topbar are hidden/retried while opening and restored on close/destroy |
-| Preserve dynamic content | Experience thumbnail/metadata, countdown, play time, active users, username, and avatar |
+| Preserve dynamic content | Experience thumbnail/metadata, countdown, play time, fixed 69 active users, username, and avatar |
 
 ---
 
-## 2. Painted asset workflow
+## 2. Asset and geometry workflow
 
-The installed `skills/roblox-ui-asset-painter/SKILL.md` workflow uses Pillow as the paint/vector utility:
+The installed `skills/roblox-ui-asset-painter/SKILL.md` workflow remains applicable to the Zenith logo only:
 
 1. Start from `assets/zenith-logo-transparent.png`.
 2. Preserve the alpha channel and antialiased edges.
@@ -33,13 +37,9 @@ The installed `skills/roblox-ui-asset-painter/SKILL.md` workflow uses Pillow as 
    - upper chevron: `(245, 246, 248)`;
    - middle chevron: `(145, 151, 160)`;
    - inner chevron: `(42, 46, 52)`.
-4. Save as `assets/zenith-logo-monochrome.png`.
-5. Crop the original Studio selector at its native resolution from the first screenshot.
-6. Remove only the nearly-black neutral sky while preserving gray faces, dark labels, and colored axes.
-7. Save as `assets/orientation-gizmo-reference.png`.
-8. Base64-embed both PNGs in the single Luau deliverable for `getcustomasset` executors.
+4. Save as `assets/zenith-logo-monochrome.png` and Base64-embed it for compatible executors.
 
-The original purple logo and old People icon remain archived but are not rendered.
+The orientation cube is deliberately not an image asset. Luau creates its six face plates, twelve edge bars, axis rods/endpoints, labels, `WorldModel`, and Camera at runtime. The original purple logo and old People icon remain archived but are not rendered.
 
 ---
 
@@ -48,9 +48,13 @@ The original purple logo and old People icon remain archived but are not rendere
 ```text
 PlayerGui
 ├── ZNTHMainMenu (ScreenGui)
-│   ├── OrientationGizmo
-│   │   ├── exact transparent Studio selector image
-│   │   └── invisible drag/touch target
+│   ├── OrientationGizmo (82×82 drag/touch target)
+│   │   └── ViewportFrame + dedicated Camera
+│   │       └── WorldModel
+│   │           └── DirectionCube3D Model
+│   │               ├── six face/label plates
+│   │               ├── twelve physical edge bars
+│   │               └── X/Y/Z neon axis rods and endpoints
 │   └── KeyInputOverlay (visible only while editing)
 ├── ZNTHLeftSurface (SurfaceGui, FixedSize 410×480)
 │   └── LeftMenu
@@ -71,7 +75,6 @@ Lighting
 ## 4. Left panel
 
 ```text
-Z outside edge
 ┌─────────────────────────────────────┐
 │            Home │ Document          │ two equal navigation tabs
 ├─────────────────────────────────────┤
@@ -81,7 +84,7 @@ Z outside edge
 ├─────────────────────────────────────┤
 │ CURRENT GAME TITLE                  │
 │ description                         │
-│ 16/03/2019                          │
+│ 16/03/2019 | Zenith Supported       │
 ├─────────────────────────────────────┤
 │               Updates               │
 └─────────────────────────────────────┘
@@ -104,18 +107,20 @@ The key field is no longer parented to a `SurfaceGui`:
    - `CurrentCamera:WorldToViewportPoint`.
 4. The overlay receives the projected center, average width/height, and normalized screen rotation.
 5. If the mobile keyboard changes viewport size, the surfaces and field are recalculated together, so the editable text remains inside the same visual box.
-6. Enter accepts any non-empty temporary key, hides the overlay, restores the 3D label as `Succes!`, then closes.
+6. Enter accepts any non-empty temporary key, hides the overlay, restores the 3D label as `Success!`, then closes.
 
 ---
 
-## 6. Orientation widget
+## 6. Real orientation cube
 
-- Visual asset matches the original screenshot: gray spherical selector, Back/Right faces, green Y, blue Z, and red X.
-- The large artificial square and `DRAG TO ORIENT` caption were removed.
-- The entire 102×92 transparent image is the drag/touch target.
-- Drag updates yaw (±26°) and pitch (±15°).
+- The compact 82×82 control contains a real `ViewportFrame`, `WorldModel`, `Model`, and dedicated perspective Camera.
+- Six physical face plates use distinct neutral shades; twelve beveled-looking edge bars outline the cube.
+- Red X, green Y, and blue Z axes use real neon cylinder rods and endpoint spheres, with small viewport labels for legibility.
+- There is no screenshot, selector PNG, fake painted cube, or large artificial background square.
+- Drag updates target yaw (±26°) and pitch (±15°); mouse and touch share the same path.
+- Exponential interpolation drives both panel Parts and `DirectionCube3D:PivotTo(...)` every rendered frame. They therefore start, move, and settle together in the same direction.
 - Tap without a meaningful drag resets to yaw 0°, pitch -3°.
-- The image remains visually faithful rather than rotating its 2D axes; the actual 3D planes provide movement feedback.
+- Both side surfaces use one `sharedRootTop` calculation so their visible bases begin at the same vertical height.
 
 ---
 
@@ -155,13 +160,16 @@ clipboard API = setclipboard or toclipboard
 ## 9. Validation
 
 - [x] Luau 0.748 compiler accepts the complete main script and loader.
-- [x] Mock initialization/API lifecycle passes.
+- [x] Mock initialization/API lifecycle passes with `ViewportFrame`, `WorldModel`, Camera, and `Model:PivotTo` support.
+- [x] Mock geometry count confirms six face plates, twelve edges, six axis pieces, and the two world-space menu planes.
+- [x] Mock mouse and touch drags update orientation; render assertions confirm both panels and the cube consume the same interpolated yaw/pitch state.
+- [x] Shared-top offset math aligns the visible left/right panel roots.
 - [x] Mock mobile key overlay projects into ScreenGui instead of SurfaceGui.
-- [x] Mock temporary key flow reaches `Succes!` and closes.
-- [x] Mock X input writes exactly `Zenith.com` to the clipboard function.
-- [x] Friends navigation entry is absent.
+- [x] Mock pre-key state is exactly `Pending...`; temporary key flow reaches `Success!`, activates Remaining, and closes.
+- [x] Mock X input and tappable Key Link write exactly `Zenith.com` to the clipboard function.
+- [x] RightShift, retained Z shortcut, teardown, and Friends-tab absence are covered.
 - [x] No orange RGB values or People icon construction remain in active code.
-- [x] Embedded PNG decoder/source signatures validated.
+- [x] Embedded active PNGs are byte-identical to source files; the painted orientation asset/reference is absent.
 - [x] `git diff --check` passes.
 - [ ] Final visual/input inspection in the target mobile executor.
 

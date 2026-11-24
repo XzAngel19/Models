@@ -60,7 +60,6 @@ local Config = {
 	Assets = {
 		-- Studio can use uploaded IDs; compatible executors decode the embedded PNGs.
 		DivisionLogo = "",
-		OrientationGizmo = "",
 		HomeIcon = "",
 		DocumentIcon = "",
 	},
@@ -162,74 +161,6 @@ local EMBEDDED_ASSETS = {
 		"C448gTEXQfEZDNvo9CgcXMcNiF13CXBojWV8mfFth1jw1f2prPraddMGERDutMYyOnVAEyGDoxuCQ3TqsdauqzaIgBgejil06oYUIGnHj7QDAgDQKbJTALxH",
 		"J0oUQRABYWRWqeK6O30A8ROU7sEMTgBeIaC9HBEQwQMELiExheWqSSS9hB8RABEQtoCi1lXl2nD8f6+lHF3gy3Lyy+Yk9cOR4POt/wMQNVQVv3pyMAAAAABJ",
 		"RU5ErkJggg==",
-	}),
-	OrientationGizmo = table.concat({
-		"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",
 	}),
 	HomeIcon = table.concat({
 		"iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAACT0lEQVR4nO3aUU7EMAwA0RRx/ysvX3yAYLXbxLHjmXcBUns2UlHHkCRJkiRJkiRJkqSWHo/H",
@@ -392,7 +323,6 @@ end
 
 local resolvedAssets = {
 	DivisionLogo = resolveEmbeddedAsset("DivisionLogo", "zenith-logo-monochrome.png"),
-	OrientationGizmo = resolveEmbeddedAsset("OrientationGizmo", "orientation-gizmo-reference.png"),
 	HomeIcon = resolveEmbeddedAsset("HomeIcon", "icon-home.png"),
 	DocumentIcon = resolveEmbeddedAsset("DocumentIcon", "icon-doc.png"),
 }
@@ -794,19 +724,6 @@ local function buildLeftPanel(surfaceGui, overlayGui)
 	}, root)
 	addStroke(navigationRow, Config.Line, 0.55, 1)
 
-	local zLabel = makeText(navigationRow, {
-		Name = "ZKey",
-		Position = UDim2.fromOffset(-38, 0),
-		Size = UDim2.fromOffset(28, 43),
-		Font = REGULAR_FONT,
-		Text = "Z",
-		TextColor3 = Config.Accent,
-		TextSize = 27,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		ZIndex = 7,
-	})
-	Menu.references.ZLabel = zLabel
-
 	makeNavigationIcon(navigationRow, "Home", 0, 168, resolvedAssets.HomeIcon, buildHomeFallback)
 	makeNavigationIcon(navigationRow, "Document", 168, 167, resolvedAssets.DocumentIcon, buildDocumentFallback)
 	addLine(navigationRow, UDim2.fromOffset(167, 6), UDim2.fromOffset(1, 31), 0.4, Config.Line, 8)
@@ -962,11 +879,12 @@ local function buildLeftPanel(surfaceGui, overlayGui)
 	makeText(newsBody, {
 		Name = "Date",
 		Position = UDim2.fromOffset(5, 74),
-		Size = UDim2.fromOffset(150, 17),
+		Size = UDim2.fromOffset(325, 17),
 		Font = MEDIUM_FONT,
-		Text = Config.NewsDate,
+		Text = Config.NewsDate .. " | Zenith Supported",
 		TextColor3 = Config.Accent,
 		TextSize = 12,
+		TextTruncate = Enum.TextTruncate.AtEnd,
 		ZIndex = 5,
 	})
 
@@ -1075,9 +993,12 @@ local function buildLeftPanel(surfaceGui, overlayGui)
 
 		local acceptedKey = keyInput.Text
 		Menu.keyAccepted = true
+		if Menu.references.CountdownValue then
+			Menu.references.CountdownValue.Text = "12 Hours - Remaining"
+		end
 		keyInput.Visible = false
 		keyLabel.Visible = true
-		keyLabel.Text = "Succes!"
+		keyLabel.Text = "Success!"
 		keyLabel.TextColor3 = Color3.fromRGB(128, 255, 164)
 		keyButton.Visible = true
 		tween(keyBar, FAST_TWEEN, {
@@ -1261,7 +1182,7 @@ local function buildRightPanel(surfaceGui)
 		Name = "StandardRemaining",
 		Position = UDim2.fromOffset(12, 18),
 		Size = UDim2.fromOffset(299, 25),
-		Text = "12 Hours - Remaining",
+		Text = "Pending...",
 		TextColor3 = Config.Secondary,
 		TextSize = 19,
 		ZIndex = 5,
@@ -1464,118 +1385,135 @@ Menu.references.RightSurface = rightSurface
 buildLeftPanel(leftSurface, screenGui)
 buildRightPanel(rightSurface)
 
--- Recreate the Studio-style orientation block visible in the supplied reference.
+-- Build a compact, fully 3D Studio-style orientation cube.
 local function buildOrientationGizmo(parent)
 	local root = create("Frame", {
 		Name = "OrientationGizmo",
 		AnchorPoint = Vector2.new(1, 0),
-		Position = UDim2.new(1, -18, 0, 20),
-		Size = UDim2.fromOffset(102, 92),
+		Position = UDim2.new(1, -14, 0, 6),
+		Size = UDim2.fromOffset(82, 82),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		Visible = false,
 		ZIndex = 50,
 	}, parent)
 
-	-- This transparent PNG is extracted from the exact Studio view selector in
-	-- the supplied reference (Back/Right faces with X/Y/Z axes), avoiding the
-	-- flat rectangles that made the previous approximation look 2D.
-	local exactImage = create("ImageLabel", {
-		Name = "StudioOrientationReference",
-		Size = UDim2.fromScale(1, 1),
+	local backdrop = create("Frame", {
+		Name = "Backdrop",
+		Position = UDim2.fromOffset(5, 5),
+		Size = UDim2.fromOffset(72, 72),
+		BackgroundColor3 = Color3.fromRGB(18, 19, 22),
+		BackgroundTransparency = 0.34,
+		BorderSizePixel = 0,
+		ZIndex = 50,
+	}, root)
+	create("UICorner", { CornerRadius = UDim.new(1, 0) }, backdrop)
+	local backdropStroke = addStroke(backdrop, Color3.fromRGB(166, 170, 178), 0.62, 1)
+
+	-- A real ViewportFrame scene: every visible face, edge, and axis is a 3D
+	-- Part. No screenshot or painted cube is used.
+	local viewport = create("ViewportFrame", {
+		Name = "RealOrientationCube",
+		Position = UDim2.fromOffset(1, 1),
+		Size = UDim2.fromOffset(80, 80),
+		Ambient = Color3.fromRGB(103, 107, 115),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
-		Image = resolvedAssets.OrientationGizmo,
+		ImageColor3 = Color3.new(1, 1, 1),
 		ImageTransparency = 0,
-		ScaleType = Enum.ScaleType.Fit,
-		Visible = resolvedAssets.OrientationGizmo ~= "",
-		ZIndex = 52,
-	}, root)
-
-	-- A compact code-drawn fallback remains available in Studio before the PNG
-	-- receives an uploaded asset ID. It intentionally has no opaque square.
-	local fallback = create("Frame", {
-		Name = "StudioOrientationFallback",
-		Size = UDim2.fromScale(1, 1),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Visible = not exactImage.Visible,
+		LightColor = Color3.fromRGB(245, 246, 248),
+		LightDirection = Vector3.new(-1, -0.8, -1),
 		ZIndex = 51,
 	}, root)
-	local orbit = create("Frame", {
-		Position = UDim2.fromOffset(17, 7),
-		Size = UDim2.fromOffset(68, 68),
-		BackgroundColor3 = Color3.fromRGB(94, 96, 101),
-		BackgroundTransparency = 0.2,
-		BorderSizePixel = 0,
-		ZIndex = 51,
-	}, fallback)
-	create("UICorner", { CornerRadius = UDim.new(1, 0) }, orbit)
-	local orbitStroke = addStroke(orbit, Color3.fromRGB(185, 188, 194), 0.5, 1)
-	create("UIGradient", {
-		Color = ColorSequence.new(Color3.fromRGB(159, 162, 168), Color3.fromRGB(66, 68, 73)),
-		Rotation = 90,
-	}, orbit)
+	local worldModel = create("WorldModel", { Name = "CubeWorld" }, viewport)
+	local cubeModel = create("Model", { Name = "DirectionCube3D" }, worldModel)
 
-	local topFace = create("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromOffset(51, 26),
-		Size = UDim2.fromOffset(29, 29),
-		Rotation = 45,
-		BackgroundColor3 = Color3.fromRGB(158, 161, 167),
-		BorderSizePixel = 0,
-		ZIndex = 53,
-	}, fallback)
-	addStroke(topFace, Color3.fromRGB(210, 212, 216), 0.55, 1)
-	local backFace = create("Frame", {
-		Position = UDim2.fromOffset(25, 31),
-		Size = UDim2.fromOffset(26, 31),
-		BackgroundColor3 = Color3.fromRGB(126, 129, 135),
-		BorderSizePixel = 0,
-		ZIndex = 54,
-	}, fallback)
-	local rightFace = create("Frame", {
-		Position = UDim2.fromOffset(51, 31),
-		Size = UDim2.fromOffset(26, 31),
-		BackgroundColor3 = Color3.fromRGB(151, 154, 160),
-		BorderSizePixel = 0,
-		ZIndex = 54,
-	}, fallback)
-	addStroke(backFace, Color3.fromRGB(205, 207, 212), 0.58, 1)
-	addStroke(rightFace, Color3.fromRGB(205, 207, 212), 0.58, 1)
-	makeText(backFace, {
-		Size = UDim2.fromScale(1, 1),
-		Text = "Back",
-		TextColor3 = Color3.fromRGB(40, 42, 46),
-		TextSize = 8,
-		TextXAlignment = Enum.TextXAlignment.Center,
-		ZIndex = 55,
+	local function makeCubePart(name, size, cframe, color, material, shape)
+		return create("Part", {
+			Name = name,
+			Anchored = true,
+			CanCollide = false,
+			CanQuery = false,
+			CanTouch = false,
+			CastShadow = false,
+			CFrame = cframe,
+			Color = color,
+			Material = material or Enum.Material.SmoothPlastic,
+			Shape = shape or Enum.PartType.Block,
+			Size = size,
+		}, cubeModel)
+	end
+
+	local core = makeCubePart(
+		"Core",
+		Vector3.new(2.2, 2.2, 2.2),
+		CFrame.new(),
+		Color3.fromRGB(92, 96, 104),
+		Enum.Material.SmoothPlastic
+	)
+	cubeModel.PrimaryPart = core
+
+	-- Six physical face plates, each with a slightly different neutral shade,
+	-- keep depth readable at mobile size from every drag angle.
+	makeCubePart("TopFace", Vector3.new(2.22, 0.055, 2.22), CFrame.new(0, 1.125, 0), Color3.fromRGB(226, 229, 234))
+	makeCubePart("BottomFace", Vector3.new(2.22, 0.055, 2.22), CFrame.new(0, -1.125, 0), Color3.fromRGB(76, 80, 88))
+	makeCubePart("RightFace", Vector3.new(0.055, 2.22, 2.22), CFrame.new(1.125, 0, 0), Color3.fromRGB(163, 168, 177))
+	makeCubePart("LeftFace", Vector3.new(0.055, 2.22, 2.22), CFrame.new(-1.125, 0, 0), Color3.fromRGB(104, 109, 118))
+	makeCubePart("FrontFace", Vector3.new(2.22, 2.22, 0.055), CFrame.new(0, 0, 1.125), Color3.fromRGB(124, 129, 138))
+	makeCubePart("BackFace", Vector3.new(2.22, 2.22, 0.055), CFrame.new(0, 0, -1.125), Color3.fromRGB(88, 92, 100))
+
+	-- Twelve real edge bars replace the old flat UIStroke approximation.
+	local edgeColor = Color3.fromRGB(42, 45, 51)
+	for _, y in ipairs({ -1.135, 1.135 }) do
+		for _, z in ipairs({ -1.135, 1.135 }) do
+			makeCubePart("EdgeX", Vector3.new(2.3, 0.045, 0.045), CFrame.new(0, y, z), edgeColor)
+		end
+	end
+	for _, x in ipairs({ -1.135, 1.135 }) do
+		for _, z in ipairs({ -1.135, 1.135 }) do
+			makeCubePart("EdgeY", Vector3.new(0.045, 2.3, 0.045), CFrame.new(x, 0, z), edgeColor)
+		end
+	end
+	for _, x in ipairs({ -1.135, 1.135 }) do
+		for _, y in ipairs({ -1.135, 1.135 }) do
+			makeCubePart("EdgeZ", Vector3.new(0.045, 0.045, 2.3), CFrame.new(x, y, 0), edgeColor)
+		end
+	end
+
+	-- Real neon axis rods and endpoints rotate with the cube model.
+	local red = Color3.fromRGB(225, 74, 78)
+	local green = Color3.fromRGB(83, 196, 113)
+	local blue = Color3.fromRGB(60, 120, 231)
+	makeCubePart("XAxis", Vector3.new(0.72, 0.075, 0.075), CFrame.new(1.48, 0, 0), red, Enum.Material.Neon, Enum.PartType.Cylinder)
+	makeCubePart("XAxisTip", Vector3.new(0.13, 0.13, 0.13), CFrame.new(1.88, 0, 0), red, Enum.Material.Neon, Enum.PartType.Ball)
+	makeCubePart("YAxis", Vector3.new(0.72, 0.075, 0.075), CFrame.new(0, 1.48, 0) * CFrame.Angles(0, 0, math.rad(90)), green, Enum.Material.Neon, Enum.PartType.Cylinder)
+	makeCubePart("YAxisTip", Vector3.new(0.13, 0.13, 0.13), CFrame.new(0, 1.88, 0), green, Enum.Material.Neon, Enum.PartType.Ball)
+	makeCubePart("ZAxis", Vector3.new(0.72, 0.075, 0.075), CFrame.new(0, 0, 1.48) * CFrame.Angles(0, math.rad(90), 0), blue, Enum.Material.Neon, Enum.PartType.Cylinder)
+	makeCubePart("ZAxisTip", Vector3.new(0.13, 0.13, 0.13), CFrame.new(0, 0, 1.88), blue, Enum.Material.Neon, Enum.PartType.Ball)
+
+	local viewportCamera = create("Camera", {
+		Name = "CubeCamera",
+		CFrame = CFrame.lookAt(Vector3.new(0, 0, 8.2), Vector3.new(0, 0, 0)),
+		FieldOfView = 31,
+	}, viewport)
+	viewport.CurrentCamera = viewportCamera
+	cubeModel:PivotTo(CFrame.Angles(math.rad(-18), math.rad(35), 0))
+
+	-- Small static axis letters aid direction reading without faking cube faces.
+	makeText(root, {
+		Position = UDim2.fromOffset(36, -2), Size = UDim2.fromOffset(12, 13),
+		Font = BOLD_FONT, Text = "Y", TextColor3 = green, TextSize = 9,
+		TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 53,
 	})
-	makeText(rightFace, {
-		Size = UDim2.fromScale(1, 1),
-		Text = "Right",
-		TextColor3 = Color3.fromRGB(40, 42, 46),
-		TextSize = 8,
-		TextXAlignment = Enum.TextXAlignment.Center,
-		ZIndex = 55,
+	makeText(root, {
+		Position = UDim2.fromOffset(0, 57), Size = UDim2.fromOffset(12, 13),
+		Font = BOLD_FONT, Text = "Z", TextColor3 = blue, TextSize = 9,
+		TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 53,
 	})
-	addLine(fallback, UDim2.fromOffset(50, 0), UDim2.fromOffset(2, 18), 0.04, Color3.fromRGB(81, 192, 111), 56)
-	addLine(fallback, UDim2.fromOffset(5, 64), UDim2.fromOffset(22, 2), 0.04, Color3.fromRGB(54, 115, 226), 56)
-	addLine(fallback, UDim2.fromOffset(76, 64), UDim2.fromOffset(21, 2), 0.04, Color3.fromRGB(226, 69, 72), 56)
-	makeText(fallback, {
-		Position = UDim2.fromOffset(45, -3), Size = UDim2.fromOffset(13, 13),
-		Font = BOLD_FONT, Text = "Y", TextColor3 = Color3.fromRGB(81, 192, 111), TextSize = 9,
-		TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 57,
-	})
-	makeText(fallback, {
-		Position = UDim2.fromOffset(0, 58), Size = UDim2.fromOffset(12, 13),
-		Font = BOLD_FONT, Text = "Z", TextColor3 = Color3.fromRGB(54, 115, 226), TextSize = 9,
-		TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 57,
-	})
-	makeText(fallback, {
-		Position = UDim2.fromOffset(93, 58), Size = UDim2.fromOffset(9, 13),
-		Font = BOLD_FONT, Text = "X", TextColor3 = Color3.fromRGB(226, 69, 72), TextSize = 9,
-		TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 57,
+	makeText(root, {
+		Position = UDim2.fromOffset(70, 57), Size = UDim2.fromOffset(12, 13),
+		Font = BOLD_FONT, Text = "X", TextColor3 = red, TextSize = 9,
+		TextXAlignment = Enum.TextXAlignment.Center, ZIndex = 53,
 	})
 
 	local dragButton = makeButton(root, {
@@ -1583,19 +1521,14 @@ local function buildOrientationGizmo(parent)
 		Size = UDim2.fromScale(1, 1),
 		ZIndex = 60,
 	})
-
 	connect(dragButton.MouseEnter, function()
-		if exactImage.Visible then
-			tween(exactImage, FAST_TWEEN, { ImageTransparency = 0.08 })
-		else
-			tween(orbitStroke, FAST_TWEEN, { Transparency = 0.15, Color = Config.White })
-		end
+		tween(viewport, FAST_TWEEN, { ImageTransparency = 0.06 })
+		tween(backdropStroke, FAST_TWEEN, { Transparency = 0.2, Color = Config.White })
 	end)
 	connect(dragButton.MouseLeave, function()
-		if exactImage.Visible then
-			tween(exactImage, FAST_TWEEN, { ImageTransparency = 0 })
-		elseif not Menu.orientationDragging then
-			tween(orbitStroke, FAST_TWEEN, { Transparency = 0.5, Color = Color3.fromRGB(185, 188, 194) })
+		tween(viewport, FAST_TWEEN, { ImageTransparency = 0 })
+		if not Menu.orientationDragging then
+			tween(backdropStroke, FAST_TWEEN, { Transparency = 0.62, Color = Color3.fromRGB(166, 170, 178) })
 		end
 	end)
 	connect(dragButton.InputBegan, function(input)
@@ -1617,15 +1550,11 @@ local function buildOrientationGizmo(parent)
 		if Menu.orientationDragInput and Menu.orientationDragInput.UserInputType == Enum.UserInputType.Touch and input ~= Menu.orientationDragInput then
 			return
 		end
-
 		local position = Vector2.new(input.Position.X, input.Position.Y)
 		local delta = position - Menu.orientationDragLast
 		Menu.orientationDragLast = position
 		Menu.orientationDragDistance = Menu.orientationDragDistance + delta.Magnitude
-		Menu:SetOrientation(
-			Menu.targetOrientationYaw + delta.X * 0.22,
-			Menu.targetOrientationPitch - delta.Y * 0.18
-		)
+		Menu:SetOrientation(Menu.targetOrientationYaw + delta.X * 0.22, Menu.targetOrientationPitch - delta.Y * 0.18)
 	end)
 	connect(userInputService.InputEnded, function(input)
 		if not Menu.orientationDragging then
@@ -1639,15 +1568,14 @@ local function buildOrientationGizmo(parent)
 		if Menu.orientationDragDistance < 4 then
 			Menu:SetOrientation(0, Config.SurfaceDefaultPitch)
 		end
-		if exactImage.Visible then
-			tween(exactImage, FAST_TWEEN, { ImageTransparency = 0 })
-		else
-			tween(orbitStroke, FAST_TWEEN, { Transparency = 0.5, Color = Color3.fromRGB(185, 188, 194) })
-		end
+		tween(viewport, FAST_TWEEN, { ImageTransparency = 0 })
+		tween(backdropStroke, FAST_TWEEN, { Transparency = 0.62, Color = Color3.fromRGB(166, 170, 178) })
 	end)
 
 	Menu.references.OrientationGizmo = root
-	Menu.references.OrientationImage = exactImage
+	Menu.references.OrientationViewport = viewport
+	Menu.references.OrientationModel = cubeModel
+	Menu.references.OrientationDragButton = dragButton
 	return root
 end
 buildOrientationGizmo(screenGui)
@@ -1873,12 +1801,17 @@ local function updateWorldPresentation(deltaTime)
 	local rightOpenX = viewport.X - 193 * Menu.scale
 	local leftCenterX = leftClosedX + (leftOpenX - leftClosedX) * reveal
 	local rightCenterX = rightClosedX + (rightOpenX - rightClosedX) * reveal
+	-- Align the visible root tops even though each SurfaceGui has a different
+	-- canvas height and internal top padding.
+	local sharedRootTop = viewport.Y * 0.245
+	local leftCenterY = sharedRootTop + (LEFT_CANVAS_SIZE.Y * 0.5 - 12) * Menu.scale
+	local rightCenterY = sharedRootTop + (RIGHT_CANVAS_SIZE.Y * 0.5 - 8) * Menu.scale
 
 	placeSurface(
 		leftPart,
 		LEFT_CANVAS_SIZE,
 		leftCenterX,
-		viewport.Y * 0.525,
+		leftCenterY,
 		Config.SurfaceInwardYaw + Menu.orientationYaw,
 		Menu.orientationPitch,
 		camera,
@@ -1888,13 +1821,24 @@ local function updateWorldPresentation(deltaTime)
 		rightPart,
 		RIGHT_CANVAS_SIZE,
 		rightCenterX,
-		viewport.Y * 0.551,
+		rightCenterY,
 		-Config.SurfaceInwardYaw + Menu.orientationYaw,
 		Menu.orientationPitch,
 		camera,
 		viewport
 	)
 	updateKeyInputOverlay(camera)
+
+	local orientationModel = Menu.references.OrientationModel
+	if orientationModel then
+		-- The real cube follows the exact same smoothed yaw/pitch values as both
+		-- menu planes, so neither the cube nor the menu snaps ahead of the other.
+		orientationModel:PivotTo(CFrame.Angles(
+			math.rad(-15 + Menu.orientationPitch),
+			math.rad(35 + Menu.orientationYaw),
+			0
+		))
+	end
 
 	local shouldRender = Menu.openAmount > 0.005 or Menu.targetOpenAmount > 0
 	leftSurface.Enabled = shouldRender
@@ -2086,7 +2030,7 @@ end
 
 local function updateTimers()
 	local now = getServerTime()
-	Menu.references.CountdownValue.Text = formatRemaining(expiresAt - now)
+	Menu.references.CountdownValue.Text = Menu.keyAccepted and formatRemaining(expiresAt - now) or "Pending..."
 	Menu.references.TimePlayedValue.Text = formatPlayed(now - startedAt)
 end
 
@@ -2115,12 +2059,6 @@ connect(userInputService.InputBegan, function(input, gameProcessed)
 			Menu:SetOpen(true)
 		end
 		Menu:SetNavigation("Home")
-		tween(Menu.references.ZLabel, FAST_TWEEN, { TextColor3 = Config.White })
-		task.delay(0.14, function()
-			if not Menu.destroyed then
-				tween(Menu.references.ZLabel, FAST_TWEEN, { TextColor3 = Config.Accent })
-			end
-		end)
 	elseif input.KeyCode == Enum.KeyCode.F then
 		Menu:PulseHotkey("F")
 		local callback = Menu.callbacks.Updates
