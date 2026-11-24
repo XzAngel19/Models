@@ -92,23 +92,26 @@ def make_people(path):
 def make_paper(path):
     img = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    d.rounded_rectangle((30, 12, 98, 116), radius=4, fill=INK + (255,))
-    d.polygon([(78, 12), (98, 32), (78, 32)], fill=(0, 0, 0, 0))  # esquina doblada
-    d.line([(78, 12), (98, 32)], fill=INK + (190,), width=2)
+    d.rounded_rectangle((28, 10, 100, 118), radius=6, outline=INK + (255,), width=6)
+    d.polygon([(76, 10), (100, 34), (76, 34)], fill=(0, 0, 0, 0))  # esquina doblada
+    d.line([(76, 10), (100, 34)], fill=INK + (255,), width=5)       # pliegue
     for i in range(3):
-        y = 52 + i * 16
-        d.rounded_rectangle((42, y, 86, y + 5), radius=2, fill=PANEL + (255,))
+        y = 52 + i * 18
+        d.rounded_rectangle((44, y, 84, y + 5), radius=2, fill=INK + (255,))
     img.save(path)
     print("papel  ->", path)
 
 
 def make_logo(path):
-    """Recreación vectorial del logo: anillo + punto + tres chevrons."""
+    """Recreación vectorial del logo: anillo con hueco arriba, punto y tres chevrons."""
     img = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    d.ellipse((8, 12, 120, 124), outline=LILAC_LIGHT + (255,), width=7)
-    d.ellipse((56, 2, 72, 18), fill=LILAC_LIGHT + (255,))
-    for apex_y, half, color in ((64, 38, LILAC_LIGHT), (84, 27, LILAC_MID), (104, 16, LILAC_DEEP)):
+    box = (10, 16, 118, 124)
+    # anillo con un hueco arriba (como el original), donde se apoya el punto
+    d.arc(box, start=312, end=360, fill=LILAC_LIGHT + (255,), width=7)
+    d.arc(box, start=0, end=228, fill=LILAC_LIGHT + (255,), width=7)
+    d.ellipse((55, 8, 73, 26), fill=LILAC_LIGHT + (255,))  # punto
+    for apex_y, half, color in ((70, 34, LILAC_LIGHT), (89, 25, LILAC_MID), (108, 16, LILAC_DEEP)):
         d.line([(64 - half, apex_y), (64, apex_y - half)], fill=color + (255,), width=8)
         d.line([(64, apex_y - half), (64 + half, apex_y)], fill=color + (255,), width=8)
         d.ellipse((64 - 4, apex_y - half - 4, 64 + 4, apex_y - half + 4), fill=color + (255,))

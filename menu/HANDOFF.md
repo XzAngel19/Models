@@ -6,7 +6,7 @@ columna de Clearance · Division · Balance · Time Played · Online Friends).
 
 ```
 menu/
-├── ZenithMenu.lua        ← el menú completo (781 líneas, sin dependencias)
+├── ZenithMenu.lua        ← el menú completo (772 líneas, sin dependencias)
 ├── make_icons.py         ← genera los PNG transparentes (128x128)
 ├── assets/               ← PNGs ya generados, listos para subir a Roblox
 │   ├── division-logo.png         logo original, fondo blanco ya quitado
@@ -107,4 +107,4 @@ python3 menu/make_icons.py download.png menu/assets
   (adjunta en la conversación original).
 - Logo original: `download.png` (196×196, fondo blanco, lilas).
 - Nota de escala: para el resto del menú, ~700–850 líneas es el costo real de una
-  pantalla de este tipo dibujada píxel a píxel sin librería; este archivo tiene 781.
+  pantalla de este tipo dibujada píxel a píxel sin librería; este archivo tiene 772.

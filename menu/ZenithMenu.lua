@@ -236,31 +236,22 @@ local function iconPaper(parent, x, y, size)
 		Size = UDim2.fromOffset(size, size),
 		BackgroundTransparency = 1,
 	}, parent)
+	-- Contorno (no relleno): así se ve igual sobre el mundo que sobre un panel.
 	local page = new("Frame", {
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(size * 0.66, size * 0.84),
-		BackgroundColor3 = Color3.new(1, 1, 1),
+		Size = UDim2.fromOffset(size * 0.64, size * 0.84),
+		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 	}, holder)
 	round(page, 1)
-	new("Frame", {
-		AnchorPoint = Vector2.new(1, 0),
-		Position = UDim2.fromScale(1, 0),
-		Size = UDim2.fromOffset(size * 0.26, size * 0.26),
-		BackgroundColor3 = CONFIG.PANEL,
-		BackgroundTransparency = CONFIG.PANEL_TRANSPARENCY,
-		BorderSizePixel = 0,
-		Rotation = 45,
+	new("UIStroke", {
+		Thickness = math.max(1.5, size * 0.07),
+		Color = Color3.new(1, 1, 1),
 	}, page)
+	bar(page, 0.76, 0.24, size * 0.3, math.max(1.5, size * 0.06), 45, Color3.new(1, 1, 1))
 	for index = 1, 3 do
-		new("Frame", {
-			Position = UDim2.new(0, size * 0.1, 0, size * (0.3 + index * 0.14)),
-			Size = UDim2.fromOffset(size * 0.36, math.max(1, size * 0.05)),
-			BackgroundColor3 = CONFIG.PANEL,
-			BackgroundTransparency = 0.25,
-			BorderSizePixel = 0,
-		}, page)
+		bar(page, 0.5, 0.36 + index * 0.15, size * 0.32, math.max(1.5, size * 0.05), 0, Color3.new(1, 1, 1))
 	end
 	return holder
 end
