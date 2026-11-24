@@ -44,7 +44,7 @@ The Home, People, and Document fields can be set the same way, but their built-i
 Use the published branch loader:
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/XzAngel19/Models/refs/heads/arena/cbc36148-models/SCP-Main-Menu/SCPMainMenu.lua", true))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/XzAngel19/Models/arena/cbc36148-models/SCP-Main-Menu/SCPMainMenu.lua", true))()
 ```
 
 Alternatively, paste/execute `loader.lua` or all of `SCPMainMenu.lua` as one chunk. Compatible executors automatically decode the four embedded PNG files and register them through `getcustomasset`; no extra files or `require` calls are needed.
