@@ -1,184 +1,187 @@
-# SCP Main Menu — Exact Replication Plan (Luau, Client-Sided)
+# ZNTH Main Menu — Implemented Specification
 
-> Reference: user screenshot (1223×813, Roblox Studio). Goal: pixel-faithful recreation of the supplied menu as a **single executable Luau file** (LocalScript / executor `loadstring`). **Status: implemented** in `SCP-Main-Menu/SCPMainMenu.lua` after the user supplied the final customization spec.
-
----
-
-## 1. What we're building
-
-A client-sided `ScreenGui` with two floating panels (left nav/news, right profile) over a dark 3D scene (studded baseplate + grey dummy). The GUI itself is 2D; the 3D background is the game world, not part of the GUI.
-
-**Deliverable:** `SCP-Main-Menu/SCPMainMenu.lua` — one 1,500+ line file, zero `require`, zero server scripts. PNG artwork is embedded for compatible executors and has code-drawn Studio fallbacks.
-
-**Execution:**
-- Studio: `StarterGui → LocalScript`, paste file, Play Solo.
-- Executor: `loadstring(game:HttpGet("<raw-url>"))()` or paste file directly.
+> Reference: supplied 1223×813 Roblox Studio screenshot. Deliverable: one client-sided, executor-compatible Luau file at `SCP-Main-Menu/SCPMainMenu.lua`. Status: **implemented, revision 2**.
 
 ---
 
-## 2. Reference breakdown (from screenshot)
+## 1. Acceptance requirements
 
-### 2.1 Left panel (~x 55–400, y 205–690)
-| # | Element | Spec |
-|---|---------|------|
-| L1 | Zenith key "Z" | Orange `Z` glyph, ~20px, top-left, outside panel edge (user-requested replacement for Q) |
-| L2 | Home icon (selected) | Orange square ~45×35, black house glyph, `BackgroundColor3` ≈ `Color3.fromRGB(255,140,0)` |
-| L3 | Friends icon | White two-person glyph, unselected |
-| L4 | News/doc icon | White page glyph, unselected |
-| L5 | Divider | 1px vertical grey line |
-| L6 | "E" | Orange letter, ~18px |
-| L7 | "Home" | White text, ~20px, Gotham |
-| L8 | Divider | 1px vertical grey line |
-| L9 | **Continue** bar | Full-width black bar, h≈55, centered white text ~28px, 1px white/grey top+bottom border |
-| L10 | **News** header bar | Same style as L9 |
-| L11 | Current-game image | Runtime `rbxthumb://type=GameThumbnail&id=<PlaceId>&w=768&h=432`, cropped to ~335×126 |
-| L12 | Current-game title | Runtime `MarketplaceService:GetProductInfo(game.PlaceId)`, orange, bold, truncated safely |
-| L13 | Current-game description | Product description with a local fallback, light grey, wrapped |
-| L14 | "16/03/2019" | Orange, ~12px, retained from the reference |
-| L15 | **Updates** bar | Same style as L9 |
-| L16 | Keybind row | `F / Updates`, `X / Soon`, `C / Soon`, with orange keys and thin dividers |
-
-### 2.2 Right panel (~x 895–1230, y 270–680)
-| # | Element | Spec |
-|---|---------|------|
-| R1 | "Clearance" / "Division" | White ~16px, each with thin underline (1px frame) |
-| R2 | "ZNTH" | Bold white ~37px below Clearance (replaces L1) |
-| R3 | Zenith division logo | User-supplied purple logo, white background removed; transparent PNG/fallback at ~96px |
-| R4 | Divider | 1px horizontal grey line |
-| R5 | "Standard" + live 12-hour remaining counter | Starts as `12 Hours - Remaining`, then updates every second |
-| R6 | "Time Played" / "0d 0h 0m" | Real session timer, displayed in the reference format |
-| R7 | Divider | 1px horizontal grey line |
-| R8 | "69" + "Active / users" | User-requested count and stacked label |
-| R9 | Divider | 1px horizontal grey line |
-| R10 | Local avatar + Roblox username | Runtime `GetUserThumbnailAsync` + `LocalPlayer.Name` |
-
-### 2.3 Center / background
-- "Dummy" nametag, grey R6 character, baseplate, starry sky, and Studio orientation widget are **not created by the menu**; they belong to the reference's game-world scene.
-- The client menu overlays whichever current Roblox experience executes it.
-
-### 2.4 Visual style
-- Panels: near-black `Color3.fromRGB(10,10,10)` with slight transparency (`BackgroundTransparency ≈ 0.05–0.15`), 1px light borders.
-- Accent orange: `Color3.fromRGB(255,140,0)` (tune to `#FF8C00`).
-- Text: white `Color3.fromRGB(255,255,255)`, secondary `Color3.fromRGB(200,200,200)`.
-- Font: `Enum.Font.Gotham` / `GothamBold` / `GothamMedium` (closest Roblox match to screenshot's geometric sans).
-- The reference panels are photographed with slight inward perspective; this deliverable keeps them as a stable flat `ScreenGui` so they remain readable and clickable over any current game.
+| Requirement | Implementation |
+|---|---|
+| Blur only while active | Dedicated `Lighting.BlurEffect`; tweened to 18 while open and back to 0 before disabling |
+| Hide default Roblox logos/UI naturally | Saves each CoreGui enabled state plus top-bar state, hides them while open, restores them when closed/destroyed |
+| Toggle with RightShift | Global `UserInputService.InputBegan` binding, including while the key field is focused |
+| Panels must look truly 3D | Interactive `SurfaceGui` panels on two invisible camera-relative Parts, not flat ScreenGui frames |
+| Stronger inward angle | Default ±17° yaw with -3° pitch and perspective-width correction |
+| Orientation block like screenshot | Custom Back/Front cube with X/Y/Z axes at the upper-right; drag rotates both panels smoothly, click resets |
+| Remove Clearance/Division | Right header contains only the centered supplied Zenith logo |
+| Remove duplicate News bar | Thumbnail and news details form one joined card with a small integrated NEWS badge |
+| Replace Continue | Full-width Key System bar and transparent aligned `TextBox` |
+| Temporary key behavior | Any non-empty text + Enter is accepted, displays `Succes!`, invokes callback, then closes |
+| Replace X label | Bottom row says `X / Key Link` and invokes `callbacks.KeyLink` |
+| Remove E/Home header text | Three icon tabs evenly occupy the same 335px width as Key System |
+| Preserve live data | Current game thumbnail/name/description, countdown, played time, local name/avatar, 69 active users |
 
 ---
 
-## 3. Layout spec (pixel-exact)
+## 2. Runtime scene graph
 
-Reference canvas: 1223×813 (the supplied file's exact dimensions). Build with offset-based panel internals, edge anchors, and paired `UIScale` objects driven by the current camera viewport.
+```text
+PlayerGui
+├── ZNTHMainMenu (ScreenGui)
+│   └── OrientationGizmo (interactive Back/Front cube + X/Y/Z axes)
+├── ZNTHLeftSurface (SurfaceGui, FixedSize 410×480, active)
+│   └── LeftMenu (offset 50,12; 335×452)
+└── ZNTHRightSurface (SurfaceGui, FixedSize 350×400, active)
+    └── RightMenu (offset 14,8; 323×384)
 
-```
-ScreenGui (IgnoreGuiInset=true, ResetOnSpawn=false, DisplayOrder=10)
-├── LeftPanel (Frame, AnchorPoint 0,0.5, Pos 55,0.5, Size 345×~485)
-│   ├── IconRow (Frame, h=40)
-│   │   ├── ZenithKey (TextLabel "Z", orange)
-│   │   ├── HomeBtn (TextButton, orange bg, house ImageLabel)
-│   │   ├── FriendsBtn (TextButton, people ImageLabel)
-│   │   ├── NewsBtn (TextButton, doc ImageLabel)
-│   │   ├── VDivider1 (Frame 1px)
-│   │   ├── ELabel (TextLabel "E", orange)
-│   │   ├── HomeLabel (TextLabel "Home", white)
-│   │   └── VDivider2 (Frame 1px)
-│   ├── ContinueBtn (TextButton, h=55, "Continue")
-│   ├── NewsHeader (TextButton/Frame, h=55, "News")
-│   ├── GameThumbnail (ImageLabel, 335×126, runtime PlaceId thumbnail)
-│   ├── NewsBody (Frame)
-│   │   ├── GameTitleLabel (runtime game name, orange bold)
-│   │   ├── GameDescriptionLabel (runtime description, wrapped)
-│   │   └── DateLabel ("16/03/2019", orange)
-│   ├── UpdatesBtn (TextButton, h=55, "Updates")
-│   └── KeybindRow (Frame, h=34)
-│       ├── FLabel ("F", orange) + UpdatesLabel + VDivider
-│       ├── XLabel ("X", orange) + SoonLabel + VDivider
-│       └── CLabel ("C", orange) + SoonLabel
-└── RightPanel (Frame, AnchorPoint 1,0.5, Pos -31,0.563, Size 323×404)
-    ├── HeaderRow: ClearanceLabel+Underline | DivisionLabel+Underline
-    ├── StatsRow: ZNTHLabel (bold 37px) | ZenithLogo (transparent PNG/fallback 96px)
-    ├── HDivider
-    ├── StandardLabel + live RemainingValue
-    ├── TimeLabel + live TimeValue ("0d 0h 0m")
-    ├── HDivider
-    ├── ActiveRow: CountLabel ("69") + StackedLabel ("Active"/"users")
-    ├── HDivider
-    └── PlayerRow: runtime AvatarThumb + LocalPlayer.Name
+Workspace
+└── ZNTHMenu3D (client-only Folder)
+    ├── ZNTHLeftSurfacePlane (invisible anchored Part)
+    └── ZNTHRightSurfacePlane (invisible anchored Part)
+
+Lighting
+└── ZNTHMenuBlur (BlurEffect)
 ```
 
-All panels: `BackgroundColor3 = Color3.fromRGB(10,10,10)`, `BackgroundTransparency = 0.08`, `BorderSizePixel = 0`, `UIStroke` 1px `Color3.fromRGB(120,120,120)` transparency 0.3. No `UICorner` (screenshot is square-cornered).
+The baseplate, Dummy, sky, and other world objects are supplied by whichever Roblox experience executes the menu. The script does not replace the current game world.
 
 ---
 
-## 4. Asset list (must be uploaded as `rbxassetid://`)
+## 3. Left surface layout
 
-| Asset | Used in | Status |
-|-------|---------|--------|
-| Zenith division logo (transparent PNG) | R3 | Generated from the supplied `download.png`; saved at `assets/zenith-logo-transparent.png` and embedded in the Luau file |
-| Current-game thumbnail | L11 | Runtime `rbxthumb://type=GameThumbnail` from `game.PlaceId`; no upload needed |
-| House icon | L2 | Transparent PNG generated + embedded; code-drawn Studio fallback |
-| People icon | L3 | Transparent PNG generated + embedded; code-drawn Studio fallback |
-| Document icon | L4 | Transparent PNG generated + embedded; code-drawn Studio fallback |
-| Avatar thumbnail | R10 | Runtime `GetUserThumbnailAsync`; no upload needed |
+Reference content width: 335px.
 
-**Runtime policy:** executors with `writefile` + `getcustomasset` decode the embedded PNGs automatically. Standard Studio security does not expose those APIs, so the UI uses matching vector fallbacks unless the transparent PNG is uploaded and its ID is entered in `Config.Assets`.
-
----
-
-## 5. Code architecture (single file)
-
-```
-SCPMainMenu.lua (1,500+ lines)
-├── Services + Config (1223×813 reference, colors, data, asset overrides)
-├── Embedded transparent PNG payloads + safe executor asset resolver
-├── Helpers: create(), connect(), tween(), addStroke(), makePanelBar(), icon builders
-├── State/API: Menu = { connections, callbacks, references, positions, open, ... }
-├── buildLeftPanel()  → Z/nav, bars, runtime game content, Updates, F/X/C hints
-├── buildRightPanel() → ZNTH/logo, real countdown, time played, 69 active users, player
-├── Runtime binding   → GetProductInfo, GameThumbnail, LocalPlayer name/headshot
-├── Input/animation  → E/Z/F/X/C, hover/press feedback, two-sided open/close
-├── Responsive scale → exact 1223×813 baseline, clamped for other viewport sizes
-└── Cleanup          → idempotent re-execution and full connection teardown
+```text
+Z outside edge
+┌─────────────────────────────────────┐ y=0, h=43
+│       Home       People    Document │ equal-width icon tabs
+├─────────────────────────────────────┤ y=48, h=54
+│             Key System              │ click → transparent key TextBox
+├─────────────────────────────────────┤ y=108, h=146
+│ NEWS      current game thumbnail    │ runtime GameThumbnail
+├─────────────────────────────────────┤ y=254, h=96
+│ CURRENT GAME TITLE                  │ runtime product name
+│ description                         │ runtime product description
+│ 16/03/2019                          │
+├─────────────────────────────────────┤ y=358, h=55
+│               Updates               │
+└─────────────────────────────────────┘
+F | Updates     X | Key Link     C | Soon
 ```
 
-**Interactivity:**
-- `Continue` closes the two panels by default; a caller can override `Menu.callbacks.Continue`.
-- `News` and `Updates` retain hover/press feedback and expose callbacks.
-- Icon buttons switch the orange selected state.
-- `E` toggles; `Z` opens/selects Home; `F`, `X`, and `C` pulse their visible hints.
-- Hover is 0.14 seconds; panel entrance/exit is 0.42 seconds with Quint easing.
+### Key System state machine
+
+1. **Idle:** centered `Key System` label.
+2. **Editing:** button/label hidden; transparent centered `TextBox` captures focus.
+3. **Rejected:** empty input changes the placeholder to `ENTER ANY KEY FIRST`.
+4. **Accepted:** any non-whitespace input sets `keyAccepted`, displays green `Succes!`, calls `callbacks.KeyAccepted(api, enteredKey)`, waits 0.7 seconds, then closes.
+5. **Reopened:** accepted label remains visible; clicking it closes again.
 
 ---
 
-## 6. Implemented phases
+## 4. Right surface layout
 
-1. **Skeleton:** `ScreenGui`, edge-anchored roots, exact reference coordinates, lines and strokes.
-2. **Left panel:** PNG/vector nav icons, dynamic game thumbnail/title/description, Updates and key hints.
-3. **Right panel:** ZNTH clearance, transparent supplied logo, account timer, played timer, active users, local profile.
-4. **Data + input:** safe client APIs, persistent-in-session countdown attribute, keyboard controls and callbacks.
-5. **Polish:** embedded assets, responsive scaling, entrance animation, idempotent cleanup and source validation.
+```text
+┌─────────────────────────────────────┐
+│                                     │
+│          transparent ZNTH logo      │ centered; no headers/text columns
+│                                     │
+├─────────────────────────────────────┤
+│ Standard                            │
+│ 12 Hours - Remaining / HH:MM:SS     │ live countdown
+│ Time Played                         │
+│ 0d 0h 0m                            │ live session timer
+├─────────────────────────────────────┤
+│ 69  Active users                    │
+├─────────────────────────────────────┤
+│ [avatar] LocalPlayer.Name           │
+└─────────────────────────────────────┘
+```
+
+The supplied purple logo is embedded as transparent PNG bytes for compatible executors. Studio uses a code-drawn fallback until an uploaded asset ID is configured.
 
 ---
 
-## 7. Resolved decisions from the final user specification
+## 5. True 3D presentation
 
-1. **Branding:** replace Q with Z, L1 with ZNTH, and the SCP mark with the supplied Zenith logo.
-2. **Scope:** GUI only; the baseplate, dummy, sky, and Studio orientation widget remain the current game's world.
-3. **Delivery:** one executable `.lua` file, plus the extracted transparent PNG files for Studio upload.
-4. **Buttons:** polished defaults with an exposed callback table for integration into real game logic.
-5. **Transparency:** retain the reference's slightly translucent black panels and square corners.
-6. **Live values:** current game data, local player identity, 12-hour countdown, and played time are runtime-driven.
+For each rendered frame:
+
+1. Calculate scale from the current viewport against the exact 1223×813 reference.
+2. Convert desired pixels to world units using camera depth and vertical field of view:
+   `worldPerPixel = (2 × depth × tan(FOV/2)) / viewportHeight`.
+3. Place each invisible Part relative to `CurrentCamera.CFrame` at depth 8.
+4. Apply +17° yaw to the left plane and -17° yaw to the right plane so both point inward toward the player.
+5. Apply shared user yaw/pitch from the orientation gizmo.
+6. Smooth open amount and direction with exponential interpolation on `RenderStepped`.
+7. Slide both real 3D surfaces beyond opposite screen edges when closing.
+
+Physical surface width is multiplied by 0.86 to counter near-edge perspective expansion while preserving a visible trapezoid.
+
+### Orientation gizmo
+
+- Recreates the screenshot's grey Back/Front block.
+- Green Y, blue Z, and red X axes.
+- Mouse/touch drag updates target yaw and pitch.
+- Yaw clamp: ±26°; pitch clamp: ±15°.
+- Click without meaningful movement resets to yaw 0°, pitch -3°.
+- Cube motion and both planes interpolate smoothly rather than snapping.
 
 ---
 
-## 8. Verification checklist
+## 6. Menu environment lifecycle
 
-- [x] Luau 0.748 parser/compiler accepts the complete 1,500+ line file.
-- [x] Mock Roblox initialization test completes without a runtime error.
-- [x] Embedded PNG decoder reproduces all four source files byte-for-byte by length/signature.
-- [x] Idempotent teardown, no `require`, no `Script`, no `RemoteEvent`, and no server dependency.
-- [x] Exact 1223×813 baseline coordinates plus clamped viewport scaling.
-- [x] Required text/data present: Z, Home, Updates, F/Updates, X/Soon, C/Soon, ZNTH, Standard, 69 Active users.
-- [ ] Final visual inspection in Roblox Studio/target executor (requires a Roblox runtime unavailable in this repository sandbox).
+### Open
+
+- Enable both SurfaceGuis immediately.
+- Show orientation gizmo.
+- Hide saved CoreGui elements and top bar.
+- Enable blur and tween Size to 18.
+- Move both 3D surfaces toward their visible target positions.
+
+### Close
+
+- Restore every captured CoreGui state and prior top-bar state.
+- Tween blur to zero, then disable it.
+- Release/hide key input if necessary.
+- Slide surfaces outward; disable them after the transition.
+- Hide orientation gizmo.
+
+### Destroy/re-execute
+
+- Release text focus.
+- Restore Roblox UI.
+- Disconnect every tracked connection.
+- Destroy ScreenGui, both SurfaceGuis, 3D folder/Parts, and blur.
+- Clear the shared API reference.
+
+---
+
+## 7. Assets and data
+
+| Content | Source |
+|---|---|
+| Zenith logo | `assets/zenith-logo-transparent.png`, embedded base64 + vector fallback |
+| Home/People/Document | Embedded transparent PNGs + vector fallbacks |
+| Experience image | `rbxthumb://type=GameThumbnail&id=<game.PlaceId>&w=768&h=432` |
+| Experience metadata | `MarketplaceService:GetProductInfo(game.PlaceId)` |
+| Player headshot | `Players:GetUserThumbnailAsync(LocalPlayer.UserId, HeadShot, Size180x180)` |
+| Username | `LocalPlayer.Name` |
+| Countdown | Local 12-hour expiry attribute + server-time fallback |
+| Time played | Current client session elapsed time |
+
+---
+
+## 8. Verification
+
+- [x] Luau 0.748 compiler accepts the complete source.
+- [x] Mocked Roblox initialization executes without an exception.
+- [x] Roblox API dump confirms all used SurfaceGui, Part, BlurEffect, StarterGui, and TextBox members.
+- [x] `git diff --check` passes.
+- [x] No `require`, server `Script`, `RemoteEvent`, or DataStore dependency.
+- [x] Required additions detected: RightShift, BlurEffect, SurfaceGui, orientation gizmo, Key System, `Succes!`, X/Key Link.
+- [x] Removed strings detected: Continue, Clearance, Division, E toggle, X/Soon.
+- [ ] Final visual/input inspection inside Roblox Studio or the target executor.
 
 ---
 

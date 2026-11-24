@@ -11,6 +11,8 @@ local marketplaceService = game:GetService("MarketplaceService")
 local contentProvider = game:GetService("ContentProvider")
 local runService = game:GetService("RunService")
 local workspaceService = game:GetService("Workspace")
+local lightingService = game:GetService("Lighting")
+local starterGui = game:GetService("StarterGui")
 
 if not game:IsLoaded() then
 	game.Loaded:Wait()
@@ -42,7 +44,16 @@ local Config = {
 	StandardDurationSeconds = 12 * 60 * 60,
 	ActiveUsers = 69,
 	NewsDate = "16/03/2019",
-	DefaultDescription = "Current experience detected automatically. Continue to enter the game and explore everything it has to offer.",
+	DefaultDescription = "Current experience detected automatically. Enter any key to continue and explore everything it has to offer.",
+
+	-- World-space presentation: both menu bases are real camera-relative planes.
+	BlurSize = 18,
+	SurfaceDepth = 8,
+	SurfaceWidthCompression = 0.86,
+	SurfaceInwardYaw = 17,
+	SurfaceDefaultPitch = -3,
+	SurfaceMaxYaw = 26,
+	SurfaceMaxPitch = 15,
 
 	Assets = {
 		-- Upload SCP-Main-Menu/assets/zenith-logo-transparent.png and paste its ID here
@@ -407,6 +418,7 @@ local resolvedAssets = {
 local Menu = {
 	open = false,
 	destroyed = false,
+	keyAccepted = false,
 	selectedNavigation = "Home",
 	connections = {},
 	navigation = {},
@@ -414,7 +426,17 @@ local Menu = {
 	callbacks = {},
 	references = {},
 	positions = {},
+	coreGuiStates = {},
+	coreGuiCaptured = false,
+	topbarWasEnabled = true,
 	scale = 1,
+	openAmount = 0,
+	targetOpenAmount = 0,
+	orientationYaw = 0,
+	targetOrientationYaw = 0,
+	orientationPitch = Config.SurfaceDefaultPitch,
+	targetOrientationPitch = Config.SurfaceDefaultPitch,
+	orientationDragging = false,
 }
 
 -- UI utility functions.
@@ -697,6 +719,8 @@ local function makeNavigationIcon(parent, name, x, width, asset, fallbackBuilder
 
 	local tintList = {}
 	local fallback = fallbackBuilder(button, tintList)
+	fallback.AnchorPoint = Vector2.new(0.5, 0.5)
+	fallback.Position = UDim2.fromScale(0.5, 0.5)
 	fallback.Visible = asset == ""
 	bindPressScale(button, image.Visible and image or fallback)
 
@@ -760,28 +784,28 @@ local function bindNavigationHover(name)
 	end)
 end
 
-local function buildLeftPanel(screenGui)
+local function buildLeftPanel(surfaceGui)
 	local root = create("Frame", {
 		Name = "LeftMenu",
-		AnchorPoint = Vector2.new(0, 0.5),
-		Position = UDim2.new(0, -390, 0.544, 0),
-		Size = UDim2.fromOffset(335, 488),
+		Position = UDim2.fromOffset(50, 12),
+		Size = UDim2.fromOffset(335, 452),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		ZIndex = 1,
-	}, screenGui)
-	local rootScale = create("UIScale", { Scale = 1 }, root)
+	}, surfaceGui)
 	Menu.references.LeftRoot = root
-	Menu.references.LeftScale = rootScale
 
+	-- The navigation strip now spans exactly the same width as Key System.
 	local navigationRow = create("Frame", {
 		Name = "NavigationRow",
 		Position = UDim2.fromOffset(0, 0),
-		Size = UDim2.fromOffset(269, 43),
-		BackgroundTransparency = 1,
+		Size = UDim2.fromOffset(335, 43),
+		BackgroundColor3 = Config.Panel,
+		BackgroundTransparency = 0.22,
 		BorderSizePixel = 0,
 		ZIndex = 3,
 	}, root)
+	addStroke(navigationRow, Config.Line, 0.55, 1)
 
 	local zLabel = makeText(navigationRow, {
 		Name = "ZKey",
@@ -796,41 +820,39 @@ local function buildLeftPanel(screenGui)
 	})
 	Menu.references.ZLabel = zLabel
 
-	makeNavigationIcon(navigationRow, "Home", 0, 47, resolvedAssets.HomeIcon, buildHomeFallback)
-	makeNavigationIcon(navigationRow, "People", 47, 42, resolvedAssets.PeopleIcon, buildPeopleFallback)
-	makeNavigationIcon(navigationRow, "Document", 89, 42, resolvedAssets.DocumentIcon, buildDocumentFallback)
+	makeNavigationIcon(navigationRow, "Home", 0, 112, resolvedAssets.HomeIcon, buildHomeFallback)
+	makeNavigationIcon(navigationRow, "People", 112, 111, resolvedAssets.PeopleIcon, buildPeopleFallback)
+	makeNavigationIcon(navigationRow, "Document", 223, 112, resolvedAssets.DocumentIcon, buildDocumentFallback)
+	addLine(navigationRow, UDim2.fromOffset(111, 6), UDim2.fromOffset(1, 31), 0.4, Config.Line, 8)
+	addLine(navigationRow, UDim2.fromOffset(222, 6), UDim2.fromOffset(1, 31), 0.4, Config.Line, 8)
 
-	addLine(navigationRow, UDim2.fromOffset(137, 6), UDim2.fromOffset(1, 31), 0.25, Config.Line, 7)
-	makeText(navigationRow, {
-		Name = "EKey",
-		Position = UDim2.fromOffset(148, 0),
-		Size = UDim2.fromOffset(25, 43),
-		Text = "E",
-		TextColor3 = Config.Accent,
-		TextSize = 22,
-		TextXAlignment = Enum.TextXAlignment.Center,
-		ZIndex = 7,
-	})
-	addLine(navigationRow, UDim2.fromOffset(179, 6), UDim2.fromOffset(1, 31), 0.25, Config.Line, 7)
-	makeText(navigationRow, {
-		Name = "Location",
-		Position = UDim2.fromOffset(190, 0),
-		Size = UDim2.fromOffset(67, 43),
-		Text = "Home",
+	local keyBar, keyButton, keyLabel = makePanelBar(root, "KeySystem", 48, 54, "Key System")
+	local keyStroke = keyBar:FindFirstChildOfClass("UIStroke")
+	local keyInput = create("TextBox", {
+		Name = "KeyInput",
+		Position = UDim2.fromOffset(16, 0),
+		Size = UDim2.new(1, -32, 1, 0),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ClearTextOnFocus = false,
+		Font = MEDIUM_FONT,
+		MultiLine = false,
+		PlaceholderColor3 = Config.Muted,
+		PlaceholderText = "TYPE ANY KEY  •  PRESS ENTER",
+		Text = "",
 		TextColor3 = Config.White,
-		TextSize = 21,
+		TextSize = 16,
+		TextTruncate = Enum.TextTruncate.AtEnd,
 		TextXAlignment = Enum.TextXAlignment.Center,
-		ZIndex = 7,
-	})
-	addLine(navigationRow, UDim2.fromOffset(268, 6), UDim2.fromOffset(1, 31), 0.25, Config.Line, 7)
+		Visible = false,
+		ZIndex = 12,
+	}, keyBar)
 
-	local _, continueButton = makePanelBar(root, "Continue", 45, 54, "Continue")
-	local _, newsButton = makePanelBar(root, "News", 107, 54, "News")
-
+	-- News is now one joined card: no separate News bar above the experience image.
 	local imageHolder = create("Frame", {
-		Name = "CurrentGameImage",
-		Position = UDim2.fromOffset(0, 161),
-		Size = UDim2.fromOffset(335, 126),
+		Name = "CurrentGameNews",
+		Position = UDim2.fromOffset(0, 108),
+		Size = UDim2.fromOffset(335, 146),
 		BackgroundColor3 = Color3.fromRGB(43, 43, 49),
 		BorderSizePixel = 0,
 		ClipsDescendants = true,
@@ -872,7 +894,7 @@ local function buildLeftPanel(screenGui)
 		ScaleType = Enum.ScaleType.Crop,
 		ZIndex = 4,
 	}, imageHolder)
-	addStroke(imageHolder, Config.Line, 0.55, 1)
+	addStroke(imageHolder, Config.Line, 0.42, 1)
 
 	local shade = create("Frame", {
 		Name = "ImageShade",
@@ -891,16 +913,36 @@ local function buildLeftPanel(screenGui)
 		Rotation = 90,
 	}, shade)
 
+	local newsBadge = create("Frame", {
+		Name = "IntegratedNewsBadge",
+		Position = UDim2.fromOffset(0, 0),
+		Size = UDim2.fromOffset(62, 23),
+		BackgroundColor3 = Config.Panel,
+		BackgroundTransparency = 0.14,
+		BorderSizePixel = 0,
+		ZIndex = 7,
+	}, imageHolder)
+	addStroke(newsBadge, Config.Line, 0.55, 1)
+	makeText(newsBadge, {
+		Size = UDim2.fromScale(1, 1),
+		Font = BOLD_FONT,
+		Text = "NEWS",
+		TextColor3 = Config.Accent,
+		TextSize = 11,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		ZIndex = 8,
+	})
+
 	local newsBody = create("Frame", {
 		Name = "NewsBody",
-		Position = UDim2.fromOffset(0, 287),
+		Position = UDim2.fromOffset(0, 254),
 		Size = UDim2.fromOffset(335, 96),
 		BackgroundColor3 = Config.PanelRaised,
 		BackgroundTransparency = 0.12,
 		BorderSizePixel = 0,
 		ZIndex = 2,
 	}, root)
-	addStroke(newsBody, Config.Line, 0.48, 1)
+	addStroke(newsBody, Config.Line, 0.42, 1)
 
 	local titleLabel = makeText(newsBody, {
 		Name = "CurrentGameTitle",
@@ -938,12 +980,12 @@ local function buildLeftPanel(screenGui)
 		ZIndex = 5,
 	})
 
-	local _, updatesButton = makePanelBar(root, "Updates", 391, 55, "Updates")
+	local _, updatesButton = makePanelBar(root, "Updates", 358, 55, "Updates")
 
 	local keybindRow = create("Frame", {
 		Name = "KeybindRow",
-		Position = UDim2.fromOffset(-38, 449),
-		Size = UDim2.fromOffset(307, 34),
+		Position = UDim2.fromOffset(0, 417),
+		Size = UDim2.fromOffset(335, 34),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		ZIndex = 4,
@@ -978,12 +1020,15 @@ local function buildLeftPanel(screenGui)
 		Menu.hotkeys[key] = { key = keyLabel, value = valueLabel }
 	end
 
-	makeHotkey("F", "Updates", 0, 67, true)
-	makeHotkey("X", "Soon", 109, 54, true)
-	makeHotkey("C", "Soon", 202, 55, false)
+	makeHotkey("F", "Updates", 0, 70, true)
+	makeHotkey("X", "Key Link", 110, 74, true)
+	makeHotkey("C", "Soon", 224, 65, false)
 
-	Menu.references.ContinueButton = continueButton
-	Menu.references.NewsButton = newsButton
+	Menu.references.KeySystemBar = keyBar
+	Menu.references.KeySystemButton = keyButton
+	Menu.references.KeySystemLabel = keyLabel
+	Menu.references.KeySystemInput = keyInput
+	Menu.references.KeySystemStroke = keyStroke
 	Menu.references.UpdatesButton = updatesButton
 	Menu.references.GameImage = gameImage
 	Menu.references.GameImageLoading = loadingLabel
@@ -995,19 +1040,82 @@ local function buildLeftPanel(screenGui)
 	bindNavigationHover("Document")
 	Menu:SetNavigation("Home")
 
-	connect(continueButton.Activated, function()
-		local callback = Menu.callbacks.Continue
-		if type(callback) == "function" then
-			task.spawn(callback, Menu)
-		else
-			Menu:SetOpen(false)
+	local function restoreKeyPrompt()
+		if Menu.destroyed or Menu.keyAccepted then
+			return
 		end
-	end)
-	connect(newsButton.Activated, function()
-		Menu:SetNavigation("Document")
-		local callback = Menu.callbacks.News
+		keyInput.Visible = false
+		keyInput.Text = ""
+		keyLabel.Text = "Key System"
+		keyLabel.TextColor3 = Config.White
+		keyLabel.Visible = true
+		keyButton.Visible = true
+	end
+
+	local function submitKey()
+		if Menu.destroyed or Menu.keyAccepted then
+			return
+		end
+
+		if not string.find(keyInput.Text, "%S") then
+			keyInput.Text = ""
+			keyInput.PlaceholderText = "ENTER ANY KEY FIRST"
+			tween(keyInput, FAST_TWEEN, { TextColor3 = Config.Accent })
+			task.delay(0.2, function()
+				if not Menu.destroyed then
+					tween(keyInput, FAST_TWEEN, { TextColor3 = Config.White })
+				end
+			end)
+			return
+		end
+
+		local acceptedKey = keyInput.Text
+		Menu.keyAccepted = true
+		keyInput.Visible = false
+		keyLabel.Visible = true
+		keyLabel.Text = "Succes!"
+		keyLabel.TextColor3 = Color3.fromRGB(128, 255, 164)
+		keyButton.Visible = true
+		tween(keyBar, FAST_TWEEN, {
+			BackgroundColor3 = Color3.fromRGB(12, 36, 23),
+			BackgroundTransparency = 0.02,
+		})
+		if keyStroke then
+			tween(keyStroke, FAST_TWEEN, { Color = Color3.fromRGB(128, 255, 164), Transparency = 0.1 })
+		end
+
+		local callback = Menu.callbacks.KeyAccepted
 		if type(callback) == "function" then
-			task.spawn(callback, Menu)
+			task.spawn(callback, Menu, acceptedKey)
+		end
+
+		task.delay(0.7, function()
+			if not Menu.destroyed then
+				Menu:SetOpen(false)
+			end
+		end)
+	end
+
+	connect(keyButton.Activated, function()
+		if Menu.keyAccepted then
+			Menu:SetOpen(false)
+			return
+		end
+		keyLabel.Visible = false
+		keyButton.Visible = false
+		keyInput.Visible = true
+		keyInput.PlaceholderText = "TYPE ANY KEY  •  PRESS ENTER"
+		task.defer(function()
+			if not Menu.destroyed and keyInput.Visible then
+				keyInput:CaptureFocus()
+			end
+		end)
+	end)
+	connect(keyInput.FocusLost, function(enterPressed)
+		if enterPressed then
+			submitKey()
+		else
+			restoreKeyPrompt()
 		end
 	end)
 	connect(updatesButton.Activated, function()
@@ -1085,68 +1193,34 @@ local function buildDivisionLogoFallback(parent)
 	return holder
 end
 
-local function buildRightPanel(screenGui)
+local function buildRightPanel(surfaceGui)
 	local root = create("Frame", {
 		Name = "RightMenu",
-		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, 370, 0.563, 0),
-		Size = UDim2.fromOffset(323, 404),
+		Position = UDim2.fromOffset(14, 8),
+		Size = UDim2.fromOffset(323, 384),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		ZIndex = 1,
-	}, screenGui)
-	local rootScale = create("UIScale", { Scale = 1 }, root)
+	}, surfaceGui)
 	Menu.references.RightRoot = root
-	Menu.references.RightScale = rootScale
 
 	addLine(root, UDim2.fromOffset(0, 0), UDim2.fromOffset(323, 1), 0.25, Config.Line, 4)
 
-	makeText(root, {
-		Name = "ClearanceHeader",
-		Position = UDim2.fromOffset(24, 10),
-		Size = UDim2.fromOffset(110, 25),
-		Text = "Clearance",
-		TextColor3 = Config.White,
-		TextSize = 16,
-		TextXAlignment = Enum.TextXAlignment.Center,
-	})
-	makeText(root, {
-		Name = "DivisionHeader",
-		Position = UDim2.fromOffset(188, 10),
-		Size = UDim2.fromOffset(82, 25),
-		Text = "Division",
-		TextColor3 = Config.White,
-		TextSize = 16,
-		TextXAlignment = Enum.TextXAlignment.Center,
-	})
-	addLine(root, UDim2.fromOffset(43, 36), UDim2.fromOffset(76, 1), 0.28, Config.Line, 5)
-	addLine(root, UDim2.fromOffset(188, 36), UDim2.fromOffset(82, 1), 0.28, Config.Line, 5)
-
-	makeText(root, {
-		Name = "ClearanceValue",
-		Position = UDim2.fromOffset(15, 54),
-		Size = UDim2.fromOffset(135, 67),
-		Font = BOLD_FONT,
-		Text = "ZNTH",
-		TextColor3 = Config.White,
-		TextSize = 37,
-		TextXAlignment = Enum.TextXAlignment.Center,
-		ZIndex = 5,
-	})
-
+	-- Clearance and Division were intentionally removed. The supplied Zenith mark
+	-- is now the only centered identity in the upper section.
 	local logoHolder = create("Frame", {
-		Name = "DivisionLogoHolder",
-		Position = UDim2.fromOffset(174, 43),
-		Size = UDim2.fromOffset(112, 112),
+		Name = "ZenithLogoHolder",
+		Position = UDim2.fromOffset(96, 5),
+		Size = UDim2.fromOffset(131, 131),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		ZIndex = 3,
 	}, root)
 	local logoImage = create("ImageLabel", {
-		Name = "DivisionLogoPNG",
+		Name = "ZenithLogoPNG",
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromScale(0.5, 0.5),
-		Size = UDim2.fromOffset(96, 96),
+		Size = UDim2.fromOffset(118, 118),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		Image = resolvedAssets.DivisionLogo,
@@ -1155,19 +1229,20 @@ local function buildRightPanel(screenGui)
 		ZIndex = 6,
 	}, logoHolder)
 	local logoFallback = buildDivisionLogoFallback(logoHolder)
+	create("UIScale", { Scale = 1.24 }, logoFallback)
 	logoFallback.Visible = not logoImage.Visible
 
 	local infoFrame = create("Frame", {
 		Name = "AccountInformation",
-		Position = UDim2.fromOffset(0, 167),
+		Position = UDim2.fromOffset(0, 145),
 		Size = UDim2.fromOffset(323, 94),
 		BackgroundColor3 = Config.Panel,
-		BackgroundTransparency = 0.22,
+		BackgroundTransparency = 0.18,
 		BorderSizePixel = 0,
 		ZIndex = 2,
 	}, root)
-	addLine(infoFrame, UDim2.fromOffset(0, 0), UDim2.fromOffset(323, 1), 0.52, Config.Line, 4)
-	addLine(infoFrame, UDim2.fromOffset(0, 93), UDim2.fromOffset(323, 1), 0.52, Config.Line, 4)
+	addLine(infoFrame, UDim2.fromOffset(0, 0), UDim2.fromOffset(323, 1), 0.42, Config.Line, 4)
+	addLine(infoFrame, UDim2.fromOffset(0, 93), UDim2.fromOffset(323, 1), 0.42, Config.Line, 4)
 
 	makeText(infoFrame, {
 		Name = "StandardLabel",
@@ -1209,14 +1284,14 @@ local function buildRightPanel(screenGui)
 
 	local activeFrame = create("Frame", {
 		Name = "ActiveUsers",
-		Position = UDim2.fromOffset(0, 270),
+		Position = UDim2.fromOffset(0, 248),
 		Size = UDim2.fromOffset(323, 62),
 		BackgroundColor3 = Config.Panel,
 		BackgroundTransparency = 0.12,
 		BorderSizePixel = 0,
 		ZIndex = 2,
 	}, root)
-	addStroke(activeFrame, Config.Line, 0.48, 1)
+	addStroke(activeFrame, Config.Line, 0.42, 1)
 	makeText(activeFrame, {
 		Name = "ActiveCount",
 		Position = UDim2.fromOffset(12, 0),
@@ -1250,14 +1325,14 @@ local function buildRightPanel(screenGui)
 
 	local playerFrame = create("Frame", {
 		Name = "LocalPlayer",
-		Position = UDim2.fromOffset(0, 341),
+		Position = UDim2.fromOffset(0, 319),
 		Size = UDim2.fromOffset(323, 47),
 		BackgroundColor3 = Config.Panel,
 		BackgroundTransparency = 0.18,
 		BorderSizePixel = 0,
 		ZIndex = 2,
 	}, root)
-	addStroke(playerFrame, Config.Line, 0.55, 1)
+	addStroke(playerFrame, Config.Line, 0.5, 1)
 	local avatarBacking = create("Frame", {
 		Name = "AvatarBacking",
 		Position = UDim2.fromOffset(9, 6),
@@ -1287,7 +1362,7 @@ local function buildRightPanel(screenGui)
 		ZIndex = 5,
 	})
 
-	addLine(root, UDim2.fromOffset(0, 397), UDim2.fromOffset(323, 1), 0.52, Config.Line, 4)
+	addLine(root, UDim2.fromOffset(0, 375), UDim2.fromOffset(323, 1), 0.45, Config.Line, 4)
 
 	Menu.references.CountdownValue = countdownValue
 	Menu.references.TimePlayedValue = timePlayedValue
@@ -1307,37 +1382,461 @@ local screenGui = create("ScreenGui", {
 }, playerGui)
 Menu.references.ScreenGui = screenGui
 
-buildLeftPanel(screenGui)
-buildRightPanel(screenGui)
+-- Remove orphaned presentation objects left by an interrupted prior execution.
+for _, staleName in ipairs({ "ZNTHLeftSurface", "ZNTHRightSurface" }) do
+	local staleSurface = playerGui:FindFirstChild(staleName)
+	if staleSurface then
+		staleSurface:Destroy()
+	end
+end
+local staleFolder = workspaceService:FindFirstChild("ZNTHMenu3D")
+if staleFolder then
+	staleFolder:Destroy()
+end
+local staleBlur = lightingService:FindFirstChild("ZNTHMenuBlur")
+if staleBlur then
+	staleBlur:Destroy()
+end
 
--- Responsive placement preserves the screenshot's 1223 x 813 proportions.
+local blurEffect = create("BlurEffect", {
+	Name = "ZNTHMenuBlur",
+	Enabled = false,
+	Size = 0,
+}, lightingService)
+Menu.references.BlurEffect = blurEffect
+
+local surfaceFolder = create("Folder", {
+	Name = "ZNTHMenu3D",
+	Archivable = false,
+}, workspaceService)
+Menu.references.SurfaceFolder = surfaceFolder
+
+local LEFT_CANVAS_SIZE = Vector2.new(410, 480)
+local RIGHT_CANVAS_SIZE = Vector2.new(350, 400)
+
+local function createWorldSurface(name, canvasSize)
+	local part = create("Part", {
+		Name = name .. "Plane",
+		Anchored = true,
+		Archivable = false,
+		CanCollide = false,
+		CanQuery = false,
+		CanTouch = false,
+		CastShadow = false,
+		Color = Color3.new(0, 0, 0),
+		CFrame = CFrame.new(0, 100000, 0),
+		LocalTransparencyModifier = 1,
+		Massless = true,
+		Size = Vector3.new(1, 1, 0.04),
+		Transparency = 1,
+	}, surfaceFolder)
+
+	local surfaceGui = create("SurfaceGui", {
+		Name = name,
+		Active = true,
+		Adornee = part,
+		AlwaysOnTop = true,
+		Brightness = 1,
+		CanvasSize = canvasSize,
+		Enabled = false,
+		Face = Enum.NormalId.Back,
+		LightInfluence = 0,
+		MaxDistance = 1000,
+		ResetOnSpawn = false,
+		SizingMode = Enum.SurfaceGuiSizingMode.FixedSize,
+		ZOffset = 0.01,
+	}, playerGui)
+
+	return part, surfaceGui
+end
+
+local leftPart, leftSurface = createWorldSurface("ZNTHLeftSurface", LEFT_CANVAS_SIZE)
+local rightPart, rightSurface = createWorldSurface("ZNTHRightSurface", RIGHT_CANVAS_SIZE)
+Menu.references.LeftPart = leftPart
+Menu.references.RightPart = rightPart
+Menu.references.LeftSurface = leftSurface
+Menu.references.RightSurface = rightSurface
+
+buildLeftPanel(leftSurface)
+buildRightPanel(rightSurface)
+
+-- Recreate the Studio-style orientation block visible in the supplied reference.
+local function buildOrientationGizmo(parent)
+	local root = create("Frame", {
+		Name = "OrientationGizmo",
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -20, 0, 18),
+		Size = UDim2.fromOffset(98, 94),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Visible = false,
+		ZIndex = 50,
+	}, parent)
+
+	local orbit = create("Frame", {
+		Name = "Orbit",
+		Position = UDim2.fromOffset(17, 5),
+		Size = UDim2.fromOffset(64, 64),
+		BackgroundColor3 = Color3.fromRGB(118, 118, 124),
+		BackgroundTransparency = 0.52,
+		BorderSizePixel = 0,
+		ZIndex = 51,
+	}, root)
+	create("UICorner", { CornerRadius = UDim.new(1, 0) }, orbit)
+	local orbitStroke = addStroke(orbit, Color3.fromRGB(190, 190, 198), 0.48, 1)
+	create("UIGradient", {
+		Color = ColorSequence.new(Color3.fromRGB(176, 176, 182), Color3.fromRGB(72, 72, 78)),
+		Rotation = 90,
+	}, orbit)
+
+	local cube = create("Frame", {
+		Name = "DirectionCube",
+		Position = UDim2.fromOffset(22, 11),
+		Size = UDim2.fromOffset(54, 50),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ZIndex = 53,
+	}, root)
+	local cubeScale = create("UIScale", { Scale = 1 }, cube)
+
+	local topFace = create("Frame", {
+		Name = "TopFace",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromOffset(27, 13),
+		Size = UDim2.fromOffset(31, 31),
+		Rotation = 45,
+		BackgroundColor3 = Color3.fromRGB(163, 163, 168),
+		BackgroundTransparency = 0.08,
+		BorderSizePixel = 0,
+		ZIndex = 54,
+	}, cube)
+	addStroke(topFace, Color3.fromRGB(213, 213, 218), 0.5, 1)
+	create("UIGradient", {
+		Color = ColorSequence.new(Color3.fromRGB(194, 194, 199), Color3.fromRGB(119, 119, 125)),
+		Rotation = 45,
+	}, topFace)
+
+	local backFace = create("Frame", {
+		Name = "BackFace",
+		Position = UDim2.fromOffset(4, 19),
+		Size = UDim2.fromOffset(24, 26),
+		BackgroundColor3 = Color3.fromRGB(119, 119, 125),
+		BackgroundTransparency = 0.06,
+		BorderSizePixel = 0,
+		ZIndex = 55,
+	}, cube)
+	addStroke(backFace, Color3.fromRGB(205, 205, 210), 0.54, 1)
+	makeText(backFace, {
+		Size = UDim2.fromScale(1, 1),
+		Text = "Back",
+		TextColor3 = Color3.fromRGB(30, 30, 33),
+		TextSize = 8,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		ZIndex = 56,
+	})
+
+	local frontFace = create("Frame", {
+		Name = "FrontFace",
+		Position = UDim2.fromOffset(28, 19),
+		Size = UDim2.fromOffset(24, 26),
+		BackgroundColor3 = Color3.fromRGB(151, 151, 157),
+		BackgroundTransparency = 0.04,
+		BorderSizePixel = 0,
+		ZIndex = 55,
+	}, cube)
+	addStroke(frontFace, Color3.fromRGB(218, 218, 223), 0.48, 1)
+	makeText(frontFace, {
+		Size = UDim2.fromScale(1, 1),
+		Text = "Front",
+		TextColor3 = Color3.fromRGB(30, 30, 33),
+		TextSize = 8,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		ZIndex = 56,
+	})
+
+	addLine(root, UDim2.fromOffset(49, 0), UDim2.fromOffset(2, 13), 0.05, Color3.fromRGB(82, 190, 111), 57)
+	makeText(root, {
+		Position = UDim2.fromOffset(43, -5),
+		Size = UDim2.fromOffset(14, 13),
+		Font = BOLD_FONT,
+		Text = "Y",
+		TextColor3 = Color3.fromRGB(82, 190, 111),
+		TextSize = 10,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		ZIndex = 58,
+	})
+	addLine(root, UDim2.fromOffset(6, 51), UDim2.fromOffset(18, 2), 0.05, Color3.fromRGB(57, 118, 226), 57)
+	makeText(root, {
+		Position = UDim2.fromOffset(0, 45),
+		Size = UDim2.fromOffset(13, 14),
+		Font = BOLD_FONT,
+		Text = "Z",
+		TextColor3 = Color3.fromRGB(57, 118, 226),
+		TextSize = 10,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		ZIndex = 58,
+	})
+	addLine(root, UDim2.fromOffset(75, 51), UDim2.fromOffset(17, 2), 0.05, Color3.fromRGB(224, 70, 72), 57)
+	makeText(root, {
+		Position = UDim2.fromOffset(88, 45),
+		Size = UDim2.fromOffset(10, 14),
+		Font = BOLD_FONT,
+		Text = "X",
+		TextColor3 = Color3.fromRGB(224, 70, 72),
+		TextSize = 10,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		ZIndex = 58,
+	})
+	makeText(root, {
+		Position = UDim2.fromOffset(2, 73),
+		Size = UDim2.fromOffset(94, 14),
+		Font = MEDIUM_FONT,
+		Text = "DRAG TO ORIENT",
+		TextColor3 = Config.Secondary,
+		TextSize = 8,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		ZIndex = 58,
+	})
+
+	local dragButton = makeButton(root, {
+		Name = "RotateBases",
+		Size = UDim2.fromScale(1, 1),
+		ZIndex = 60,
+	})
+
+	connect(dragButton.MouseEnter, function()
+		tween(orbitStroke, FAST_TWEEN, { Transparency = 0.12, Color = Config.White })
+	end)
+	connect(dragButton.MouseLeave, function()
+		if not Menu.orientationDragging then
+			tween(orbitStroke, FAST_TWEEN, { Transparency = 0.48, Color = Color3.fromRGB(190, 190, 198) })
+		end
+	end)
+	connect(dragButton.InputBegan, function(input)
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+		Menu.orientationDragging = true
+		Menu.orientationDragInput = input
+		Menu.orientationDragLast = Vector2.new(input.Position.X, input.Position.Y)
+		Menu.orientationDragDistance = 0
+	end)
+	connect(userInputService.InputChanged, function(input)
+		if not Menu.orientationDragging then
+			return
+		end
+		if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+		if Menu.orientationDragInput and Menu.orientationDragInput.UserInputType == Enum.UserInputType.Touch and input ~= Menu.orientationDragInput then
+			return
+		end
+
+		local position = Vector2.new(input.Position.X, input.Position.Y)
+		local delta = position - Menu.orientationDragLast
+		Menu.orientationDragLast = position
+		Menu.orientationDragDistance = Menu.orientationDragDistance + delta.Magnitude
+		Menu:SetOrientation(
+			Menu.targetOrientationYaw + delta.X * 0.22,
+			Menu.targetOrientationPitch - delta.Y * 0.18
+		)
+	end)
+	connect(userInputService.InputEnded, function(input)
+		if not Menu.orientationDragging then
+			return
+		end
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+		Menu.orientationDragging = false
+		Menu.orientationDragInput = nil
+		if Menu.orientationDragDistance < 4 then
+			Menu:SetOrientation(0, Config.SurfaceDefaultPitch)
+		end
+		tween(orbitStroke, FAST_TWEEN, { Transparency = 0.48, Color = Color3.fromRGB(190, 190, 198) })
+	end)
+
+	Menu.references.OrientationGizmo = root
+	Menu.references.OrientationCube = cube
+	Menu.references.OrientationCubeScale = cubeScale
+	return root
+end
+
+buildOrientationGizmo(screenGui)
+
+function Menu:SetOrientation(yaw, pitch)
+	self.targetOrientationYaw = math.clamp(tonumber(yaw) or 0, -Config.SurfaceMaxYaw, Config.SurfaceMaxYaw)
+	self.targetOrientationPitch = math.clamp(
+		tonumber(pitch) or Config.SurfaceDefaultPitch,
+		-Config.SurfaceMaxPitch,
+		Config.SurfaceMaxPitch
+	)
+end
+
+local function captureCoreGuiState()
+	if Menu.coreGuiCaptured then
+		return
+	end
+	Menu.coreGuiCaptured = true
+
+	local ok, coreTypes = pcall(function()
+		return Enum.CoreGuiType:GetEnumItems()
+	end)
+	if ok then
+		for _, coreType in ipairs(coreTypes) do
+			if coreType ~= Enum.CoreGuiType.All then
+				local stateOk, enabled = pcall(function()
+					return starterGui:GetCoreGuiEnabled(coreType)
+				end)
+				if stateOk then
+					Menu.coreGuiStates[coreType] = enabled
+				end
+			end
+		end
+	end
+
+	local topbarOk, topbarEnabled = pcall(function()
+		return starterGui:GetCore("TopbarEnabled")
+	end)
+	if topbarOk and type(topbarEnabled) == "boolean" then
+		Menu.topbarWasEnabled = topbarEnabled
+	end
+end
+
+local function setRobloxChromeHidden(hidden)
+	captureCoreGuiState()
+	for coreType, wasEnabled in pairs(Menu.coreGuiStates) do
+		pcall(function()
+			starterGui:SetCoreGuiEnabled(coreType, hidden and false or wasEnabled)
+		end)
+	end
+	pcall(function()
+		starterGui:SetCore("TopbarEnabled", hidden and false or Menu.topbarWasEnabled)
+	end)
+end
+
+local function setMenuEnvironment(active, instant)
+	setRobloxChromeHidden(active)
+	blurEffect.Enabled = true
+	if instant then
+		blurEffect.Size = active and Config.BlurSize or 0
+	else
+		tween(blurEffect, OPEN_TWEEN, { Size = active and Config.BlurSize or 0 })
+	end
+
+	if not active then
+		task.delay(OPEN_TWEEN.Time + 0.03, function()
+			if not Menu.destroyed and not Menu.open and blurEffect.Size <= 0.1 then
+				blurEffect.Enabled = false
+			end
+		end)
+	else
+		-- Core scripts sometimes initialize a frame after LocalScripts; retry once.
+		task.delay(0.12, function()
+			if not Menu.destroyed and Menu.open then
+				setRobloxChromeHidden(true)
+			end
+		end)
+	end
+end
+
+local function expApproach(current, target, speed, deltaTime)
+	return current + (target - current) * (1 - math.exp(-speed * math.min(deltaTime, 0.1)))
+end
+
+-- Responsive sizing now controls world-space plane dimensions rather than flat GUI scale.
 function Menu:UpdateScale()
 	if self.destroyed then
 		return
 	end
-
 	local camera = workspaceService.CurrentCamera
 	local viewport = camera and camera.ViewportSize or Vector2.new(Config.ReferenceWidth, Config.ReferenceHeight)
-	local scale = math.min(viewport.X / Config.ReferenceWidth, viewport.Y / Config.ReferenceHeight)
-	scale = math.clamp(scale, 0.62, 1.35)
-	self.scale = scale
+	self.scale = math.clamp(math.min(viewport.X / Config.ReferenceWidth, viewport.Y / Config.ReferenceHeight), 0.62, 1.35)
+end
 
-	self.references.LeftScale.Scale = scale
-	self.references.RightScale.Scale = scale
+local function placeSurface(part, canvasSize, centerX, centerY, yaw, pitch, camera, viewport)
+	local depth = Config.SurfaceDepth
+	local verticalWorldSize = 2 * depth * math.tan(math.rad(camera.FieldOfView * 0.5))
+	local worldPerPixel = verticalWorldSize / math.max(viewport.Y, 1)
+	-- Perspective expands the near edge; compressing physical width preserves
+	-- the reference's readable on-screen footprint while retaining a true trapezoid.
+	local width = canvasSize.X * Menu.scale * worldPerPixel * Config.SurfaceWidthCompression
+	local height = canvasSize.Y * Menu.scale * worldPerPixel
+	local localX = (centerX - viewport.X * 0.5) * worldPerPixel
+	local localY = -(centerY - viewport.Y * 0.5) * worldPerPixel
 
-	self.positions.LeftOpen = UDim2.new(0, math.floor(55 * scale + 0.5), 0.544, 0)
-	self.positions.LeftClosed = UDim2.new(0, -math.floor(365 * scale + 0.5), 0.544, 0)
-	self.positions.RightOpen = UDim2.new(1, -math.floor(31 * scale + 0.5), 0.563, 0)
-	self.positions.RightClosed = UDim2.new(1, math.floor(354 * scale + 0.5), 0.563, 0)
+	part.Size = Vector3.new(width, height, 0.04)
+	part.CFrame = camera.CFrame
+		* CFrame.new(localX, localY, -depth)
+		* CFrame.Angles(math.rad(pitch), math.rad(yaw), 0)
+end
 
-	if self.open then
-		self.references.LeftRoot.Position = self.positions.LeftOpen
-		self.references.RightRoot.Position = self.positions.RightOpen
-	else
-		self.references.LeftRoot.Position = self.positions.LeftClosed
-		self.references.RightRoot.Position = self.positions.RightClosed
+local function updateWorldPresentation(deltaTime)
+	if Menu.destroyed then
+		return
+	end
+	local camera = workspaceService.CurrentCamera
+	if not camera then
+		return
+	end
+	local viewport = camera.ViewportSize
+	if viewport.X <= 0 or viewport.Y <= 0 then
+		return
+	end
+	Menu.scale = math.clamp(math.min(viewport.X / Config.ReferenceWidth, viewport.Y / Config.ReferenceHeight), 0.62, 1.35)
+
+	Menu.openAmount = expApproach(Menu.openAmount, Menu.targetOpenAmount, 10.5, deltaTime)
+	Menu.orientationYaw = expApproach(Menu.orientationYaw, Menu.targetOrientationYaw, 9, deltaTime)
+	Menu.orientationPitch = expApproach(Menu.orientationPitch, Menu.targetOrientationPitch, 9, deltaTime)
+
+	if math.abs(Menu.openAmount - Menu.targetOpenAmount) < 0.001 then
+		Menu.openAmount = Menu.targetOpenAmount
+	end
+	local reveal = 1 - ((1 - Menu.openAmount) ^ 3)
+	local leftClosedX = -LEFT_CANVAS_SIZE.X * Menu.scale * 0.58
+	local leftOpenX = 210 * Menu.scale
+	local rightClosedX = viewport.X + RIGHT_CANVAS_SIZE.X * Menu.scale * 0.58
+	local rightOpenX = viewport.X - 193 * Menu.scale
+	local leftCenterX = leftClosedX + (leftOpenX - leftClosedX) * reveal
+	local rightCenterX = rightClosedX + (rightOpenX - rightClosedX) * reveal
+
+	placeSurface(
+		leftPart,
+		LEFT_CANVAS_SIZE,
+		leftCenterX,
+		viewport.Y * 0.525,
+		Config.SurfaceInwardYaw + Menu.orientationYaw,
+		Menu.orientationPitch,
+		camera,
+		viewport
+	)
+	placeSurface(
+		rightPart,
+		RIGHT_CANVAS_SIZE,
+		rightCenterX,
+		viewport.Y * 0.551,
+		-Config.SurfaceInwardYaw + Menu.orientationYaw,
+		Menu.orientationPitch,
+		camera,
+		viewport
+	)
+
+	local cube = Menu.references.OrientationCube
+	if cube then
+		cube.Rotation = Menu.orientationYaw * 0.72
+		cube.Position = UDim2.fromOffset(22, 11 + math.floor((Menu.orientationPitch - Config.SurfaceDefaultPitch) * 0.18))
+		Menu.references.OrientationCubeScale.Scale = 1 - math.abs(Menu.orientationPitch) * 0.004
+	end
+
+	local shouldRender = Menu.openAmount > 0.005 or Menu.targetOpenAmount > 0
+	leftSurface.Enabled = shouldRender
+	rightSurface.Enabled = shouldRender
+	if not shouldRender then
+		Menu.references.OrientationGizmo.Visible = false
 	end
 end
+
+connect(runService.RenderStepped, updateWorldPresentation)
 
 function Menu:SetOpen(shouldOpen, instant)
 	if self.destroyed then
@@ -1346,21 +1845,29 @@ function Menu:SetOpen(shouldOpen, instant)
 
 	shouldOpen = shouldOpen == true
 	self.open = shouldOpen
-	self.references.LeftRoot.Visible = true
-	self.references.RightRoot.Visible = true
+	self.targetOpenAmount = shouldOpen and 1 or 0
 
-	local leftGoal = shouldOpen and self.positions.LeftOpen or self.positions.LeftClosed
-	local rightGoal = shouldOpen and self.positions.RightOpen or self.positions.RightClosed
+	if shouldOpen then
+		leftSurface.Enabled = true
+		rightSurface.Enabled = true
+		self.references.OrientationGizmo.Visible = true
+	else
+		self.orientationDragging = false
+		self.orientationDragInput = nil
+	end
+	if not shouldOpen and self.references.KeySystemInput and self.references.KeySystemInput.Visible then
+		self.references.KeySystemInput:ReleaseFocus()
+		self.references.KeySystemInput.Visible = false
+		self.references.KeySystemButton.Visible = true
+		self.references.KeySystemLabel.Visible = true
+	end
 
 	if instant then
-		self.references.LeftRoot.Position = leftGoal
-		self.references.RightRoot.Position = rightGoal
-	else
-		tween(self.references.LeftRoot, OPEN_TWEEN, { Position = leftGoal })
-		tween(self.references.RightRoot, OPEN_TWEEN, { Position = rightGoal })
+		self.openAmount = self.targetOpenAmount
+		updateWorldPresentation(0)
 	end
+	setMenuEnvironment(shouldOpen, instant == true)
 end
-
 function Menu:Toggle()
 	self:SetOpen(not self.open)
 end
@@ -1505,15 +2012,17 @@ connect(runService.Heartbeat, function(deltaTime)
 end)
 updateTimers()
 
--- Keyboard controls shown in the reference: E toggles; Z opens Home; F/X/C pulse hints.
+-- RightShift always toggles the complete presentation, even while the key box is focused.
 connect(userInputService.InputBegan, function(input, gameProcessed)
+	if input.KeyCode == Enum.KeyCode.RightShift then
+		Menu:Toggle()
+		return
+	end
 	if gameProcessed or userInputService:GetFocusedTextBox() then
 		return
 	end
 
-	if input.KeyCode == Enum.KeyCode.E then
-		Menu:Toggle()
-	elseif input.KeyCode == Enum.KeyCode.Z then
+	if input.KeyCode == Enum.KeyCode.Z then
 		if not Menu.open then
 			Menu:SetOpen(true)
 		end
@@ -1532,7 +2041,7 @@ connect(userInputService.InputBegan, function(input, gameProcessed)
 		end
 	elseif input.KeyCode == Enum.KeyCode.X then
 		Menu:PulseHotkey("X")
-		local callback = Menu.callbacks.X
+		local callback = Menu.callbacks.KeyLink or Menu.callbacks.X
 		if type(callback) == "function" then
 			task.spawn(callback, Menu)
 		end
@@ -1562,6 +2071,13 @@ function Menu:Destroy()
 	if self.destroyed then
 		return
 	end
+
+	if self.references.KeySystemInput and self.references.KeySystemInput:IsFocused() then
+		self.references.KeySystemInput:ReleaseFocus()
+	end
+	if self.coreGuiCaptured then
+		setRobloxChromeHidden(false)
+	end
 	self.destroyed = true
 
 	for _, connection in ipairs(self.connections) do
@@ -1571,8 +2087,11 @@ function Menu:Destroy()
 	end
 	table.clear(self.connections)
 
-	if self.references.ScreenGui and self.references.ScreenGui.Parent then
-		self.references.ScreenGui:Destroy()
+	for _, referenceName in ipairs({ "ScreenGui", "LeftSurface", "RightSurface", "SurfaceFolder", "BlurEffect" }) do
+		local object = self.references[referenceName]
+		if object and object.Parent then
+			object:Destroy()
+		end
 	end
 
 	if sharedEnvironment.ZNTHMainMenu == self then

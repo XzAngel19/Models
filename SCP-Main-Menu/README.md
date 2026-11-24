@@ -1,75 +1,75 @@
 # ZNTH Main Menu
 
-Pixel-faithful, client-sided Luau reconstruction of the supplied 1223×813 menu reference.
+Client-sided Luau reconstruction of the supplied 1223×813 menu, now rendered on two true camera-relative 3D surfaces.
 
-## Deliverable
+## Deliverables
 
-- **`SCPMainMenu.lua`** — the complete single-file menu (1,500+ lines).
-- **`assets/zenith-logo-transparent.png`** — the supplied Division logo with its white background removed.
+- **`SCPMainMenu.lua`** — complete single-file menu; no `require` and no server script.
+- **`loader.lua`** — remote executor loader for the published branch.
+- **`assets/zenith-logo-transparent.png`** — supplied Zenith logo with its white background removed.
 - **`assets/icon-home.png`**, **`icon-people.png`**, **`icon-doc.png`** — transparent navigation icons.
-- **`../docs/SCP-Main-Menu-PLAN.md`** — resolved design and verification plan.
+- **`../docs/SCP-Main-Menu-PLAN.md`** — current implementation specification and validation checklist.
 
-## Implemented details
+## Current behavior
 
-- Orange **Z** instead of Q.
-- PNG/fallback icons for Home, People, and the folded document, followed by **E | Home**.
-- Current experience thumbnail from `game.PlaceId` using Roblox's `GameThumbnail` provider.
-- Current experience name and description from `MarketplaceService:GetProductInfo`.
-- **Continue**, **News**, and **Updates** bars matching the square, translucent reference style.
-- Bottom hints: **F / Updates**, **X / Soon**, **C / Soon**.
-- Right side: **Clearance / ZNTH**, **Division / Zenith logo**.
-- **Standard** with a real 12-hour countdown that updates every second and survives script re-execution during the same session.
-- Real **Time Played** session counter in `0d 0h 0m` format.
-- **69 Active users**.
-- Runtime Roblox username and headshot for `Players.LocalPlayer`.
-- Responsive scaling based on the exact 1223×813 reference.
-- Idempotent execution: running the file again cleans up the old GUI and all tracked connections.
+- Two invisible camera-relative Parts carry interactive `SurfaceGui` panels.
+- The panels point inward by 17 degrees and have real perspective, producing the requested 3D illusion around the player/dummy.
+- A Studio-style orientation cube appears at the upper-right. Drag it to change both panel directions smoothly; click without dragging to reset it.
+- A `BlurEffect` fades in only while the menu is open.
+- Roblox CoreGui and the default top bar are hidden only while the menu is open, then restored to their previous states.
+- `RightShift` opens or hides the complete menu.
+- The former E/Home header is removed; Home, People, and Document now occupy one aligned full-width strip.
+- **Key System** replaces Continue. Clicking it reveals a transparent, centered key field. Any non-empty text is accepted for now; Enter displays **Succes!** and closes the menu.
+- News is one joined image/card instead of a separate News header and image.
+- Current experience thumbnail, name, and description are detected from `game.PlaceId`.
+- Bottom hints are **F / Updates**, **X / Key Link**, and **C / Soon**.
+- The right header contains only the centered Zenith logo—no Clearance or Division text.
+- Live 12-hour Standard countdown, session play time, 69 active users, local username, and local avatar remain enabled.
+- Re-execution destroys old surfaces, blur, GUI objects, and connections before rebuilding.
 
 ## Run in Roblox Studio
 
-1. Create a `LocalScript` under `StarterPlayer > StarterPlayerScripts` (or `StarterGui`).
-2. Paste the complete contents of `SCPMainMenu.lua`.
+1. Create a `LocalScript` under `StarterPlayer > StarterPlayerScripts` or `StarterGui`.
+2. Paste all of `SCPMainMenu.lua`.
 3. Start **Play Solo**.
 
-Roblox Studio does not expose executor-only `writefile/getcustomasset` APIs. The file therefore draws matching vector fallbacks for all icons. For the exact supplied Division PNG in Studio:
-
-1. Upload `assets/zenith-logo-transparent.png` as a Roblox image/decal.
-2. Copy its numeric asset ID.
-3. Set `Config.Assets.DivisionLogo` near the top of `SCPMainMenu.lua` to that ID.
-
-The Home, People, and Document fields can be set the same way, but their built-in code-drawn fallbacks already preserve the menu layout.
+Studio does not expose executor-only `writefile/getcustomasset` functions. The file therefore draws matching icon/logo fallbacks. To use the exact supplied logo in Studio, upload `assets/zenith-logo-transparent.png` and assign its numeric ID to `Config.Assets.DivisionLogo` near the top of the script.
 
 ## Run in an executor
-
-Use the published branch loader:
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/XzAngel19/Models/arena/cbc36148-models/SCP-Main-Menu/SCPMainMenu.lua", true))()
 ```
 
-Alternatively, paste/execute `loader.lua` or all of `SCPMainMenu.lua` as one chunk. Compatible executors automatically decode the four embedded PNG files and register them through `getcustomasset`; no extra files or `require` calls are needed.
+You may alternatively execute `loader.lua`. Compatible executors decode and register the embedded PNGs automatically.
 
 ## Controls
 
 | Input | Action |
 |---|---|
-| `E` | Open/close both menu sides |
+| `RightShift` | Open or hide the menu, blur, orientation gizmo, and Roblox chrome override |
+| Drag orientation cube | Smoothly rotate/pitch both 3D menu surfaces |
+| Click orientation cube | Reset panel direction |
 | `Z` | Open the menu and select Home |
-| `F` | Pulse Updates and invoke the optional Updates callback |
-| `X` | Pulse Soon / invoke optional X callback |
-| `C` | Pulse Soon / invoke optional C callback |
-| Continue | Closes the menu by default |
+| `F` | Pulse Updates and invoke `callbacks.Updates` |
+| `X` | Pulse Key Link and invoke `callbacks.KeyLink` |
+| `C` | Pulse Soon and invoke `callbacks.C` |
+| Key System + Enter | Accept any non-empty temporary key, show `Succes!`, then close |
 
 ## Optional game integration
 
-The executed file returns and exposes the same API as `getgenv().ZNTHMainMenu` in executor environments:
+The returned API is also exposed as `getgenv().ZNTHMainMenu` in compatible executor environments:
 
 ```lua
 local menu = getgenv().ZNTHMainMenu
 
-menu.callbacks.Continue = function(api)
-    api:SetOpen(false)
-    -- Start or resume your game here.
+menu.callbacks.KeyAccepted = function(api, enteredKey)
+    print("Accepted key:", enteredKey)
+    -- Replace the temporary any-text rule with your key service later.
+end
+
+menu.callbacks.KeyLink = function(api)
+    -- Copy or display the real key URL here.
 end
 
 menu.callbacks.Updates = function(api)
@@ -77,4 +77,4 @@ menu.callbacks.Updates = function(api)
 end
 ```
 
-Available methods: `SetOpen(boolean)`, `Toggle()`, `SetNavigation(name)`, `PulseHotkey(key)`, `UpdateScale()`, and `Destroy()`.
+Available methods: `SetOpen(boolean)`, `Toggle()`, `SetNavigation(name)`, `SetOrientation(yaw, pitch)`, `PulseHotkey(key)`, `UpdateScale()`, and `Destroy()`.
