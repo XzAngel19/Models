@@ -339,7 +339,7 @@ local function addToggle(parent, text, keybind, default)
 			end
 		end
 
-		tween(check, POP_TWEEN, { Size = state and UDim2.fromOffset(10, 10) or UDim2.fromOffset(0, 0) })
+		tween(check, POP_TWEEN, { Size = state and UDim2.fromOffset(boxSize * 0.6, boxSize * 0.6) or UDim2.fromOffset(0, 0) })
 		tween(boxStroke, FAST_TWEEN, { Color = state and ACCENT_A or DIM_TEXT_COLOR, Transparency = state and 0 or 0.5 })
 		tween(label, FAST_TWEEN, { TextColor3 = state and TEXT_COLOR or OFF_TEXT_COLOR })
 		tween(accentBar, FAST_TWEEN, { BackgroundTransparency = state and 0 or 1 })
@@ -1357,6 +1357,100 @@ end
 
 TemplateHub.featureCallbacks["Auto Train"] = setAutoTrain
 TemplateHub.featureCallbacks["Fullbright"] = setFullbright
+-- Noclip: walk through walls, fences and props while still standing on the floor.
+-- Only nearby parts lose CanCollide, the original value is stored so switching it
+-- off puts everything back exactly as it was, and the part you are standing on is
+-- never touched. If you clip somewhere with no floor at all, a safety net puts you
+-- back on the last solid spot instead of letting the world delete you.
+local noclipConnection
+local noclipTouched = {}
+local noclipSafeCFrame
+local noclipParams
+
+local function noclipRestore()
+	for part, original in pairs(noclipTouched) do
+		if part.Parent then
+			pcall(function() part.CanCollide = original end)
+		end
+	end
+	noclipTouched = {}
+	noclipSafeCFrame = nil
+end
+
+local function noclipStep()
+	local character = localPlayer.Character
+	if not character then return end
+
+	local root = character:FindFirstChild("HumanoidRootPart")
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not root or not humanoid or humanoid.Health <= 0 then return end
+
+	noclipParams = noclipParams or RaycastParams.new()
+	noclipParams.FilterType = Enum.RaycastFilterType.Exclude
+	noclipParams.FilterDescendantsInstances = { character }
+	noclipParams.IgnoreWater = true
+
+	local origin = root.Position
+
+	-- The floor you are standing on keeps its collision, so you never sink.
+	local feetY = origin.Y - root.Size.Y / 2
+	local floorHit = workspace:Raycast(Vector3.new(origin.X, feetY + 0.6, origin.Z), Vector3.new(0, -2.2, 0), noclipParams)
+	local floorPart = floorHit and floorHit.Instance or nil
+
+	if floorPart then
+		noclipSafeCFrame = CFrame.new(origin + Vector3.new(0, 0.5, 0))
+	end
+
+	local radius = 9
+	for x = -1, 1 do
+		for y = -1, 1 do
+			for z = -1, 1 do
+				if x ~= 0 or y ~= 0 or z ~= 0 then
+					local hit = workspace:Raycast(origin, Vector3.new(x, y, z).Unit * radius, noclipParams)
+					local part = hit and hit.Instance
+					if part and part ~= floorPart and part.CanCollide then
+						if noclipTouched[part] == nil then
+							noclipTouched[part] = part.CanCollide
+						end
+						part.CanCollide = false
+					end
+				end
+			end
+		end
+	end
+
+	-- Nothing solid under you and you are dropping fast: put you back on the floor.
+	local voidY = workspace.FallenPartsDestroyHeight
+	if root.Position.Y < voidY + 40 then
+		if noclipSafeCFrame then
+			root.AssemblyLinearVelocity = Vector3.zero
+			root.CFrame = noclipSafeCFrame
+		else
+			root.AssemblyLinearVelocity = Vector3.new(0, 60, 0)
+		end
+	end
+end
+
+local function restoreNoclip()
+	if noclipConnection then
+		pcall(function() noclipConnection:Disconnect() end)
+	end
+	noclipConnection = nil
+	noclipRestore()
+end
+TemplateHub.restoreNoclip = restoreNoclip
+
+TemplateHub.featureCallbacks["Noclip"] = function(enabled)
+	if not enabled then
+		restoreNoclip()
+		return true
+	end
+
+	restoreNoclip()
+	noclipStep()
+	noclipConnection = game:GetService("RunService").Stepped:Connect(noclipStep)
+	return true
+end
 
 -- Predict Pet: lives in Visuals, reads the real throw result, and never fires a
 -- remote on its own. Two cards are shown: a forecast when the meter starts (the
@@ -1963,6 +2057,7 @@ local function initializeScript()
 		TemplateHub.values["Predict Pet"] = false
 		if TemplateHub.restorePredict then pcall(TemplateHub.restorePredict) end
 		if TemplateHub.restoreEsp then pcall(TemplateHub.restoreEsp) end
+		if TemplateHub.restoreNoclip then pcall(TemplateHub.restoreNoclip) end
 		if TemplateHub.restoreLighting then pcall(TemplateHub.restoreLighting) end
 		if TemplateHub.restorePerfect then pcall(TemplateHub.restorePerfect) end
 		if typeof(shared) == "table" and shared.ThrowFoodHubGui == screenGui then
@@ -2352,6 +2447,8 @@ local function initializeScript()
 	-- Visuals are local-only and restored when disabled or unloaded.
 	local visualsLeft = createColumn(TemplateHub.pages.Visuals, UDim2.fromOffset(0, 0))
 	local visualsRight = createColumn(TemplateHub.pages.Visuals, UDim2.new(0.5, 6, 0, 0))
+	addSection(visualsLeft, "Movement")
+	addToggle(visualsLeft, "Noclip", nil, false)
 	addSection(visualsLeft, "Environment")
 	addToggle(visualsLeft, "Fullbright", nil, false)
 	addSection(visualsRight, "Game Visuals")
