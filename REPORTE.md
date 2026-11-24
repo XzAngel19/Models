@@ -347,3 +347,67 @@ función `chefDo` y ahora son **resilientes**: un rechazo temporal ya no apaga e
    apaga con el motivo; si está abierto cocina, reclama y lanza con sándwich.
 6. Con `Farm Animals` + `Auto Event` + `Auto Cook Sandwich` a la vez: ya no se pelean
    (mutex + `waitGameIdle`), el evento sigue funcionando.
+
+---
+
+## 9. Evidencia medida en tu propio log (no inferencia)
+
+Volví a parsear el volcado de tráfico que subiste
+(`120219252362013_EE67BD0C-….txt`, 1499 registros: 87 `remote_call`, 699
+`incoming_event`, 285 `unreliable_namecall`) y medí los tiempos reales. Esto convierte
+varias afirmaciones de arriba de *inferidas* a **CONFIRMADAS**:
+
+### 9.1 Ciclo de tiro real (una sola tirada en el log)
+
+| Paso | Tiempo desde el anterior | Valor que usa el hub |
+|---|---|---|
+| `Throw_Start` | — | — |
+| `Throw_MeterStarted` | **+1 s** | `Meter Delay` = 1,5 s ✅ (0,5 s de margen) |
+| `Throw_Resolve(0.966)` | **+1 s** | se manda `1` (PERFECT, mínimo real 0,92) ✅ |
+| `Throw_Revealed` | **+8 s** | `Reveal Delay` = 8 s ✅ (y piso `FlightTime + 0,8`) |
+| `Throw_Complete` | **+14 s** | `Complete Delay` = **14 s** ✅ (antes 8 s ⇒ se llamaba ~6 s antes de tiempo) |
+
+⇒ **Confirmado**: el `Complete Delay = 8` original era más corto que el reveal real
+(8 + 14 = 22 s desde `Throw_Start`). Ese era el motivo de que el farm se apagara solo.
+
+### 9.2 2x de training: se reclama ANTES de `fireTime`
+
+26 `Training_Bonus [repIndex, fireTime]` y 33 `Training_TapBonus(repIndex)` en la misma
+sesión. Comparando la hora del `remote_call` con el `fireTime` del bonus:
+
+| Bonus | `fireTime` | Reclamo | Diferencia |
+|---|---|---|---|
+| 1 | 1795384919,31 | 1795384919 | −0,3 s (justo en la ventana) |
+| 2 | 1795384929,91 | 1795384926 | **−3,9 s** |
+| 3 | 1795384936,12 | 1795384932 | **−4,1 s** |
+| 12 | 1795384987,32 | 1795384983 | **−4,3 s** |
+| 26 | 1795385066,00 | 1795385062 | **−4,0 s** |
+
+⇒ **Confirmado**: el servidor **acepta reclamar el bonus en cuanto llega el evento**,
+sin esperar a `fireTime`. Es exactamente lo que hace el hub nuevo (dispara el botón real
+en cuanto existe). El reintento “esperar a `fireTime`” queda solo como red de seguridad.
+
+También se ve que el id es el **índice de repetición** (1…26) y que se repite entre
+sesiones, y que en la sesión real hubo **reclamos duplicados** del mismo id (5, 7, 18,
+20, 21, 22, 24): el hub los evita con la clave `id@fireTime`.
+
+En el log **no** aparece `Training_Stop`: la sesión se cerró al terminar la partida, no
+por un stop explícito. El hub sí manda `Stop(true)` + `Training_Stop` de respaldo.
+
+### 9.3 Pista sobre el bug de Equip Best
+
+En el log, el juego manda **`Plot_PlaceAnimal("a39", …)` cinco veces en ~1 s** para el
+mismo animal. Es decir, `Plot_EquipBest` trabaja por pasos y la parcela tarda en quedar
+consistente. Si el `Auto Sell` mira el inventario en mitad de esa ráfaga, ve animales
+“sin colocar” que en realidad están en tránsito.
+
+⇒ Refuerza la decisión de la sección 8.4: **no vender** hasta que `plotState()` muestre
+el `Count` prometido y ningún animal mejor quede fuera.
+
+### 9.4 Lo que sigue sin evidencia directa
+
+`Throw_UseSandwich` **no aparece** en este log (el evento no estaba activo en esa
+sesión), así que el orden “`Throw_Start` → sándwich → `Throw_MeterStarted`” está
+razonado desde `SandwichThrow.Begin()` (que se crea dentro de la secuencia del tiro),
+**no medido**. Si me pasas un log con el picnic abierto y un par de tiros con sándwich,
+lo confirmo (o lo corrijo) en 5 minutos.
