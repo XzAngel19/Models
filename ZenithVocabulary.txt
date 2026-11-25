@@ -3117,12 +3117,14 @@ zenith
 		Rotation = 0,
 	}, header)
 	-- Thin accent line under the header, brightest on the left.
-	local headerLine = addLine(header, UDim2.new(0, 0, 1, -1), UDim2.new(1, 0, 0, 1), 0, Config.Line, 6)
 	create("UIGradient", {
 		Transparency = NumberSequence.new(0.15, 0.9),
-	}, headerLine)
+	}, addLine(header, UDim2.new(0, 0, 1, -1), UDim2.new(1, 0, 0, 1), 0, Config.Line, 6))
 	-- Vertical accent marker before the title.
-	local accentMarker = create("Frame", {
+	create("UIGradient", {
+		Color = ColorSequence.new(Config.White, Config.Muted),
+		Rotation = 90,
+	}, create("Frame", {
 		Name = "AccentMarker",
 		AnchorPoint = Vector2.new(0, 0.5),
 		Position = UDim2.new(0, 10, 0.5, 0),
@@ -3130,13 +3132,9 @@ zenith
 		BackgroundColor3 = Config.White,
 		BorderSizePixel = 0,
 		ZIndex = 7,
-	}, header)
-	create("UIGradient", {
-		Color = ColorSequence.new(Config.White, Config.Muted),
-		Rotation = 90,
-	}, accentMarker)
+	}, header))
 
-	local brandLabel = makeText(header, {
+	WordHelper.references.BrandLabel = makeText(header, {
 		Name = "ZenithBrandLabel",
 		Position = UDim2.fromOffset(19, 0),
 		Size = UDim2.new(0, 49, 1, 0),
@@ -3159,7 +3157,7 @@ zenith
 		Visible = resolvedWordAssets.WordleLogo ~= "",
 		ZIndex = 7,
 	}, header)
-	local wordleLogoFallback = makeText(header, {
+	WordHelper.references.WordleLogoFallback = makeText(header, {
 		Name = "WordleLogoFallback",
 		Position = UDim2.fromOffset(70, 0),
 		Size = UDim2.fromOffset(23, Config.HeaderHeight),
@@ -3171,7 +3169,7 @@ zenith
 		Visible = not wordleLogo.Visible,
 		ZIndex = 7,
 	})
-	local productLabel = makeText(header, {
+	WordHelper.references.ProductLabel = makeText(header, {
 		Name = "ProductLabel",
 		Position = UDim2.fromOffset(99, 0),
 		Size = UDim2.new(0, 99, 1, 0),
@@ -3286,7 +3284,7 @@ zenith
 	}, body)
 	local searchStroke = addStroke(searchHolder, Config.Line, 0.78, 1)
 
-	local autoDot = create("Frame", {
+	create("UICorner", { CornerRadius = UDim.new(1, 0) }, create("Frame", {
 		Name = "AutomaticDetection",
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.fromOffset(15, 19),
@@ -3294,8 +3292,7 @@ zenith
 		BackgroundColor3 = Config.Accent,
 		BorderSizePixel = 0,
 		ZIndex = 5,
-	}, searchHolder)
-	create("UICorner", { CornerRadius = UDim.new(1, 0) }, autoDot)
+	}, searchHolder))
 
 	local searchBox = create("TextBox", {
 		Name = "SearchWords",
@@ -3376,7 +3373,7 @@ zenith
 		Visible = resolvedWordAssets.SavedIcon ~= "",
 		ZIndex = 7,
 	}, usedChip)
-	local savedIconFallback = makeText(usedChip, {
+	WordHelper.references.SavedIconFallback = makeText(usedChip, {
 		Name = "SavedWordFallback",
 		AnchorPoint = Vector2.new(1, 0.5),
 		Position = UDim2.new(1, -4, 0.5, 0),
@@ -3540,7 +3537,7 @@ zenith
 		ZIndex = 21,
 	}, settingsOverlay)
 	addStroke(settingsPanel, Config.Line, 0.55, 1)
-	local settingsTitle = makeText(settingsPanel, {
+	makeText(settingsPanel, {
 		Name = "Title",
 		Position = UDim2.fromOffset(11, 4),
 		Size = UDim2.new(1, -52, 0, 30),
@@ -3645,7 +3642,7 @@ zenith
 		return row
 	end
 
-	local autoTypeSetting = makeToggleSetting(1, "autoType", "Auto Type", "Type a suggestion on the first tap")
+	makeToggleSetting(1, "autoType", "Auto Type", "Type a suggestion on the first tap")
 	local wpmRow = create("Frame", {
 		Name = "WPM",
 		LayoutOrder = 2,
@@ -3708,10 +3705,10 @@ zenith
 	addStroke(wpmValue, Config.Line, 0.82, 1)
 	addStroke(wpmPlus, Config.Line, 0.82, 1)
 
-	local definitionsSetting = makeToggleSetting(3, "definitions", "Enable Definitions", "Cambridge Definitions")
-	local allResultsSetting = makeToggleSetting(4, "allResults", "Enable All Results", "Might be laggy")
-	local autoDetectSetting = makeToggleSetting(5, "autoDetect", "Auto Detect Game Input", "Only watches local, active input")
-	local hideUsedSetting = makeToggleSetting(6, "hideUsed", "Hide Used Words", "Avoid repeated submissions")
+	makeToggleSetting(3, "definitions", "Enable Definitions", "Cambridge Definitions")
+	makeToggleSetting(4, "allResults", "Enable All Results", "Might be laggy")
+	makeToggleSetting(5, "autoDetect", "Auto Detect Game Input", "Only watches local, active input")
+	makeToggleSetting(6, "hideUsed", "Hide Used Words", "Avoid repeated submissions")
 	local resetSettingsButton = makeButton(settingsPanel, {
 		Name = "ResetSettings",
 		AnchorPoint = Vector2.new(0, 1),
@@ -3765,12 +3762,9 @@ zenith
 	WordHelper.references.WPMValue = wpmValue
 	WordHelper.references.WPMMinus = wpmMinus
 	WordHelper.references.WPMPlus = wpmPlus
-	WordHelper.references.BrandLabel = brandLabel
 	WordHelper.references.WordleLogo = wordleLogo
-	WordHelper.references.WordleLogoFallback = wordleLogoFallback
 	WordHelper.references.UsedChip = usedChip
 	WordHelper.references.SavedIcon = savedIcon
-	WordHelper.references.SavedIconFallback = savedIconFallback
 
 	local function setStatus(text, color)
 		statusLabel.Text = text
@@ -4460,7 +4454,7 @@ zenith
 		end
 		self.minimized = minimized == true
 		minimizeButton.Text = self.minimized and "+" or "-"
-		productLabel.Visible = false
+		WordHelper.references.ProductLabel.Visible = false
 		if self.minimized then
 			self:SetSettingsOpen(false)
 			if searchBox:IsFocused() then
@@ -5854,58 +5848,63 @@ zenith
 	-- invokes a remote or changes game controls.
 	WordHelper.ProcessRemoteCall = onRemoteCall
 
-	local remoteHookKey = activeGameAdapter == "word-battle" and "ZenithWordBattleRemoteHookV1"
-		or (activeGameAdapter == "last-letter" and "ZenithLastLetterRemoteHookV1" or nil)
-	local remoteHook = remoteHookKey and sharedEnvironment[remoteHookKey] or nil
-	if remoteHookKey and type(remoteHook) ~= "table" then
-		local hookMetamethod = zenithFileFunction("hookmetamethod")
-		local getNamecallMethod = zenithFileFunction("getnamecallmethod")
-		local newCClosure = zenithFileFunction("newcclosure") or function(callback)
-			return callback
-		end
-		if hookMetamethod and getNamecallMethod then
-			-- Installed once per game session; re-executions just swap the handler.
-			local state = {}
-			local installed = pcall(function()
-				local original
-				original = hookMetamethod(game, "__namecall", newCClosure(function(self, ...)
-					local handler = state.handler
-					if handler then
-						local method = getNamecallMethod()
-						if method == "FireServer" or method == "InvokeServer" or method == "Fire" then
-							local arguments = table.pack(...)
-							task.defer(pcall, handler, self, method, arguments)
+	do
+		local remoteHookKey = activeGameAdapter == "word-battle" and "ZenithWordBattleRemoteHookV1"
+			or (activeGameAdapter == "last-letter" and "ZenithLastLetterRemoteHookV1" or nil)
+		local remoteHook = remoteHookKey and sharedEnvironment[remoteHookKey] or nil
+		if remoteHookKey and type(remoteHook) ~= "table" then
+			-- Keep installation in a child function. Delta compiles executor chunks
+			-- without register optimization, so these temporary locals must not consume
+			-- registers in launchWordHelper's already-large lexical scope.
+			remoteHook = (function()
+				local hookMetamethod = zenithFileFunction("hookmetamethod")
+				local getNamecallMethod = zenithFileFunction("getnamecallmethod")
+				local newCClosure = zenithFileFunction("newcclosure") or function(callback)
+					return callback
+				end
+				if not hookMetamethod or not getNamecallMethod then return nil end
+				-- Installed once per game session; re-executions just swap the handler.
+				local state = {}
+				local installed = pcall(function()
+					local original
+					original = hookMetamethod(game, "__namecall", newCClosure(function(self, ...)
+						local handler = state.handler
+						if handler then
+							local method = getNamecallMethod()
+							if method == "FireServer" or method == "InvokeServer" or method == "Fire" then
+								local arguments = table.pack(...)
+								task.defer(pcall, handler, self, method, arguments)
+							end
 						end
-					end
-					return original(self, ...)
-				end))
-			end)
-			if installed then
-				remoteHook = state
+						return original(self, ...)
+					end))
+				end)
+				if not installed then return nil end
 				sharedEnvironment[remoteHookKey] = state
-			end
+				return state
+			end)()
 		end
+		if type(remoteHook) == "table" then
+			remoteHook.adapter = activeGameAdapter
+			remoteHook.handler = onRemoteCall
+			WordHelper.remoteHook = remoteHook
+		end
+		WordHelper.exactRemoteHookActive = currentPlaceId == WORD_BATTLE_PLACE_ID and type(remoteHook) == "table"
 	end
-	if type(remoteHook) == "table" then
-		remoteHook.adapter = activeGameAdapter
-		remoteHook.handler = onRemoteCall
-		WordHelper.remoteHook = remoteHook
-	end
-	WordHelper.exactRemoteHookActive = currentPlaceId == WORD_BATTLE_PLACE_ID and type(remoteHook) == "table"
 
 	-- The live game keeps its own input controls under PlayerGui.TypingSystemGui.
 	-- Scan only that small exact subtree even when the remote hook is available:
 	-- it gives a mid-turn launch a safe way to drive the real game keyboard rather
 	-- than assigning TextBox.Text (which never invokes the server protocol).
-	local function bindWordBattleTypingGui(object)
-		if currentPlaceId ~= WORD_BATTLE_PLACE_ID or not object or object.Name ~= "TypingSystemGui" then return end
-		WordHelper.wordBattleTypingGui = object
-		scanForKeyboards(object, true)
-	end
 	if currentPlaceId == WORD_BATTLE_PLACE_ID then
 		-- UI discovery must never prevent the main window from loading if the game
 		-- replaces TypingSystemGui during an update.
 		pcall(function()
+			local function bindWordBattleTypingGui(object)
+				if not object or object.Name ~= "TypingSystemGui" then return end
+				WordHelper.wordBattleTypingGui = object
+				scanForKeyboards(object, true)
+			end
 			bindWordBattleTypingGui(playerGui:FindFirstChild("TypingSystemGui", true))
 			connect(playerGui.DescendantAdded, bindWordBattleTypingGui)
 		end)
@@ -5918,7 +5917,9 @@ zenith
 		if currentPlaceId ~= WORD_BATTLE_PLACE_ID then scanForKeyboards(workspaceService) end
 	end
 
-	local function autoTypeStillValid(generation, inputEpoch, validator)
+	-- Keep late-stage helpers on the runtime table instead of adding locals to the
+	-- parent function; Delta's loadstring compiler enforces a 200-register limit.
+	WordHelper.AutoTypeStillValid = function(generation, inputEpoch, validator)
 		if WordHelper.destroyed or isRobloxMenuOpen()
 			or WordHelper.autoTypeGeneration ~= generation
 			or WordHelper.inputEpoch ~= inputEpoch then
@@ -5931,7 +5932,7 @@ zenith
 		return true
 	end
 
-	local function mappedButtonUsable(button)
+	WordHelper.MappedButtonUsable = function(button)
 		if not button or not button.Parent then return false end
 		local usable = false
 		pcall(function()
@@ -5941,7 +5942,7 @@ zenith
 		return usable
 	end
 
-	local function wordBattleTypingUiActive()
+	WordHelper.WordBattleTypingUiActive = function()
 		if currentPlaceId ~= WORD_BATTLE_PLACE_ID then return false end
 		local root = WordHelper.wordBattleTypingGui
 		if not root or not root.Parent then
@@ -5984,17 +5985,17 @@ zenith
 			local button = WordHelper.keyboardByAction[letter]
 			local inside = false
 			pcall(function() inside = button and button:IsDescendantOf(root) end)
-			if inside and mappedButtonUsable(button) then visibleLetters = visibleLetters + 1 end
+			if inside and WordHelper.MappedButtonUsable(button) then visibleLetters = visibleLetters + 1 end
 		end
 		return visibleLetters >= 8
 	end
 
-	local function recoverWordBattleTurnFromUi()
+	WordHelper.RecoverWordBattleTurnFromUi = function()
 		if currentPlaceId ~= WORD_BATTLE_PLACE_ID then return false end
 		-- Never overrule an explicit opponent/post-confirm state or LetterEvent's
 		-- separate choose-a-letter phase. UI recovery is only for an unknown launch.
 		if WordHelper.localTurn == false and WordHelper.turnSource ~= nil then return false end
-		if WordHelper.letterSelectionActive or not wordBattleTypingUiActive() then return false end
+		if WordHelper.letterSelectionActive or not WordHelper.WordBattleTypingUiActive() then return false end
 		local prompt = normalizeLetters(readLargePromptLetters() or "")
 		if prompt == "" then
 			local query = normalizeLetters(WordHelper.currentQuery)
@@ -6014,17 +6015,15 @@ zenith
 		detectionLabel.Text = "Texto: " .. prompt .. "  |  tu turno"
 		return true
 	end
-	WordHelper.WordBattleTypingUiActive = wordBattleTypingUiActive
-	WordHelper.WordBombTypingUiActive = wordBattleTypingUiActive
-	WordHelper.RecoverWordBattleTurnFromUi = recoverWordBattleTurnFromUi
-	WordHelper.RecoverWordBombTurnFromUi = recoverWordBattleTurnFromUi
+	WordHelper.WordBombTypingUiActive = WordHelper.WordBattleTypingUiActive
+	WordHelper.RecoverWordBombTurnFromUi = WordHelper.RecoverWordBattleTurnFromUi
 
-	local function sendUniversalAction(action)
+	WordHelper.SendUniversalAction = function(action)
 		WordHelper.lastTypingActivity = os.clock()
 		WordHelper.suppressGeneratedUntil = os.clock() + 0.12
 		WordHelper.lastTypedAction = action
 		local button = WordHelper.keyboardByAction[action]
-		if mappedButtonUsable(button) then
+		if WordHelper.MappedButtonUsable(button) then
 			-- Invoke the exact game key first when the executor supports signals. A
 			-- coordinate click can otherwise land on Zenith when its window overlaps
 			-- the mobile keyboard even though the mapped game button is underneath.
@@ -6068,7 +6067,7 @@ zenith
 		return false
 	end
 
-	local function beginAutoTyping(actions, sender, word, method, validator)
+	WordHelper.BeginAutoTyping = function(actions, sender, word, method, validator)
 		WordHelper.autoTypeGeneration = WordHelper.autoTypeGeneration + 1
 		local generation = WordHelper.autoTypeGeneration
 		local inputEpoch = WordHelper.inputEpoch
@@ -6077,7 +6076,7 @@ zenith
 		task.spawn(function()
 			local completed = true
 			for index, action in ipairs(actions) do
-				if not autoTypeStillValid(generation, inputEpoch, validator) or not sender(action) then
+				if not WordHelper.AutoTypeStillValid(generation, inputEpoch, validator) or not sender(action) then
 					completed = false
 					break
 				end
@@ -6106,7 +6105,7 @@ zenith
 		cancelAutomaticTyping(true)
 
 		if currentPlaceId == WORD_BATTLE_PLACE_ID then
-			if WordHelper.localTurn ~= true and not recoverWordBattleTurnFromUi() then return false end
+			if WordHelper.localTurn ~= true and not WordHelper.RecoverWordBattleTurnFromUi() then return false end
 			local prompt = normalizeLetters(WordHelper.turnPrompt)
 			if prompt == "" then
 				prompt = normalizeLetters(readLargePromptLetters() or "")
@@ -6141,7 +6140,7 @@ zenith
 					table.insert(actions, { kind = "letter", value = string.sub(desiredSuffix, index, index) })
 				end
 				if #actions == 0 then return true, "complete" end
-				return beginAutoTyping(actions, function(action)
+				return WordHelper.BeginAutoTyping(actions, function(action)
 					local adding = action.kind == "letter"
 					local arguments = table.pack(sessionId, adding, action.value)
 					WordHelper.suppressGeneratedUntil = os.clock() + 0.12
@@ -6170,7 +6169,7 @@ zenith
 			if not canSend and fireSignal then
 				canSend = true
 				for _, action in ipairs(actions) do
-					if not mappedButtonUsable(WordHelper.keyboardByAction[action]) then
+					if not WordHelper.MappedButtonUsable(WordHelper.keyboardByAction[action]) then
 						canSend = false
 						break
 					end
@@ -6178,8 +6177,8 @@ zenith
 			end
 			if not canSend then return false end
 			local shadowSuffix = currentSuffix
-			return beginAutoTyping(actions, function(action)
-				local sent = sendUniversalAction(action)
+			return WordHelper.BeginAutoTyping(actions, function(action)
+				local sent = WordHelper.SendUniversalAction(action)
 				if sent then
 					if action == "back" then
 						shadowSuffix = string.sub(shadowSuffix, 1, math.max(0, #shadowSuffix - 1))
@@ -6194,7 +6193,7 @@ zenith
 				return sent
 			end, word, "game-keyboard", function()
 				if WordHelper.localTurn ~= true then return false end
-				return WordHelper.turnSource ~= "typing-ui" or wordBattleTypingUiActive()
+				return WordHelper.turnSource ~= "typing-ui" or WordHelper.WordBattleTypingUiActive()
 			end)
 		end
 
@@ -6220,7 +6219,7 @@ zenith
 			if not canSend and fireSignal then
 				canSend = true
 				for _, action in ipairs(actions) do
-					if not mappedButtonUsable(WordHelper.keyboardByAction[action]) then
+					if not WordHelper.MappedButtonUsable(WordHelper.keyboardByAction[action]) then
 						canSend = false
 						break
 					end
@@ -6228,8 +6227,8 @@ zenith
 			end
 			if not canSend then return false end
 			local shadowWord = current
-			return beginAutoTyping(actions, function(action)
-				local sent = sendUniversalAction(action)
+			return WordHelper.BeginAutoTyping(actions, function(action)
+				local sent = WordHelper.SendUniversalAction(action)
 				if sent then
 					shadowWord = string.sub(shadowWord .. action, -32)
 					WordHelper.passiveBuffer = shadowWord
@@ -6246,7 +6245,7 @@ zenith
 		if textActions then
 			if #textActions == 0 then return true, "complete" end
 			WordHelper.autoTypeTextBox = textBox
-			return beginAutoTyping(textActions, textSender, word, "TextBox", textValidator)
+			return WordHelper.BeginAutoTyping(textActions, textSender, word, "TextBox", textValidator)
 		end
 
 		local initialFocus = userInputService:GetFocusedTextBox()
@@ -6268,14 +6267,14 @@ zenith
 		if not canSend and fireSignal then
 			canSend = true
 			for _, action in ipairs(actions) do
-				if not mappedButtonUsable(WordHelper.keyboardByAction[action]) then
+				if not WordHelper.MappedButtonUsable(WordHelper.keyboardByAction[action]) then
 					canSend = false
 					break
 				end
 			end
 		end
 		if not canSend then return false end
-		return beginAutoTyping(actions, sendUniversalAction, word, "universal", function()
+		return WordHelper.BeginAutoTyping(actions, WordHelper.SendUniversalAction, word, "universal", function()
 			return userInputService:GetFocusedTextBox() == initialFocus
 		end)
 	end
@@ -6283,11 +6282,13 @@ zenith
 	WordHelper.TypeWordIntoGame = typeWordIntoGame
 	WordHelper.IsRobloxMenuOpen = isRobloxMenuOpen
 
-	local focusPollAccumulator, visualPollAccumulator, menuPollAccumulator = 0, 0, 0
+	WordHelper.focusPollAccumulator = 0
+	WordHelper.visualPollAccumulator = 0
+	WordHelper.menuPollAccumulator = 0
 	connect(runService.Heartbeat, function(deltaTime)
-		menuPollAccumulator = menuPollAccumulator + deltaTime
-		if menuPollAccumulator >= Config.FocusPollSeconds then
-			menuPollAccumulator = 0
+		WordHelper.menuPollAccumulator = WordHelper.menuPollAccumulator + deltaTime
+		if WordHelper.menuPollAccumulator >= Config.FocusPollSeconds then
+			WordHelper.menuPollAccumulator = 0
 			isRobloxMenuOpen()
 		end
 		if WordHelper.robloxMenuOpen or WordHelper.isAutoTyping then return end
@@ -6296,15 +6297,15 @@ zenith
 			return
 		end
 		if currentPlaceId == LAST_LETTER_PLACE_ID then
-			visualPollAccumulator = visualPollAccumulator + deltaTime
-			if visualPollAccumulator >= Config.VisualPollSeconds then
-				visualPollAccumulator = 0
+			WordHelper.visualPollAccumulator = WordHelper.visualPollAccumulator + deltaTime
+			if WordHelper.visualPollAccumulator >= Config.VisualPollSeconds then
+				WordHelper.visualPollAccumulator = 0
 				pollVisibleGameWord()
 			end
 		end
-		focusPollAccumulator = focusPollAccumulator + deltaTime
-		if focusPollAccumulator < Config.FocusPollSeconds then return end
-		focusPollAccumulator = 0
+		WordHelper.focusPollAccumulator = WordHelper.focusPollAccumulator + deltaTime
+		if WordHelper.focusPollAccumulator < Config.FocusPollSeconds then return end
+		WordHelper.focusPollAccumulator = 0
 		if WordHelper.robloxMenuOpen or WordHelper.isAutoTyping then return end
 		local focusedTextBox = userInputService:GetFocusedTextBox()
 		if focusedTextBox and focusedTextBox ~= searchBox then
@@ -6317,15 +6318,15 @@ zenith
 		end
 	end)
 
-	local function bindViewport()
+	WordHelper.BindViewport = function()
 		local camera = workspaceService.CurrentCamera
 		if camera then
 			connect(camera:GetPropertyChangedSignal("ViewportSize"), updateResponsivePlacement)
 		end
 		updateResponsivePlacement()
 	end
-	connect(workspaceService:GetPropertyChangedSignal("CurrentCamera"), bindViewport)
-	bindViewport()
+	connect(workspaceService:GetPropertyChangedSignal("CurrentCamera"), WordHelper.BindViewport)
+	WordHelper.BindViewport()
 
 	sharedEnvironment.ZenithVocabulary = WordHelper
 	sharedEnvironment.ZenithAssistant = WordHelper
@@ -6340,7 +6341,7 @@ zenith
 
 	-- Upgrade to the full cached/downloaded English dictionary in the background.
 	-- Read a cached file, otherwise download it from the first working URL and cache it.
-	local function loadCachedOrDownload(fileName, urls)
+	WordHelper.LoadCachedOrDownload = function(fileName, urls)
 		if readFile then
 			local ok, value = pcall(function()
 				if isFile and not isFile(fileName) then
@@ -6372,7 +6373,7 @@ zenith
 	task.spawn(function()
 		setStatus("Cargando diccionario...", Config.Muted)
 
-		local frequency = loadCachedOrDownload(Config.FrequencyFile, { Config.FrequencyUrl })
+		local frequency = WordHelper.LoadCachedOrDownload(Config.FrequencyFile, { Config.FrequencyUrl })
 		if frequency and not WordHelper.destroyed then
 			local rank = {}
 			local position, scanned = 0, 0
@@ -6391,7 +6392,7 @@ zenith
 			WordHelper.frequencyRank = rank
 		end
 
-		local content = loadCachedOrDownload(Config.DictionaryFile, Config.DictionaryUrls)
+		local content = WordHelper.LoadCachedOrDownload(Config.DictionaryFile, Config.DictionaryUrls)
 		if WordHelper.destroyed then
 			return
 		end
@@ -6428,11 +6429,11 @@ zenith
 	end)
 
 	-- Small, non-blocking entrance; there is deliberately no BlurEffect.
-	local finalScale = targetScale()
-	windowScale.Scale = finalScale * 0.9
+	WordHelper.finalScale = targetScale()
+	windowScale.Scale = WordHelper.finalScale * 0.9
 	updateResponsivePlacement()
-	windowScale.Scale = finalScale * 0.9
-	tween(windowScale, OPEN_TWEEN, { Scale = finalScale })
+	windowScale.Scale = WordHelper.finalScale * 0.9
+	tween(windowScale, OPEN_TWEEN, { Scale = WordHelper.finalScale })
 
 	return WordHelper
 end
