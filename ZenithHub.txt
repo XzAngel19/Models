@@ -1,0 +1,3695 @@
+-- ZENITH | Key System + Word Helper (single script).
+-- Flow: if Zenith/KeySystem.log holds a key that has not expired yet, the Word Helper
+-- opens directly. Otherwise the Key System opens; after "Success!" it closes itself,
+-- writes the log (entered + expiry time) and opens the Word Helper.
+
+local launchKeySystem
+local launchWordHelper
+
+-- Key log. Stored in the executor workspace as Zenith/KeySystem.log (append-only,
+-- one line per accepted key). The newest "expires=" value is the active one.
+local ZenithKeyLog = {
+	Folder = "Zenith",
+	File = "Zenith/KeySystem.log",
+	DurationSeconds = 12 * 60 * 60,
+	SessionAttribute = "ZenithStandardExpiresAt",
+}
+
+local function zenithFileFunction(name)
+	local environment = getfenv and getfenv() or _G
+	local value = environment[name]
+	if type(value) ~= "function" and type(getgenv) == "function" then
+		local ok, genv = pcall(getgenv)
+		if ok and type(genv) == "table" then
+			value = genv[name]
+		end
+	end
+	return type(value) == "function" and value or nil
+end
+
+function ZenithKeyLog.FormatDate(timestamp)
+	local ok, text = pcall(os.date, "%Y-%m-%d %H:%M:%S", timestamp)
+	if ok and type(text) == "string" then
+		return text
+	end
+	return tostring(timestamp)
+end
+
+function ZenithKeyLog.ReadExpiry()
+	local readFile = zenithFileFunction("readfile")
+	local isFile = zenithFileFunction("isfile")
+	local latest = nil
+
+	if readFile then
+		local ok, content = pcall(function()
+			if isFile and not isFile(ZenithKeyLog.File) then
+				return nil
+			end
+			return readFile(ZenithKeyLog.File)
+		end)
+		if ok and type(content) == "string" then
+			for value in string.gmatch(content, "expires=(%d+)") do
+				latest = tonumber(value)
+			end
+		end
+	end
+
+	-- Studio / executors without file access: remember the key for this session only.
+	if not latest then
+		local player = game:GetService("Players").LocalPlayer
+		local attribute = player and player:GetAttribute(ZenithKeyLog.SessionAttribute)
+		if type(attribute) == "number" then
+			latest = attribute
+		end
+	end
+	return latest
+end
+
+function ZenithKeyLog.Record()
+	local now = os.time()
+	local expiresAt = now + ZenithKeyLog.DurationSeconds
+	local line = string.format(
+		"[%s] KEY ACCEPTED | entered=%d (%s) | expires=%d (%s)\n",
+		ZenithKeyLog.FormatDate(now),
+		now,
+		ZenithKeyLog.FormatDate(now),
+		expiresAt,
+		ZenithKeyLog.FormatDate(expiresAt)
+	)
+
+	local writeFile = zenithFileFunction("writefile")
+	local appendFile = zenithFileFunction("appendfile")
+	local readFile = zenithFileFunction("readfile")
+	local isFile = zenithFileFunction("isfile")
+	local makeFolder = zenithFileFunction("makefolder")
+
+	if writeFile then
+		pcall(function()
+			if makeFolder then
+				pcall(makeFolder, ZenithKeyLog.Folder)
+			end
+			local exists = isFile and isFile(ZenithKeyLog.File)
+			if exists and appendFile then
+				appendFile(ZenithKeyLog.File, line)
+			elseif exists and readFile then
+				writeFile(ZenithKeyLog.File, readFile(ZenithKeyLog.File) .. line)
+			else
+				writeFile(ZenithKeyLog.File, "-- Zenith Key System log. Each line: when the key was entered and when a new key is required.\n" .. line)
+			end
+		end)
+	end
+
+	pcall(function()
+		game:GetService("Players").LocalPlayer:SetAttribute(ZenithKeyLog.SessionAttribute, expiresAt)
+	end)
+	return expiresAt
+end
+
+function ZenithKeyLog.FormatRemaining(seconds)
+	seconds = math.max(0, math.floor(seconds))
+	if seconds <= 0 then
+		return "Expired"
+	end
+	local hours = math.floor(seconds / 3600)
+	local minutes = math.floor((seconds % 3600) / 60)
+	return string.format("%02d:%02d:%02d - Remaining", hours, minutes, seconds % 60)
+end
+
+-- ===================== KEY SYSTEM =====================
+launchKeySystem = function(onKeyAccepted)
+	-- ZNTH Key System | Pixel-faithful, client-sided Roblox menu.
+	-- Paste this entire file into a LocalScript, or execute it as one loadstring chunk.
+	-- The attached PNG artwork is embedded for executor runtimes; Studio receives matching
+	-- code-drawn fallbacks until an uploaded rbxassetid is entered in Config.Assets.
+
+	-- Services.
+	local playersService = game:GetService("Players")
+	local userInputService = game:GetService("UserInputService")
+	local tweenService = game:GetService("TweenService")
+	local marketplaceService = game:GetService("MarketplaceService")
+	local contentProvider = game:GetService("ContentProvider")
+	local runService = game:GetService("RunService")
+	local workspaceService = game:GetService("Workspace")
+	local lightingService = game:GetService("Lighting")
+	local starterGui = game:GetService("StarterGui")
+	local coreGuiService = game:GetService("CoreGui")
+
+	if not game:IsLoaded() then
+		game.Loaded:Wait()
+	end
+
+	local localPlayer = playersService.LocalPlayer
+	while not localPlayer do
+		playersService:GetPropertyChangedSignal("LocalPlayer"):Wait()
+		localPlayer = playersService.LocalPlayer
+	end
+
+	local playerGui = localPlayer:WaitForChild("PlayerGui")
+
+	-- Configuration. Asset values accept a numeric ID or a complete rbxassetid URI.
+	local Config = {
+		GuiName = "ZNTHMainMenu",
+		ReferenceWidth = 1223,
+		ReferenceHeight = 813,
+		DisplayOrder = 100,
+
+		-- Neutral monochrome palette derived from the supplied mobile reference.
+		Accent = Color3.fromRGB(207, 211, 217),
+		Panel = Color3.fromRGB(5, 5, 6),
+		PanelRaised = Color3.fromRGB(12, 13, 15),
+		White = Color3.fromRGB(242, 243, 245),
+		Secondary = Color3.fromRGB(181, 185, 191),
+		Muted = Color3.fromRGB(108, 112, 119),
+		Line = Color3.fromRGB(198, 202, 208),
+
+		StandardDurationSeconds = 12 * 60 * 60,
+		NewsDate = "16/03/2019",
+		DefaultDescription = "Current experience detected automatically. Enter any key to continue and explore everything it has to offer.",
+
+		-- World-space presentation: both menu bases are real camera-relative planes.
+		BlurSize = 18,
+		SurfaceDepth = 8,
+		SurfaceWidthCompression = 0.86,
+		SurfaceInwardYaw = 17,
+		SurfaceDefaultPitch = -3,
+		SurfaceMaxYaw = 26,
+		SurfaceMaxPitch = 15,
+
+		Assets = {
+			-- Studio can use uploaded IDs; compatible executors decode the embedded PNGs.
+			DivisionLogo = "",
+			HomeIcon = "",
+			AnnouncementsIcon = "",
+		},
+	}
+
+	local REGULAR_FONT = Enum.Font.Gotham
+	local MEDIUM_FONT = Enum.Font.GothamMedium
+	local BOLD_FONT = Enum.Font.GothamBold
+	local FAST_TWEEN = TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local OPEN_TWEEN = TweenInfo.new(0.42, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+	local PRESS_TWEEN = TweenInfo.new(0.09, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+	-- PNG files supplied with this project, encoded into the single executable file.
+	-- They are decoded only when an executor exposes writefile + getcustomasset.
+	local EMBEDDED_ASSETS = {
+		DivisionLogo = table.concat({
+			"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",
+			"RU5ErkJggg==",
+		}),
+		HomeIcon = table.concat({
+			"iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAACT0lEQVR4nO3aUU7EMAwA0RRx/ysvX3yAYLXbxLHjmXcBUns2UlHHkCRJkiRJkiRJkqSWHo/H",
+			"I/sMmT6yD5Dpe/nkCLAB/F46NQJkAP8tmxjBlX2And5Z8HVdiNlgboB3f92U2wARwN1lEiJoH8DsErtH0DqAVcvrHEHbAFYvrWsELQOIWlbHCNoFEL2kbhG0",
+			"edfNWEyH/xW0uAGyfpUdboPjA8heQvbfn3V0AFWGX+UcdxwbQLWhVzvPq44MoOqwq57rmeMCqD7k6uf77ZjXmNMGO8YZr4lH3AAnLn+MM85dPoAThvhM9fOX",
+			"DqD68F5V+TnKBlB5aHdUfZ6SAVQd1qyKz1UugIpDWqna85V5Tak2mB0qvCaWuAGIyx+jxnOnB1BhCJmynz81gOyHryJzDmkBuPyfsuaREoDL/1vGXLYH4PKf",
+			"2z2frQG4/NfsnNOW91AXf1/0/wrCbwCXPyd6fqEBuPw1IucYFoDLXytqniEBuPwYEXNdHoDLj7V6vksDcPl7rJzzklcMF59n9jVx+gZw+blm5z8VgMuvYWYP",
+			"twNw+bXc3ce2T5IM5n07PhlL/yJIuQwAzgDgDADOAOAMAM4A4AwAzgDgDADOAOAMAM4A4AwAzgDgDADOAOAMAM4A4AwA7jP7AFEiPqjs+GGrNwCcAcAZAJwB",
+			"wBkAnAHAGQCcAcAZAJwBwBkAnAHAGQCcAcAZAJwBwBkAnAHAGQCcAcAZAJwBwBkAnAHAGQCcAcAZAJwBwBkAnAHAGQCcAcAZAJwBSJIkSZIkSZIkSV19ATgW",
+			"U5/bSEKPAAAAAElFTkSuQmCC",
+		}),
+		AnnouncementsIcon = table.concat({
+			"iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAABbElEQVR4nO3cwQnDMBAAQSuk/5aVDkIIGEnemQZszHKP4/B1AQAAAADPN1Y9eM45Vz37TmOM",
+			"Zd/0H6/VL8BaAogTQJwA4gQQJ4A4AcQJIE4AcQKIE0CcAOIEECeAOAHECSBOAHECiBNAnADiHIUe4M5DUxMgTgBxAogTQJwA4gQQJ4A4AcQJIE4AcQKIE0Cc",
+			"AOIEECeAOAHEvVe/wK9O+/vWNzsdw5gAcQKIE0CcAOIEECeAOAHECSDumEXQTsuTJzEB4gQQJ4A4AcQJIE4AcQKIE0DcMYsgF0H3MAHiBBAngDgBxAkgTgBx",
+			"AogTQNwxi6CdlidPYgLECSBOAHECiBNAnADiBBAngLhjFkEugu5hAsQJIE4AcQKIE0CcAOIEECeAuGMWQTstT57EBIgTQJwA4gQQJ4A4AcQJIE4AcQKIE0Cc",
+			"AOIEECeAOAHECSBOAHECiBNAnADiBBAngDgBxAkgTgBxAgAAAACAgg9plCDZ163H6AAAAABJRU5ErkJggg==",
+		}),
+	}
+
+	-- Resolve the environment without making Studio depend on executor-only globals.
+	local function getSharedEnvironment()
+		local environment = _G
+		local ok, executorEnvironment = pcall(function()
+			if type(getgenv) == "function" then
+				return getgenv()
+			end
+			return nil
+		end)
+
+		if ok and type(executorEnvironment) == "table" then
+			environment = executorEnvironment
+		end
+
+		return environment
+	end
+
+	local sharedEnvironment = getSharedEnvironment()
+	local previousMenu = sharedEnvironment.ZNTHMainMenu
+	if type(previousMenu) == "table" and type(previousMenu.Destroy) == "function" then
+		pcall(function()
+			previousMenu:Destroy()
+		end)
+	end
+
+	local previousGui = playerGui:FindFirstChild(Config.GuiName)
+	if previousGui then
+		previousGui:Destroy()
+	end
+
+	-- Pure Luau base64 decoder, used for the bundled transparent PNGs.
+	local BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	local BASE64_LOOKUP = {}
+	for index = 1, #BASE64_ALPHABET do
+		BASE64_LOOKUP[string.sub(BASE64_ALPHABET, index, index)] = index - 1
+	end
+
+	local function decodeBase64(data)
+		local output = table.create(math.floor(#data * 0.75))
+		local outputLength = 0
+		local accumulator = 0
+		local groupLength = 0
+
+		local function appendByte(value)
+			outputLength = outputLength + 1
+			output[outputLength] = string.char(value)
+		end
+
+		-- Decode one four-character group at a time. Keeping the accumulator small
+		-- avoids floating-point overflow on the embedded 15 KB division logo.
+		for index = 1, #data do
+			local character = string.sub(data, index, index)
+			local value = BASE64_LOOKUP[character]
+			if value then
+				accumulator = accumulator * 64 + value
+				groupLength = groupLength + 1
+				if groupLength == 4 then
+					appendByte(math.floor(accumulator / 65536) % 256)
+					appendByte(math.floor(accumulator / 256) % 256)
+					appendByte(accumulator % 256)
+					accumulator = 0
+					groupLength = 0
+				end
+			end
+		end
+
+		-- Padding characters are skipped above, leaving two or three useful values.
+		if groupLength == 2 then
+			appendByte(math.floor(accumulator / 16) % 256)
+		elseif groupLength == 3 then
+			appendByte(math.floor(accumulator / 1024) % 256)
+			appendByte(math.floor(accumulator / 4) % 256)
+		end
+
+		return table.concat(output, "", 1, outputLength)
+	end
+
+	local function normalizeAsset(value)
+		if value == nil then
+			return ""
+		end
+
+		local text = tostring(value)
+		if text == "" or text == "0" then
+			return ""
+		end
+		if string.find(text, "://", 1, true) then
+			return text
+		end
+		if string.match(text, "^%d+$") then
+			return "rbxassetid://" .. text
+		end
+		return text
+	end
+
+	local function getExecutorFunction(name)
+		local value = sharedEnvironment[name]
+		if type(value) == "function" then
+			return value
+		end
+		return nil
+	end
+
+	local writeFile = getExecutorFunction("writefile")
+	local makeFolder = getExecutorFunction("makefolder")
+	local getCustomAsset = getExecutorFunction("getcustomasset") or getExecutorFunction("getsynasset")
+
+	local function resolveEmbeddedAsset(key, fileName)
+		local configured = normalizeAsset(Config.Assets[key])
+		if configured ~= "" then
+			return configured
+		end
+
+		if not writeFile or not getCustomAsset then
+			return ""
+		end
+
+		local folder = "ZNTHMainMenuAssets"
+		local path = folder .. "/" .. fileName
+		local ok = pcall(function()
+			-- Some executors omit isfolder and throw when makefolder sees an existing
+			-- directory, so folder creation is intentionally its own ignored pcall.
+			if makeFolder then
+				pcall(makeFolder, folder)
+			end
+			-- Rewriting guarantees a stale file from an older script can never win.
+			writeFile(path, decodeBase64(EMBEDDED_ASSETS[key]))
+		end)
+
+		if not ok then
+			return ""
+		end
+
+		local assetOk, asset = pcall(getCustomAsset, path)
+		if assetOk and type(asset) == "string" then
+			return asset
+		end
+		return ""
+	end
+
+	local resolvedAssets = {
+		DivisionLogo = resolveEmbeddedAsset("DivisionLogo", "zenith-logo-monochrome.png"),
+		HomeIcon = resolveEmbeddedAsset("HomeIcon", "icon-home.png"),
+		AnnouncementsIcon = resolveEmbeddedAsset("AnnouncementsIcon", "icon-doc.png"),
+	}
+
+	local KEY_LINK_TEXT = "Zenith.com"
+	local clipboardWriter = getExecutorFunction("setclipboard") or getExecutorFunction("toclipboard")
+
+	local Menu = {
+		open = false,
+		destroyed = false,
+		keyAccepted = false,
+		selectedNavigation = "Home",
+		connections = {},
+		navigation = {},
+		views = {},
+		hotkeys = {},
+		callbacks = {},
+		references = {},
+		positions = {},
+		coreGuiStates = {},
+		coreGuiCaptured = false,
+		topbarWasEnabled = true,
+		robloxGui = nil,
+		robloxGuiWasEnabled = true,
+		scale = 1,
+		openAmount = 0,
+		targetOpenAmount = 0,
+		orientationYaw = 0,
+		targetOrientationYaw = 0,
+		orientationPitch = Config.SurfaceDefaultPitch,
+		targetOrientationPitch = Config.SurfaceDefaultPitch,
+		orientationDragging = false,
+	}
+
+	-- UI utility functions.
+	local function create(className, properties, parent)
+		local object = Instance.new(className)
+		for property, value in pairs(properties or {}) do
+			object[property] = value
+		end
+		if parent then
+			object.Parent = parent
+		end
+		return object
+	end
+
+	local function connect(signal, callback)
+		local connection = signal:Connect(callback)
+		table.insert(Menu.connections, connection)
+		return connection
+	end
+
+	local function tween(object, info, goals)
+		if Menu.destroyed or not object or not object.Parent then
+			return nil
+		end
+		local animation = tweenService:Create(object, info, goals)
+		animation:Play()
+		return animation
+	end
+
+	local function addStroke(parent, color, transparency, thickness)
+		return create("UIStroke", {
+			ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+			Color = color or Config.Line,
+			Transparency = transparency == nil and 0.48 or transparency,
+			Thickness = thickness or 1,
+			LineJoinMode = Enum.LineJoinMode.Miter,
+		}, parent)
+	end
+
+	local function addLine(parent, position, size, transparency, color, zIndex)
+		return create("Frame", {
+			Name = "Divider",
+			Position = position,
+			Size = size,
+			BackgroundColor3 = color or Config.Line,
+			BackgroundTransparency = transparency == nil and 0.52 or transparency,
+			BorderSizePixel = 0,
+			ZIndex = zIndex or 4,
+		}, parent)
+	end
+
+	local function makeText(parent, properties)
+		local defaults = {
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Font = REGULAR_FONT,
+			Text = "",
+			TextColor3 = Config.White,
+			TextSize = 14,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Center,
+			ZIndex = 5,
+		}
+
+		for property, value in pairs(properties or {}) do
+			defaults[property] = value
+		end
+		return create("TextLabel", defaults, parent)
+	end
+
+	local function makeButton(parent, properties)
+		local defaults = {
+			AutoButtonColor = false,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Text = "",
+			ZIndex = 8,
+		}
+		for property, value in pairs(properties or {}) do
+			defaults[property] = value
+		end
+		return create("TextButton", defaults, parent)
+	end
+
+	local function bindPressScale(button, target)
+		local scaleObject = create("UIScale", { Scale = 1 }, target or button)
+		connect(button.MouseButton1Down, function()
+			tween(scaleObject, PRESS_TWEEN, { Scale = 0.975 })
+		end)
+		connect(button.MouseButton1Up, function()
+			tween(scaleObject, PRESS_TWEEN, { Scale = 1 })
+		end)
+		connect(button.MouseLeave, function()
+			tween(scaleObject, PRESS_TWEEN, { Scale = 1 })
+		end)
+		return scaleObject
+	end
+
+	local function makePanelBar(parent, name, y, height, text)
+		local bar = create("Frame", {
+			Name = name,
+			Position = UDim2.fromOffset(0, y),
+			Size = UDim2.fromOffset(335, height),
+			BackgroundColor3 = Config.Panel,
+			BackgroundTransparency = 0.12,
+			BorderSizePixel = 0,
+			ZIndex = 2,
+		}, parent)
+		local stroke = addStroke(bar, Config.Line, 0.48, 1)
+
+		local label = makeText(bar, {
+			Name = "Label",
+			Size = UDim2.fromScale(1, 1),
+			Font = REGULAR_FONT,
+			Text = text,
+			TextColor3 = Config.White,
+			TextSize = 27,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			ZIndex = 4,
+		})
+
+		local button = makeButton(bar, {
+			Name = name .. "Button",
+			Size = UDim2.fromScale(1, 1),
+		})
+		bindPressScale(button, label)
+
+		connect(button.MouseEnter, function()
+			tween(bar, FAST_TWEEN, {
+				BackgroundColor3 = Color3.fromRGB(24, 25, 28),
+				BackgroundTransparency = 0.03,
+			})
+			tween(stroke, FAST_TWEEN, { Transparency = 0.18, Color = Config.Accent })
+		end)
+		connect(button.MouseLeave, function()
+			tween(bar, FAST_TWEEN, {
+				BackgroundColor3 = Config.Panel,
+				BackgroundTransparency = 0.12,
+			})
+			tween(stroke, FAST_TWEEN, { Transparency = 0.48, Color = Config.Line })
+		end)
+
+		return bar, button, label
+	end
+
+	local function registerTint(list, object, property)
+		table.insert(list, { object = object, property = property })
+		return object
+	end
+
+	-- Small code-drawn icon fallbacks preserve the layout in Studio before PNG upload.
+	local function buildHomeFallback(parent, tintList)
+		local holder = create("Frame", {
+			Name = "HomeVectorFallback",
+			Position = UDim2.fromOffset(10, 8),
+			Size = UDim2.fromOffset(27, 26),
+			BackgroundTransparency = 1,
+			ZIndex = 6,
+		}, parent)
+
+		registerTint(tintList, create("Frame", {
+			Position = UDim2.fromOffset(3, 8),
+			Size = UDim2.fromOffset(17, 5),
+			Rotation = -39,
+			BackgroundColor3 = Config.Panel,
+			BorderSizePixel = 0,
+			ZIndex = 7,
+		}, holder), "BackgroundColor3")
+		registerTint(tintList, create("Frame", {
+			Position = UDim2.fromOffset(11, 8),
+			Size = UDim2.fromOffset(17, 5),
+			Rotation = 39,
+			BackgroundColor3 = Config.Panel,
+			BorderSizePixel = 0,
+			ZIndex = 7,
+		}, holder), "BackgroundColor3")
+		registerTint(tintList, create("Frame", {
+			Position = UDim2.fromOffset(5, 12),
+			Size = UDim2.fromOffset(18, 12),
+			BackgroundColor3 = Config.Panel,
+			BorderSizePixel = 0,
+			ZIndex = 6,
+		}, holder), "BackgroundColor3")
+		return holder
+	end
+
+	local function buildAnnouncementsFallback(parent, tintList)
+		local holder = create("Frame", {
+			Name = "AnnouncementsVectorFallback",
+			Position = UDim2.fromOffset(11, 7),
+			Size = UDim2.fromOffset(22, 28),
+			BackgroundTransparency = 1,
+			ZIndex = 6,
+		}, parent)
+
+		local page = create("Frame", {
+			Position = UDim2.fromOffset(2, 1),
+			Size = UDim2.fromOffset(18, 25),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 6,
+		}, holder)
+		local pageStroke = addStroke(page, Config.White, 0, 2)
+		registerTint(tintList, pageStroke, "Color")
+
+		registerTint(tintList, create("Frame", {
+			Position = UDim2.fromOffset(12, 1),
+			Size = UDim2.fromOffset(2, 8),
+			Rotation = -45,
+			BackgroundColor3 = Config.White,
+			BorderSizePixel = 0,
+			ZIndex = 7,
+		}, page), "BackgroundColor3")
+
+		for _, y in ipairs({ 11, 15, 19 }) do
+			registerTint(tintList, create("Frame", {
+				Position = UDim2.fromOffset(4, y),
+				Size = UDim2.fromOffset(10, 2),
+				BackgroundColor3 = Config.White,
+				BorderSizePixel = 0,
+				ZIndex = 7,
+			}, page), "BackgroundColor3")
+		end
+		return holder
+	end
+
+	local function makeNavigationIcon(parent, name, x, width, asset, fallbackBuilder)
+		local button = makeButton(parent, {
+			Name = name .. "Navigation",
+			Position = UDim2.fromOffset(x, 0),
+			Size = UDim2.fromOffset(width, 43),
+			BackgroundColor3 = Config.Panel,
+			BackgroundTransparency = 0.32,
+			ZIndex = 5,
+		})
+
+		local image = create("ImageLabel", {
+			Name = name .. "PNG",
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(name == "Home" and 25 or 24, name == "Announcements" and 27 or 24),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Image = asset,
+			ImageColor3 = Config.White,
+			ScaleType = Enum.ScaleType.Fit,
+			Visible = asset ~= "",
+			ZIndex = 7,
+		}, button)
+
+		local tintList = {}
+		local fallback = fallbackBuilder(button, tintList)
+		fallback.AnchorPoint = Vector2.new(0.5, 0.5)
+		fallback.Position = UDim2.fromScale(0.5, 0.5)
+		fallback.Visible = asset == ""
+		bindPressScale(button, image.Visible and image or fallback)
+
+		Menu.navigation[name] = {
+			button = button,
+			image = image,
+			fallback = fallback,
+			tint = tintList,
+		}
+		return button
+	end
+
+	local function setTint(navigation, color)
+		navigation.image.ImageColor3 = color
+		for _, record in ipairs(navigation.tint) do
+			if record.object and record.object.Parent then
+				record.object[record.property] = color
+			end
+		end
+	end
+
+	function Menu:SetNavigation(name)
+		if not self.views[name] then
+			return
+		end
+
+		if name ~= "Home" then
+			local keyInput = self.references.KeySystemInput
+			if keyInput and keyInput.Visible then
+				if keyInput:IsFocused() then
+					keyInput:ReleaseFocus()
+				end
+				keyInput.Visible = false
+				self.references.KeySystemButton.Visible = true
+				self.references.KeySystemLabel.Visible = true
+			end
+		end
+
+		self.selectedNavigation = name
+		for viewName, view in pairs(self.views) do
+			view.Visible = viewName == name
+		end
+		for navigationName, navigation in pairs(self.navigation) do
+			local selected = navigationName == name
+			tween(navigation.button, FAST_TWEEN, {
+				BackgroundColor3 = selected and Config.Accent or Config.Panel,
+				BackgroundTransparency = selected and 0 or 0.32,
+			})
+			setTint(navigation, selected and Color3.fromRGB(4, 4, 5) or Config.White)
+		end
+	end
+
+	local function bindNavigationHover(name)
+		local navigation = Menu.navigation[name]
+		connect(navigation.button.MouseEnter, function()
+			if Menu.selectedNavigation ~= name then
+				tween(navigation.button, FAST_TWEEN, {
+					BackgroundColor3 = Color3.fromRGB(34, 35, 38),
+					BackgroundTransparency = 0.1,
+				})
+			end
+		end)
+		connect(navigation.button.MouseLeave, function()
+			if Menu.selectedNavigation ~= name then
+				tween(navigation.button, FAST_TWEEN, {
+					BackgroundColor3 = Config.Panel,
+					BackgroundTransparency = 0.32,
+				})
+			end
+		end)
+		connect(navigation.button.Activated, function()
+			Menu:SetNavigation(name)
+			local callback = Menu.callbacks[name]
+			if type(callback) == "function" then
+				task.spawn(callback, Menu)
+			end
+		end)
+	end
+
+	local function buildLeftPanel(surfaceGui, overlayGui)
+		local root = create("Frame", {
+			Name = "LeftMenu",
+			Position = UDim2.fromOffset(50, 12),
+			Size = UDim2.fromOffset(335, 452),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 1,
+		}, surfaceGui)
+		Menu.references.LeftRoot = root
+
+		-- The navigation strip now spans exactly the same width as Key System.
+		local navigationRow = create("Frame", {
+			Name = "NavigationRow",
+			Position = UDim2.fromOffset(0, 0),
+			Size = UDim2.fromOffset(335, 43),
+			BackgroundColor3 = Config.Panel,
+			BackgroundTransparency = 0.22,
+			BorderSizePixel = 0,
+			ZIndex = 3,
+		}, root)
+		addStroke(navigationRow, Config.Line, 0.55, 1)
+
+		makeNavigationIcon(navigationRow, "Home", 0, 168, resolvedAssets.HomeIcon, buildHomeFallback)
+		-- The folded-paper icon is the Announcements tab.
+		makeNavigationIcon(navigationRow, "Announcements", 168, 167, resolvedAssets.AnnouncementsIcon, buildAnnouncementsFallback)
+		addLine(navigationRow, UDim2.fromOffset(167, 6), UDim2.fromOffset(1, 31), 0.4, Config.Line, 8)
+
+		local homeContent = create("Frame", {
+			Name = "HomeView",
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 1,
+		}, root)
+		Menu.views.Home = homeContent
+
+		local keyBar, keyButton, keyLabel = makePanelBar(homeContent, "KeySystem", 48, 54, "Key System")
+		local keyStroke = keyBar:FindFirstChildOfClass("UIStroke")
+		-- The editable field lives in the flat overlay ScreenGui, then follows the
+		-- projected 3D Key System bar every frame. This prevents Roblox's mobile
+		-- keyboard from lifting the field away from the Success/Key System box.
+		local keyInput = create("TextBox", {
+			Name = "KeyInputOverlay",
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromOffset(-5000, -5000),
+			Size = UDim2.fromOffset(300, 48),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ClearTextOnFocus = false,
+			Font = MEDIUM_FONT,
+			MultiLine = false,
+			PlaceholderColor3 = Config.Muted,
+			PlaceholderText = "TYPE ANY KEY  •  PRESS ENTER",
+			Text = "",
+			TextColor3 = Config.White,
+			TextSize = 16,
+			TextStrokeTransparency = 0.82,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			Visible = false,
+			ZIndex = 200,
+		}, overlayGui)
+
+		-- News is now one joined card: no separate News bar above the experience image.
+		local imageHolder = create("Frame", {
+			Name = "CurrentGameNews",
+			Position = UDim2.fromOffset(0, 108),
+			Size = UDim2.fromOffset(335, 146),
+			BackgroundColor3 = Color3.fromRGB(43, 43, 49),
+			BorderSizePixel = 0,
+			ClipsDescendants = true,
+			ZIndex = 2,
+		}, homeContent)
+		create("UIGradient", {
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(21, 22, 27)),
+				ColorSequenceKeypoint.new(0.55, Color3.fromRGB(68, 68, 76)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(25, 25, 29)),
+			}),
+			Rotation = 12,
+		}, imageHolder)
+
+		local loadingLabel = makeText(imageHolder, {
+			Name = "Loading",
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.new(1, -20, 0, 20),
+			Text = "DETECTING CURRENT EXPERIENCE",
+			TextColor3 = Config.Secondary,
+			TextSize = 11,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			ZIndex = 3,
+		})
+
+		local placeId = game.PlaceId
+		local thumbnail = ""
+		if placeId and placeId > 0 then
+			thumbnail = string.format("rbxthumb://type=GameThumbnail&id=%d&w=768&h=432", placeId)
+		end
+
+		local gameImage = create("ImageLabel", {
+			Name = "Thumbnail",
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Image = thumbnail,
+			ScaleType = Enum.ScaleType.Crop,
+			ZIndex = 4,
+		}, imageHolder)
+		addStroke(imageHolder, Config.Line, 0.42, 1)
+
+		local shade = create("Frame", {
+			Name = "ImageShade",
+			Size = UDim2.fromScale(1, 1),
+			BackgroundColor3 = Color3.new(0, 0, 0),
+			BackgroundTransparency = 0.72,
+			BorderSizePixel = 0,
+			ZIndex = 5,
+		}, imageHolder)
+		create("UIGradient", {
+			Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 0.82),
+				NumberSequenceKeypoint.new(0.62, 0.94),
+				NumberSequenceKeypoint.new(1, 0.25),
+			}),
+			Rotation = 90,
+		}, shade)
+
+		local newsBody = create("Frame", {
+			Name = "NewsBody",
+			Position = UDim2.fromOffset(0, 254),
+			Size = UDim2.fromOffset(335, 96),
+			BackgroundColor3 = Config.PanelRaised,
+			BackgroundTransparency = 0.12,
+			BorderSizePixel = 0,
+			ZIndex = 2,
+		}, homeContent)
+		addStroke(newsBody, Config.Line, 0.42, 1)
+
+		local titleLabel = makeText(newsBody, {
+			Name = "CurrentGameTitle",
+			Position = UDim2.fromOffset(5, 6),
+			Size = UDim2.fromOffset(325, 17),
+			Font = BOLD_FONT,
+			Text = string.upper((game.Name and game.Name ~= "") and game.Name or "CURRENT GAME"),
+			TextColor3 = Config.Accent,
+			TextSize = 13,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			ZIndex = 5,
+		})
+
+		local descriptionLabel = makeText(newsBody, {
+			Name = "CurrentGameDescription",
+			Position = UDim2.fromOffset(5, 23),
+			Size = UDim2.fromOffset(325, 51),
+			Text = Config.DefaultDescription,
+			TextColor3 = Config.Secondary,
+			TextSize = 12,
+			TextWrapped = true,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Top,
+			ZIndex = 5,
+		})
+
+		makeText(newsBody, {
+			Name = "Date",
+			Position = UDim2.fromOffset(5, 74),
+			Size = UDim2.fromOffset(325, 17),
+			Font = MEDIUM_FONT,
+			Text = Config.NewsDate .. " | Zenith Supported",
+			TextColor3 = Config.Accent,
+			TextSize = 12,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			ZIndex = 5,
+		})
+
+		local _, updatesButton = makePanelBar(homeContent, "Updates", 358, 55, "Updates")
+
+		local keybindRow = create("Frame", {
+			Name = "KeybindRow",
+			Position = UDim2.fromOffset(0, 417),
+			Size = UDim2.fromOffset(335, 34),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 4,
+		}, homeContent)
+
+		local function makeHotkey(key, labelText, x, labelWidth, dividerAfter)
+			local keyLabel = makeText(keybindRow, {
+				Name = key .. "Key",
+				Position = UDim2.fromOffset(x, 0),
+				Size = UDim2.fromOffset(18, 30),
+				Font = MEDIUM_FONT,
+				Text = key,
+				TextColor3 = Config.Accent,
+				TextSize = 15,
+				TextXAlignment = Enum.TextXAlignment.Center,
+				ZIndex = 6,
+			})
+			addLine(keybindRow, UDim2.fromOffset(x + 22, 5), UDim2.fromOffset(1, 23), 0.28, Config.Line, 6)
+			local valueLabel = makeText(keybindRow, {
+				Name = key .. "Action",
+				Position = UDim2.fromOffset(x + 28, 0),
+				Size = UDim2.fromOffset(labelWidth, 30),
+				Text = labelText,
+				TextColor3 = Config.White,
+				TextSize = 13,
+				TextScaled = true,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				ZIndex = 6,
+			})
+			-- Scales down only when a label (e.g. "Zenith.com") would overflow its slot.
+			create("UITextSizeConstraint", { MaxTextSize = 13, MinTextSize = 8 }, valueLabel)
+			if dividerAfter then
+				addLine(keybindRow, UDim2.fromOffset(x + 30 + labelWidth, 5), UDim2.fromOffset(1, 23), 0.28, Config.Line, 6)
+			end
+			Menu.hotkeys[key] = { key = keyLabel, value = valueLabel }
+		end
+
+		-- Slots: F 0-130 | X 134-234 | C 238-335 (no text overlaps the next keybind).
+		makeHotkey("F", "Announcements", 0, 100, true)
+		makeHotkey("X", "Key Link", 134, 70, true)
+		makeHotkey("C", "Discord", 238, 69, false)
+
+		local announcementsShortcut = makeButton(keybindRow, {
+			Name = "AnnouncementsShortcut",
+			Position = UDim2.fromOffset(0, 0),
+			Size = UDim2.fromOffset(132, 30),
+			ZIndex = 9,
+		})
+		connect(announcementsShortcut.Activated, function()
+			Menu:OpenAnnouncements()
+		end)
+
+		local keyLinkButton = makeButton(keybindRow, {
+			Name = "KeyLinkButton",
+			Position = UDim2.fromOffset(132, 0),
+			Size = UDim2.fromOffset(104, 30),
+			ZIndex = 9,
+		})
+		connect(keyLinkButton.Activated, function()
+			Menu:PulseHotkey("X")
+			Menu:CopyKeyLink()
+			local callback = Menu.callbacks.KeyLink or Menu.callbacks.X
+			if type(callback) == "function" then
+				task.spawn(callback, Menu)
+			end
+		end)
+
+		local discordShortcut = makeButton(keybindRow, {
+			Name = "DiscordShortcut",
+			Position = UDim2.fromOffset(236, 0),
+			Size = UDim2.fromOffset(99, 30),
+			ZIndex = 9,
+		})
+		connect(discordShortcut.Activated, function()
+			Menu:OpenDiscord()
+		end)
+
+		local function makeEmptyView(name)
+			local view = create("Frame", {
+				Name = name .. "View",
+				Position = UDim2.fromOffset(0, 48),
+				Size = UDim2.fromOffset(335, 335),
+				BackgroundColor3 = Config.Panel,
+				BackgroundTransparency = 0.12,
+				BorderSizePixel = 0,
+				Visible = false,
+				ZIndex = 2,
+			}, root)
+			addStroke(view, Config.Line, 0.42, 1)
+			local emptyMessage = makeText(view, {
+				Name = "EmptyMessage",
+				Size = UDim2.fromScale(1, 1),
+				Font = MEDIUM_FONT,
+				Text = "Nothing here yet",
+				TextColor3 = Config.Secondary,
+				TextSize = 16,
+				TextXAlignment = Enum.TextXAlignment.Center,
+				TextYAlignment = Enum.TextYAlignment.Center,
+				ZIndex = 4,
+			})
+			Menu.views[name] = view
+			Menu.references[name .. "Message"] = emptyMessage
+			return view
+		end
+
+		local announcementsView = makeEmptyView("Announcements")
+		local updatesView = makeEmptyView("Updates")
+
+		Menu.references.KeySystemBar = keyBar
+		Menu.references.KeySystemButton = keyButton
+		Menu.references.KeySystemLabel = keyLabel
+		Menu.references.KeySystemInput = keyInput
+		Menu.references.KeySystemStroke = keyStroke
+		Menu.references.AnnouncementsShortcut = announcementsShortcut
+		Menu.references.KeyLinkButton = keyLinkButton
+		Menu.references.DiscordShortcut = discordShortcut
+		Menu.references.UpdatesButton = updatesButton
+		Menu.references.AnnouncementsView = announcementsView
+		Menu.references.UpdatesView = updatesView
+		Menu.references.GameImage = gameImage
+		Menu.references.GameImageLoading = loadingLabel
+		Menu.references.GameTitle = titleLabel
+		Menu.references.GameDescription = descriptionLabel
+
+		bindNavigationHover("Home")
+		bindNavigationHover("Announcements")
+		Menu:SetNavigation("Home")
+
+		local function restoreKeyPrompt()
+			if Menu.destroyed or Menu.keyAccepted then
+				return
+			end
+			keyInput.Visible = false
+			keyInput.Text = ""
+			keyLabel.Text = "Key System"
+			keyLabel.TextColor3 = Config.White
+			keyLabel.Visible = true
+			keyButton.Visible = true
+		end
+
+		local function submitKey()
+			if Menu.destroyed or Menu.keyAccepted then
+				return
+			end
+
+			if not string.find(keyInput.Text, "%S") then
+				keyInput.Text = ""
+				keyInput.PlaceholderText = "ENTER ANY KEY FIRST"
+				tween(keyInput, FAST_TWEEN, { TextColor3 = Config.Accent })
+				task.delay(0.2, function()
+					if not Menu.destroyed then
+						tween(keyInput, FAST_TWEEN, { TextColor3 = Config.White })
+					end
+				end)
+				return
+			end
+
+			local acceptedKey = keyInput.Text
+			Menu.keyAccepted = true
+			-- The Standard countdown starts now, at the moment a key is accepted.
+			-- It is written to Zenith/KeySystem.log so the Word Helper remembers it for 12 hours.
+			Menu.standardExpiresAt = ZenithKeyLog.Record()
+			if Menu.references.CountdownValue then
+				Menu.references.CountdownValue.Text = "12 Hours - Remaining"
+			end
+			keyInput.Visible = false
+			keyLabel.Visible = true
+			keyLabel.Text = "Success!"
+			keyLabel.TextColor3 = Color3.fromRGB(128, 255, 164)
+			keyButton.Visible = true
+			tween(keyBar, FAST_TWEEN, {
+				BackgroundColor3 = Color3.fromRGB(12, 36, 23),
+				BackgroundTransparency = 0.02,
+			})
+			if keyStroke then
+				tween(keyStroke, FAST_TWEEN, { Color = Color3.fromRGB(128, 255, 164), Transparency = 0.1 })
+			end
+
+			local callback = Menu.callbacks.KeyAccepted
+			if type(callback) == "function" then
+				task.spawn(callback, Menu, acceptedKey)
+			end
+
+			-- Slide the Key System out, remove it completely, then open the Word Helper.
+			task.delay(0.7, function()
+				if Menu.destroyed then
+					return
+				end
+				Menu:SetOpen(false)
+				task.wait(OPEN_TWEEN.Time + 0.1)
+				Menu:Destroy()
+				if type(onKeyAccepted) == "function" then
+					onKeyAccepted(Menu.standardExpiresAt)
+				end
+			end)
+		end
+
+		connect(keyButton.Activated, function()
+			if Menu.keyAccepted then
+				return
+			end
+			keyLabel.Visible = false
+			keyButton.Visible = false
+			keyInput.Visible = true
+			keyInput.PlaceholderText = "TYPE ANY KEY  •  PRESS ENTER"
+			task.defer(function()
+				if not Menu.destroyed and keyInput.Visible then
+					keyInput:CaptureFocus()
+				end
+			end)
+		end)
+		connect(keyInput.FocusLost, function(enterPressed)
+			if enterPressed then
+				submitKey()
+			else
+				restoreKeyPrompt()
+			end
+		end)
+		connect(updatesButton.Activated, function()
+			Menu:OpenUpdates()
+		end)
+
+		return root
+	end
+
+	local function createLogoSegment(parent, position, size, rotation, color, zIndex)
+		local segment = create("Frame", {
+			Position = position,
+			Size = size,
+			Rotation = rotation,
+			BackgroundColor3 = color,
+			BorderSizePixel = 0,
+			ZIndex = zIndex or 5,
+		}, parent)
+		create("UICorner", { CornerRadius = UDim.new(1, 0) }, segment)
+		return segment
+	end
+
+	local function buildDivisionLogoFallback(parent)
+		local holder = create("Frame", {
+			Name = "DivisionLogoVectorFallback",
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(92, 92),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 4,
+		}, parent)
+
+		local outerRing = create("Frame", {
+			Position = UDim2.fromOffset(5, 5),
+			Size = UDim2.fromOffset(82, 82),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 4,
+		}, holder)
+		create("UICorner", { CornerRadius = UDim.new(1, 0) }, outerRing)
+		addStroke(outerRing, Color3.fromRGB(215, 219, 225), 0, 7)
+
+		local topMask = create("Frame", {
+			Position = UDim2.fromOffset(28, 0),
+			Size = UDim2.fromOffset(37, 17),
+			BackgroundColor3 = Config.Panel,
+			BackgroundTransparency = 0.08,
+			BorderSizePixel = 0,
+			ZIndex = 5,
+		}, holder)
+		local dot = create("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.fromOffset(46, 0),
+			Size = UDim2.fromOffset(15, 15),
+			BackgroundColor3 = Color3.fromRGB(215, 219, 225),
+			BorderSizePixel = 0,
+			ZIndex = 7,
+		}, holder)
+		create("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
+
+		createLogoSegment(holder, UDim2.fromOffset(13, 38), UDim2.fromOffset(45, 7), -44, Color3.fromRGB(245, 246, 248), 6)
+		createLogoSegment(holder, UDim2.fromOffset(34, 38), UDim2.fromOffset(45, 7), 44, Color3.fromRGB(245, 246, 248), 6)
+		createLogoSegment(holder, UDim2.fromOffset(20, 55), UDim2.fromOffset(36, 7), -44, Color3.fromRGB(145, 151, 160), 6)
+		createLogoSegment(holder, UDim2.fromOffset(36, 55), UDim2.fromOffset(36, 7), 44, Color3.fromRGB(145, 151, 160), 6)
+		createLogoSegment(holder, UDim2.fromOffset(29, 70), UDim2.fromOffset(25, 7), -44, Color3.fromRGB(42, 46, 52), 6)
+		createLogoSegment(holder, UDim2.fromOffset(38, 70), UDim2.fromOffset(25, 7), 44, Color3.fromRGB(42, 46, 52), 6)
+
+		-- topMask is intentionally kept referenced so it is not mistaken for a tint element.
+		topMask.Name = "TransparentGapApproximation"
+		return holder
+	end
+
+	local function buildRightPanel(surfaceGui)
+		local root = create("Frame", {
+			Name = "RightMenu",
+			Position = UDim2.fromOffset(14, 8),
+			Size = UDim2.fromOffset(323, 313),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 1,
+		}, surfaceGui)
+		Menu.references.RightRoot = root
+
+		addLine(root, UDim2.fromOffset(0, 0), UDim2.fromOffset(323, 1), 0.25, Config.Line, 4)
+
+		-- Clearance and Division were intentionally removed. The supplied Zenith mark
+		-- is now the only centered identity in the upper section.
+		local logoHolder = create("Frame", {
+			Name = "ZenithLogoHolder",
+			Position = UDim2.fromOffset(96, 5),
+			Size = UDim2.fromOffset(131, 131),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 3,
+		}, root)
+		local logoImage = create("ImageLabel", {
+			Name = "ZenithLogoPNG",
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(118, 118),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Image = resolvedAssets.DivisionLogo,
+			ScaleType = Enum.ScaleType.Fit,
+			Visible = resolvedAssets.DivisionLogo ~= "",
+			ZIndex = 6,
+		}, logoHolder)
+		local logoFallback = buildDivisionLogoFallback(logoHolder)
+		create("UIScale", { Scale = 1.24 }, logoFallback)
+		logoFallback.Visible = not logoImage.Visible
+		local logoHomeButton = makeButton(logoHolder, {
+			Name = "HomeButton",
+			Size = UDim2.fromScale(1, 1),
+			ZIndex = 10,
+		})
+		connect(logoHomeButton.Activated, function()
+			Menu:OpenHome()
+		end)
+
+		local infoFrame = create("Frame", {
+			Name = "AccountInformation",
+			Position = UDim2.fromOffset(0, 145),
+			Size = UDim2.fromOffset(323, 94),
+			BackgroundColor3 = Config.Panel,
+			BackgroundTransparency = 0.18,
+			BorderSizePixel = 0,
+			ZIndex = 2,
+		}, root)
+		addLine(infoFrame, UDim2.fromOffset(0, 0), UDim2.fromOffset(323, 1), 0.42, Config.Line, 4)
+		addLine(infoFrame, UDim2.fromOffset(0, 93), UDim2.fromOffset(323, 1), 0.42, Config.Line, 4)
+
+		makeText(infoFrame, {
+			Name = "StandardLabel",
+			Position = UDim2.fromOffset(12, 2),
+			Size = UDim2.fromOffset(299, 20),
+			Text = "Standard",
+			TextColor3 = Config.White,
+			TextSize = 13,
+			ZIndex = 5,
+		})
+		local countdownValue = makeText(infoFrame, {
+			Name = "StandardRemaining",
+			Position = UDim2.fromOffset(12, 18),
+			Size = UDim2.fromOffset(299, 25),
+			Text = "Pending...",
+			TextColor3 = Config.Secondary,
+			TextSize = 19,
+			ZIndex = 5,
+		})
+
+		makeText(infoFrame, {
+			Name = "TimePlayedLabel",
+			Position = UDim2.fromOffset(12, 48),
+			Size = UDim2.fromOffset(299, 18),
+			Text = "Time Played",
+			TextColor3 = Config.White,
+			TextSize = 13,
+			ZIndex = 5,
+		})
+		local timePlayedValue = makeText(infoFrame, {
+			Name = "TimePlayedValue",
+			Position = UDim2.fromOffset(12, 64),
+			Size = UDim2.fromOffset(299, 24),
+			Text = "0d 0h 0m",
+			TextColor3 = Config.Secondary,
+			TextSize = 19,
+			ZIndex = 5,
+		})
+
+		local playerFrame = create("Frame", {
+			Name = "LocalPlayer",
+			Position = UDim2.fromOffset(0, 248),
+			Size = UDim2.fromOffset(323, 47),
+			BackgroundColor3 = Config.Panel,
+			BackgroundTransparency = 0.18,
+			BorderSizePixel = 0,
+			ZIndex = 2,
+		}, root)
+		addStroke(playerFrame, Config.Line, 0.5, 1)
+		local avatarBacking = create("Frame", {
+			Name = "AvatarBacking",
+			Position = UDim2.fromOffset(9, 6),
+			Size = UDim2.fromOffset(35, 35),
+			BackgroundColor3 = Color3.fromRGB(45, 45, 49),
+			BorderSizePixel = 0,
+			ZIndex = 4,
+		}, playerFrame)
+		addStroke(avatarBacking, Config.Line, 0.5, 1)
+		local avatar = create("ImageLabel", {
+			Name = "Avatar",
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Image = "",
+			ScaleType = Enum.ScaleType.Crop,
+			ZIndex = 5,
+		}, avatarBacking)
+		local playerName = makeText(playerFrame, {
+			Name = "Username",
+			Position = UDim2.fromOffset(59, 0),
+			Size = UDim2.fromOffset(251, 47),
+			Text = localPlayer.Name,
+			TextColor3 = Config.White,
+			TextSize = 14,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			ZIndex = 5,
+		})
+
+		addLine(root, UDim2.fromOffset(0, 304), UDim2.fromOffset(323, 1), 0.45, Config.Line, 4)
+
+		Menu.references.CountdownValue = countdownValue
+		Menu.references.TimePlayedValue = timePlayedValue
+		Menu.references.Avatar = avatar
+		Menu.references.PlayerName = playerName
+		Menu.references.DivisionLogo = logoImage
+		Menu.references.LogoHomeButton = logoHomeButton
+
+		return root
+	end
+
+	local screenGui = create("ScreenGui", {
+		Name = Config.GuiName,
+		DisplayOrder = Config.DisplayOrder,
+		IgnoreGuiInset = true,
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	}, playerGui)
+	Menu.references.ScreenGui = screenGui
+
+	-- Remove orphaned presentation objects left by an interrupted prior execution.
+	for _, staleName in ipairs({ "ZNTHLeftSurface", "ZNTHRightSurface" }) do
+		local staleSurface = playerGui:FindFirstChild(staleName)
+		if staleSurface then
+			staleSurface:Destroy()
+		end
+	end
+	local staleFolder = workspaceService:FindFirstChild("ZNTHMenu3D")
+	if staleFolder then
+		staleFolder:Destroy()
+	end
+	local staleBlur = lightingService:FindFirstChild("ZNTHMenuBlur")
+	if staleBlur then
+		staleBlur:Destroy()
+	end
+
+	local blurEffect = create("BlurEffect", {
+		Name = "ZNTHMenuBlur",
+		Enabled = false,
+		Size = 0,
+	}, lightingService)
+	Menu.references.BlurEffect = blurEffect
+
+	local surfaceFolder = create("Folder", {
+		Name = "ZNTHMenu3D",
+		Archivable = false,
+	}, workspaceService)
+	Menu.references.SurfaceFolder = surfaceFolder
+
+	local LEFT_CANVAS_SIZE = Vector2.new(410, 480)
+	local RIGHT_CANVAS_SIZE = Vector2.new(350, 400)
+
+	local function createWorldSurface(name, canvasSize)
+		local part = create("Part", {
+			Name = name .. "Plane",
+			Anchored = true,
+			Archivable = false,
+			CanCollide = false,
+			CanQuery = false,
+			CanTouch = false,
+			CastShadow = false,
+			Color = Color3.new(0, 0, 0),
+			CFrame = CFrame.new(0, 100000, 0),
+			LocalTransparencyModifier = 1,
+			Massless = true,
+			Size = Vector3.new(1, 1, 0.04),
+			Transparency = 1,
+		}, surfaceFolder)
+
+		local surfaceGui = create("SurfaceGui", {
+			Name = name,
+			Active = true,
+			Adornee = part,
+			AlwaysOnTop = true,
+			Brightness = 1,
+			CanvasSize = canvasSize,
+			Enabled = false,
+			Face = Enum.NormalId.Back,
+			LightInfluence = 0,
+			MaxDistance = 1000,
+			ResetOnSpawn = false,
+			SizingMode = Enum.SurfaceGuiSizingMode.FixedSize,
+			ZOffset = 0.01,
+		}, playerGui)
+
+		return part, surfaceGui
+	end
+
+	local leftPart, leftSurface = createWorldSurface("ZNTHLeftSurface", LEFT_CANVAS_SIZE)
+	local rightPart, rightSurface = createWorldSurface("ZNTHRightSurface", RIGHT_CANVAS_SIZE)
+	Menu.references.LeftPart = leftPart
+	Menu.references.RightPart = rightPart
+	Menu.references.LeftSurface = leftSurface
+	Menu.references.RightSurface = rightSurface
+
+	buildLeftPanel(leftSurface, screenGui)
+	buildRightPanel(rightSurface)
+
+
+	-- Rotation is controlled directly by dragging either visible 3D menu plane.
+	function Menu:SetOrientation(yaw, pitch)
+		self.targetOrientationYaw = math.clamp(tonumber(yaw) or 0, -Config.SurfaceMaxYaw, Config.SurfaceMaxYaw)
+		self.targetOrientationPitch = math.clamp(
+			tonumber(pitch) or Config.SurfaceDefaultPitch,
+			-Config.SurfaceMaxPitch,
+			Config.SurfaceMaxPitch
+		)
+	end
+
+	local function captureCoreGuiState()
+		if Menu.coreGuiCaptured then
+			return
+		end
+		Menu.coreGuiCaptured = true
+
+		local ok, coreTypes = pcall(function()
+			return Enum.CoreGuiType:GetEnumItems()
+		end)
+		if ok then
+			for _, coreType in ipairs(coreTypes) do
+				if coreType ~= Enum.CoreGuiType.All then
+					local stateOk, enabled = pcall(function()
+						return starterGui:GetCoreGuiEnabled(coreType)
+					end)
+					if stateOk then
+						Menu.coreGuiStates[coreType] = enabled
+					end
+				end
+			end
+		end
+
+		local topbarOk, topbarEnabled = pcall(function()
+			return starterGui:GetCore("TopbarEnabled")
+		end)
+		if topbarOk and type(topbarEnabled) == "boolean" then
+			Menu.topbarWasEnabled = topbarEnabled
+		end
+
+		-- Executors can usually reach the modern RobloxGui container even when the
+		-- legacy TopbarEnabled bridge is unavailable. Normal Studio clients simply
+		-- fail this protected lookup and continue with the supported StarterGui APIs.
+		pcall(function()
+			local robloxGui = coreGuiService:FindFirstChild("RobloxGui")
+			if robloxGui and robloxGui:IsA("ScreenGui") then
+				Menu.robloxGui = robloxGui
+				Menu.robloxGuiWasEnabled = robloxGui.Enabled
+			end
+		end)
+	end
+
+	local function setRobloxChromeHidden(hidden)
+		captureCoreGuiState()
+		if hidden then
+			-- The modern mobile Chrome bar responds more reliably when All is disabled
+			-- before individual CoreGui types and TopbarEnabled are applied.
+			pcall(function()
+				starterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, false)
+			end)
+		end
+		for coreType, wasEnabled in pairs(Menu.coreGuiStates) do
+			pcall(function()
+				starterGui:SetCoreGuiEnabled(coreType, hidden and false or wasEnabled)
+			end)
+		end
+		pcall(function()
+			starterGui:SetCore("TopbarEnabled", hidden and false or Menu.topbarWasEnabled)
+		end)
+		if Menu.robloxGui then
+			pcall(function()
+				Menu.robloxGui.Enabled = hidden and false or Menu.robloxGuiWasEnabled
+			end)
+		end
+	end
+
+	local function setMenuEnvironment(active, instant)
+		setRobloxChromeHidden(active)
+		blurEffect.Enabled = true
+		if instant then
+			blurEffect.Size = active and Config.BlurSize or 0
+		else
+			tween(blurEffect, OPEN_TWEEN, { Size = active and Config.BlurSize or 0 })
+		end
+
+		if not active then
+			task.delay(OPEN_TWEEN.Time + 0.03, function()
+				if not Menu.destroyed and not Menu.open and blurEffect.Size <= 0.1 then
+					blurEffect.Enabled = false
+				end
+			end)
+		else
+			-- Mobile Chrome can register after LocalScripts. Reapply during the short
+			-- opening window, but only while this menu is still active.
+			for _, retryDelay in ipairs({ 0.1, 0.35, 0.8, 1.4 }) do
+				task.delay(retryDelay, function()
+					if not Menu.destroyed and Menu.open then
+						setRobloxChromeHidden(true)
+					end
+				end)
+			end
+		end
+	end
+
+	local function expApproach(current, target, speed, deltaTime)
+		return current + (target - current) * (1 - math.exp(-speed * math.min(deltaTime, 0.1)))
+	end
+
+	-- Responsive sizing now controls world-space plane dimensions rather than flat GUI scale.
+	function Menu:UpdateScale()
+		if self.destroyed then
+			return
+		end
+		local camera = workspaceService.CurrentCamera
+		local viewport = camera and camera.ViewportSize or Vector2.new(Config.ReferenceWidth, Config.ReferenceHeight)
+		self.scale = math.clamp(math.min(viewport.X / Config.ReferenceWidth, viewport.Y / Config.ReferenceHeight), 0.62, 1.35)
+	end
+
+	local function placeSurface(part, canvasSize, centerX, centerY, yaw, pitch, camera, viewport)
+		local depth = Config.SurfaceDepth
+		local verticalWorldSize = 2 * depth * math.tan(math.rad(camera.FieldOfView * 0.5))
+		local worldPerPixel = verticalWorldSize / math.max(viewport.Y, 1)
+		-- Perspective expands the near edge; compressing physical width preserves
+		-- the reference's readable on-screen footprint while retaining a true trapezoid.
+		local width = canvasSize.X * Menu.scale * worldPerPixel * Config.SurfaceWidthCompression
+		local height = canvasSize.Y * Menu.scale * worldPerPixel
+		local localX = (centerX - viewport.X * 0.5) * worldPerPixel
+		local localY = -(centerY - viewport.Y * 0.5) * worldPerPixel
+
+		part.Size = Vector3.new(width, height, 0.04)
+		part.CFrame = camera.CFrame
+			* CFrame.new(localX, localY, -depth)
+			* CFrame.Angles(math.rad(pitch), math.rad(yaw), 0)
+	end
+
+	local KEY_INPUT_CANVAS_BOUNDS = {
+		left = 50,
+		top = 60,
+		width = 335,
+		height = 54,
+	}
+
+	local function surfaceCanvasPointToViewport(part, canvasSize, x, y, camera)
+		local localPoint = Vector3.new(
+			(x / canvasSize.X - 0.5) * part.Size.X,
+			(0.5 - y / canvasSize.Y) * part.Size.Y,
+			part.Size.Z * 0.5
+		)
+		local worldPoint = part.CFrame:PointToWorldSpace(localPoint)
+		local viewportPoint, onScreen = camera:WorldToViewportPoint(worldPoint)
+		return Vector2.new(viewportPoint.X, viewportPoint.Y), onScreen and viewportPoint.Z > 0
+	end
+
+	local function triangleSign(point, first, second)
+		return (point.X - second.X) * (first.Y - second.Y) - (first.X - second.X) * (point.Y - second.Y)
+	end
+
+	local function pointInTriangle(point, first, second, third)
+		local firstSign = triangleSign(point, first, second)
+		local secondSign = triangleSign(point, second, third)
+		local thirdSign = triangleSign(point, third, first)
+		local hasNegative = firstSign < 0 or secondSign < 0 or thirdSign < 0
+		local hasPositive = firstSign > 0 or secondSign > 0 or thirdSign > 0
+		return not (hasNegative and hasPositive)
+	end
+
+	local function pointInsideSurfaceRoot(point, part, canvasSize, left, top, width, height, camera)
+		local topLeft, topLeftVisible = surfaceCanvasPointToViewport(part, canvasSize, left, top, camera)
+		local topRight, topRightVisible = surfaceCanvasPointToViewport(part, canvasSize, left + width, top, camera)
+		local bottomLeft, bottomLeftVisible = surfaceCanvasPointToViewport(part, canvasSize, left, top + height, camera)
+		local bottomRight, bottomRightVisible = surfaceCanvasPointToViewport(part, canvasSize, left + width, top + height, camera)
+		if not (topLeftVisible or topRightVisible or bottomLeftVisible or bottomRightVisible) then
+			return false
+		end
+		return pointInTriangle(point, topLeft, topRight, bottomRight)
+			or pointInTriangle(point, topLeft, bottomRight, bottomLeft)
+	end
+
+	local function pointInsideMenu(point)
+		if not Menu.open then
+			return false
+		end
+		local camera = workspaceService.CurrentCamera
+		if not camera then
+			return false
+		end
+		return pointInsideSurfaceRoot(point, leftPart, LEFT_CANVAS_SIZE, 50, 12, 335, 452, camera)
+			or pointInsideSurfaceRoot(point, rightPart, RIGHT_CANVAS_SIZE, 14, 8, 323, 313, camera)
+	end
+
+	-- No separate orientation square is needed: a drag that begins directly on
+	-- either menu plane rotates both planes. A small movement threshold preserves
+	-- normal taps on Home, Announcements, Updates, Key System, and the footer.
+	connect(userInputService.InputBegan, function(input)
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+		local keyInput = Menu.references.KeySystemInput
+		if keyInput and keyInput.Visible then
+			return
+		end
+		local position = Vector2.new(input.Position.X, input.Position.Y)
+		if not pointInsideMenu(position) then
+			return
+		end
+		Menu.orientationDragging = true
+		Menu.orientationDragInput = input
+		Menu.orientationDragStart = position
+		Menu.orientationDragOriginYaw = Menu.targetOrientationYaw
+		Menu.orientationDragOriginPitch = Menu.targetOrientationPitch
+		Menu.orientationDragDistance = 0
+	end)
+
+	connect(userInputService.InputChanged, function(input)
+		if not Menu.orientationDragging then
+			return
+		end
+		if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+		if Menu.orientationDragInput.UserInputType == Enum.UserInputType.Touch and input ~= Menu.orientationDragInput then
+			return
+		end
+		local position = Vector2.new(input.Position.X, input.Position.Y)
+		local totalDelta = position - Menu.orientationDragStart
+		Menu.orientationDragDistance = totalDelta.Magnitude
+		if Menu.orientationDragDistance >= 4 then
+			Menu:SetOrientation(
+				Menu.orientationDragOriginYaw + totalDelta.X * 0.22,
+				Menu.orientationDragOriginPitch - totalDelta.Y * 0.18
+			)
+		end
+	end)
+
+	connect(userInputService.InputEnded, function(input)
+		if not Menu.orientationDragging then
+			return
+		end
+		local activeInput = Menu.orientationDragInput
+		local matchingMouse = activeInput.UserInputType == Enum.UserInputType.MouseButton1
+			and input.UserInputType == Enum.UserInputType.MouseButton1
+		local matchingTouch = activeInput.UserInputType == Enum.UserInputType.Touch and input == activeInput
+		if not matchingMouse and not matchingTouch then
+			return
+		end
+		Menu.orientationDragging = false
+		Menu.orientationDragInput = nil
+	end)
+
+	local function updateKeyInputOverlay(camera)
+		local keyInput = Menu.references.KeySystemInput
+		if not keyInput or not keyInput.Visible then
+			return
+		end
+
+		local bounds = KEY_INPUT_CANVAS_BOUNDS
+		local topLeft, topLeftVisible = surfaceCanvasPointToViewport(leftPart, LEFT_CANVAS_SIZE, bounds.left, bounds.top, camera)
+		local topRight, topRightVisible = surfaceCanvasPointToViewport(leftPart, LEFT_CANVAS_SIZE, bounds.left + bounds.width, bounds.top, camera)
+		local bottomLeft, bottomLeftVisible = surfaceCanvasPointToViewport(leftPart, LEFT_CANVAS_SIZE, bounds.left, bounds.top + bounds.height, camera)
+		local bottomRight, bottomRightVisible = surfaceCanvasPointToViewport(
+			leftPart,
+			LEFT_CANVAS_SIZE,
+			bounds.left + bounds.width,
+			bounds.top + bounds.height,
+			camera
+		)
+		if not (topLeftVisible or topRightVisible or bottomLeftVisible or bottomRightVisible) then
+			return
+		end
+
+		local centerX = (topLeft.X + topRight.X + bottomLeft.X + bottomRight.X) * 0.25
+		local centerY = (topLeft.Y + topRight.Y + bottomLeft.Y + bottomRight.Y) * 0.25
+		local projectedWidth = ((topRight - topLeft).Magnitude + (bottomRight - bottomLeft).Magnitude) * 0.5
+		local projectedHeight = ((bottomLeft - topLeft).Magnitude + (bottomRight - topRight).Magnitude) * 0.5
+		local edgeCenterLeft = (topLeft + bottomLeft) * 0.5
+		local edgeCenterRight = (topRight + bottomRight) * 0.5
+		local edge = edgeCenterRight - edgeCenterLeft
+		local rotation = math.deg(math.atan2(edge.Y, edge.X))
+		-- Back-face canvas X can project in reverse; normalize so mobile text never
+		-- flips upside down while still following the bar's visible slope.
+		if rotation > 90 then
+			rotation = rotation - 180
+		elseif rotation < -90 then
+			rotation = rotation + 180
+		end
+
+		keyInput.Position = UDim2.fromOffset(centerX, centerY)
+		keyInput.Size = UDim2.fromOffset(math.max(120, projectedWidth - 26), math.max(34, projectedHeight - 4))
+		keyInput.Rotation = rotation
+	end
+
+	local function updateWorldPresentation(deltaTime)
+		if Menu.destroyed then
+			return
+		end
+		local camera = workspaceService.CurrentCamera
+		if not camera then
+			return
+		end
+		local viewport = camera.ViewportSize
+		if viewport.X <= 0 or viewport.Y <= 0 then
+			return
+		end
+		Menu.scale = math.clamp(math.min(viewport.X / Config.ReferenceWidth, viewport.Y / Config.ReferenceHeight), 0.62, 1.35)
+
+		Menu.openAmount = expApproach(Menu.openAmount, Menu.targetOpenAmount, 10.5, deltaTime)
+		Menu.orientationYaw = expApproach(Menu.orientationYaw, Menu.targetOrientationYaw, 9, deltaTime)
+		Menu.orientationPitch = expApproach(Menu.orientationPitch, Menu.targetOrientationPitch, 9, deltaTime)
+
+		if math.abs(Menu.openAmount - Menu.targetOpenAmount) < 0.001 then
+			Menu.openAmount = Menu.targetOpenAmount
+		end
+		local reveal = 1 - ((1 - Menu.openAmount) ^ 3)
+		local leftClosedX = -LEFT_CANVAS_SIZE.X * Menu.scale * 0.58
+		local leftOpenX = 210 * Menu.scale
+		local rightClosedX = viewport.X + RIGHT_CANVAS_SIZE.X * Menu.scale * 0.58
+		local rightOpenX = viewport.X - 193 * Menu.scale
+		local leftCenterX = leftClosedX + (leftOpenX - leftClosedX) * reveal
+		local rightCenterX = rightClosedX + (rightOpenX - rightClosedX) * reveal
+		-- Align the visible root tops even though each SurfaceGui has a different
+		-- canvas height and internal top padding.
+		local sharedRootTop = viewport.Y * 0.245
+		local leftCenterY = sharedRootTop + (LEFT_CANVAS_SIZE.Y * 0.5 - 12) * Menu.scale
+		local rightCenterY = sharedRootTop + (RIGHT_CANVAS_SIZE.Y * 0.5 - 8) * Menu.scale
+
+		placeSurface(
+			leftPart,
+			LEFT_CANVAS_SIZE,
+			leftCenterX,
+			leftCenterY,
+			Config.SurfaceInwardYaw + Menu.orientationYaw,
+			Menu.orientationPitch,
+			camera,
+			viewport
+		)
+		placeSurface(
+			rightPart,
+			RIGHT_CANVAS_SIZE,
+			rightCenterX,
+			rightCenterY,
+			-Config.SurfaceInwardYaw + Menu.orientationYaw,
+			Menu.orientationPitch,
+			camera,
+			viewport
+		)
+		updateKeyInputOverlay(camera)
+
+		local shouldRender = Menu.openAmount > 0.005 or Menu.targetOpenAmount > 0
+		leftSurface.Enabled = shouldRender
+		rightSurface.Enabled = shouldRender
+	end
+
+	connect(runService.RenderStepped, updateWorldPresentation)
+
+	function Menu:SetOpen(shouldOpen, instant)
+		if self.destroyed then
+			return
+		end
+
+		shouldOpen = shouldOpen == true
+		self.open = shouldOpen
+		self.targetOpenAmount = shouldOpen and 1 or 0
+
+		if shouldOpen then
+			leftSurface.Enabled = true
+			rightSurface.Enabled = true
+		else
+			self.orientationDragging = false
+			self.orientationDragInput = nil
+		end
+		if not shouldOpen and self.references.KeySystemInput and self.references.KeySystemInput.Visible then
+			self.references.KeySystemInput:ReleaseFocus()
+			self.references.KeySystemInput.Visible = false
+			self.references.KeySystemButton.Visible = true
+			self.references.KeySystemLabel.Visible = true
+		end
+
+		if instant then
+			self.openAmount = self.targetOpenAmount
+			updateWorldPresentation(0)
+		end
+		setMenuEnvironment(shouldOpen, instant == true)
+	end
+	function Menu:Toggle()
+		self:SetOpen(not self.open)
+	end
+
+	function Menu:PulseHotkey(key)
+		local hotkey = self.hotkeys[key]
+		if not hotkey then
+			return
+		end
+
+		hotkey.key.TextColor3 = Config.White
+		hotkey.value.TextColor3 = Config.Accent
+		hotkey.key.TextSize = 17
+		tween(hotkey.key, FAST_TWEEN, { TextColor3 = Config.Accent, TextSize = 15 })
+		tween(hotkey.value, FAST_TWEEN, { TextColor3 = Config.White })
+	end
+
+	function Menu:OpenHome()
+		self:SetNavigation("Home")
+		local callback = self.callbacks.Home
+		if type(callback) == "function" then
+			task.spawn(callback, self)
+		end
+	end
+
+	function Menu:OpenAnnouncements()
+		self:SetNavigation("Announcements")
+		self:PulseHotkey("F")
+		local callback = self.callbacks.Announcements or self.callbacks.F
+		if type(callback) == "function" then
+			task.spawn(callback, self)
+		end
+	end
+
+	function Menu:OpenUpdates()
+		self:SetNavigation("Updates")
+		local callback = self.callbacks.Updates
+		if type(callback) == "function" then
+			task.spawn(callback, self)
+		end
+	end
+
+	function Menu:OpenDiscord()
+		self:PulseHotkey("C")
+		local callback = self.callbacks.Discord or self.callbacks.C
+		if type(callback) == "function" then
+			task.spawn(callback, self)
+		end
+	end
+
+	function Menu:CopyKeyLink()
+		local copied = false
+		if clipboardWriter then
+			copied = pcall(clipboardWriter, KEY_LINK_TEXT)
+		end
+
+		local hotkey = self.hotkeys.X
+		if hotkey then
+			hotkey.value.Text = copied and "Copied!" or "Zenith.com"
+			hotkey.value.TextColor3 = copied and Config.White or Config.Secondary
+			task.delay(0.9, function()
+				if not Menu.destroyed and hotkey.value.Parent then
+					hotkey.value.Text = "Key Link"
+					hotkey.value.TextColor3 = Config.White
+				end
+			end)
+		end
+		return copied
+	end
+
+	local function sanitizeDescription(value)
+		if type(value) ~= "string" or value == "" then
+			return Config.DefaultDescription
+		end
+		local sanitized = string.gsub(value, "[%c]+", " ")
+		sanitized = string.gsub(sanitized, "%s+", " ")
+
+		-- Truncate by UTF-8 character boundary so an emoji or accented title can
+		-- never leave invalid text in the Roblox label.
+		local characterCount = utf8.len(sanitized)
+		if characterCount and characterCount > 175 then
+			local byteAfterLimit = utf8.offset(sanitized, 173)
+			if byteAfterLimit then
+				sanitized = string.sub(sanitized, 1, byteAfterLimit - 1) .. "..."
+			end
+		end
+		return sanitized
+	end
+
+	-- Current experience data: title, real game thumbnail, and description.
+	local function bindCurrentGame()
+		local image = Menu.references.GameImage
+		if image.Image ~= "" then
+			task.spawn(function()
+				pcall(function()
+					contentProvider:PreloadAsync({ image })
+				end)
+				if Menu.destroyed then
+					return
+				end
+				if image.IsLoaded then
+					Menu.references.GameImageLoading.Visible = false
+				end
+			end)
+		end
+
+		task.spawn(function()
+			local ok, information = pcall(function()
+				return marketplaceService:GetProductInfo(game.PlaceId, Enum.InfoType.Asset)
+			end)
+
+			if Menu.destroyed or not ok or type(information) ~= "table" then
+				return
+			end
+
+			if type(information.Name) == "string" and information.Name ~= "" then
+				Menu.references.GameTitle.Text = string.upper(information.Name)
+			end
+			Menu.references.GameDescription.Text = sanitizeDescription(information.Description)
+		end)
+	end
+
+	-- Local Roblox username + headshot, loaded entirely on the client.
+	local function bindLocalPlayer()
+		Menu.references.PlayerName.Text = localPlayer.Name
+		task.spawn(function()
+			local ok, thumbnail = pcall(function()
+				return playersService:GetUserThumbnailAsync(
+					localPlayer.UserId,
+					Enum.ThumbnailType.HeadShot,
+					Enum.ThumbnailSize.Size180x180
+				)
+			end)
+			if not Menu.destroyed and ok and type(thumbnail) == "string" then
+				Menu.references.Avatar.Image = thumbnail
+			end
+		end)
+	end
+
+	local function getServerTime()
+		local ok, value = pcall(function()
+			return workspaceService:GetServerTimeNow()
+		end)
+		if ok and type(value) == "number" then
+			return value
+		end
+		return os.time()
+	end
+
+	Menu.getServerTime = getServerTime
+	local startedAt = getServerTime()
+	-- Clear the expiry left by older versions, which started the timer at launch.
+	pcall(function()
+		localPlayer:SetAttribute("ZNTHStandardExpiresAt", nil)
+	end)
+
+	local function formatRemaining(seconds)
+		seconds = math.max(0, math.floor(seconds + 0.5))
+		if seconds <= 0 then
+			return "Expired"
+		end
+		if seconds >= Config.StandardDurationSeconds then
+			return "12 Hours - Remaining"
+		end
+		local hours = math.floor(seconds / 3600)
+		local minutes = math.floor((seconds % 3600) / 60)
+		local remainingSeconds = seconds % 60
+		return string.format("%02d:%02d:%02d - Remaining", hours, minutes, remainingSeconds)
+	end
+
+	local function formatPlayed(seconds)
+		seconds = math.max(0, math.floor(seconds))
+		local days = math.floor(seconds / 86400)
+		local hours = math.floor((seconds % 86400) / 3600)
+		local minutes = math.floor((seconds % 3600) / 60)
+		return string.format("%dd %dh %dm", days, hours, minutes)
+	end
+
+	local function updateTimers()
+		local now = getServerTime()
+		Menu.references.CountdownValue.Text = (Menu.keyAccepted and Menu.standardExpiresAt) and formatRemaining(Menu.standardExpiresAt - os.time()) or "Pending..."
+		Menu.references.TimePlayedValue.Text = formatPlayed(now - startedAt)
+	end
+
+	local timerAccumulator = 1
+	connect(runService.Heartbeat, function(deltaTime)
+		timerAccumulator = timerAccumulator + deltaTime
+		if timerAccumulator >= 1 then
+			timerAccumulator = timerAccumulator % 1
+			updateTimers()
+		end
+	end)
+	updateTimers()
+
+	-- RightShift always toggles the complete presentation, even while the key box is focused.
+	connect(userInputService.InputBegan, function(input, gameProcessed)
+		if input.KeyCode == Enum.KeyCode.RightShift then
+			Menu:Toggle()
+			return
+		end
+		if gameProcessed or userInputService:GetFocusedTextBox() then
+			return
+		end
+
+		if input.KeyCode == Enum.KeyCode.Z then
+			if not Menu.open then
+				Menu:SetOpen(true)
+			end
+			Menu:OpenHome()
+		elseif input.KeyCode == Enum.KeyCode.F then
+			Menu:OpenAnnouncements()
+		elseif input.KeyCode == Enum.KeyCode.X then
+			Menu:PulseHotkey("X")
+			Menu:CopyKeyLink()
+			local callback = Menu.callbacks.KeyLink or Menu.callbacks.X
+			if type(callback) == "function" then
+				task.spawn(callback, Menu)
+			end
+		elseif input.KeyCode == Enum.KeyCode.C then
+			Menu:OpenDiscord()
+		end
+	end)
+
+	local function bindViewport()
+		local camera = workspaceService.CurrentCamera
+		if camera then
+			connect(camera:GetPropertyChangedSignal("ViewportSize"), function()
+				Menu:UpdateScale()
+			end)
+		end
+	end
+
+	connect(workspaceService:GetPropertyChangedSignal("CurrentCamera"), function()
+		Menu:UpdateScale()
+	end)
+
+	function Menu:Destroy()
+		if self.destroyed then
+			return
+		end
+
+		if self.references.KeySystemInput and self.references.KeySystemInput:IsFocused() then
+			self.references.KeySystemInput:ReleaseFocus()
+		end
+		if self.coreGuiCaptured then
+			setRobloxChromeHidden(false)
+		end
+		self.destroyed = true
+
+		for _, connection in ipairs(self.connections) do
+			if connection and connection.Connected then
+				connection:Disconnect()
+			end
+		end
+		table.clear(self.connections)
+
+		for _, referenceName in ipairs({ "ScreenGui", "LeftSurface", "RightSurface", "SurfaceFolder", "BlurEffect" }) do
+			local object = self.references[referenceName]
+			if object and object.Parent then
+				object:Destroy()
+			end
+		end
+
+		if sharedEnvironment.ZNTHMainMenu == self then
+			sharedEnvironment.ZNTHMainMenu = nil
+		end
+	end
+
+	bindViewport()
+	Menu:UpdateScale()
+	bindCurrentGame()
+	bindLocalPlayer()
+	sharedEnvironment.ZNTHMainMenu = Menu
+
+	-- Start just off-screen, then reproduce the two-sided entrance from the reference.
+	Menu:SetOpen(false, true)
+	task.defer(function()
+		if not Menu.destroyed then
+			Menu:SetOpen(true)
+		end
+	end)
+
+	return Menu
+end
+
+-- ===================== WORD HELPER =====================
+launchWordHelper = function(standardExpiresAt)
+	-- One word window presented on the same camera-relative 3D plane as the
+	-- Key System. No generic tabs, feature pages, settings, or statistics remain.
+	local playersService = game:GetService("Players")
+	local userInputService = game:GetService("UserInputService")
+	local tweenService = game:GetService("TweenService")
+	local runService = game:GetService("RunService")
+	local workspaceService = game:GetService("Workspace")
+	local lightingService = game:GetService("Lighting")
+	local starterGui = game:GetService("StarterGui")
+	local coreGuiService = game:GetService("CoreGui")
+
+	if not game:IsLoaded() then
+		game.Loaded:Wait()
+	end
+
+	local localPlayer = playersService.LocalPlayer
+	while not localPlayer do
+		playersService:GetPropertyChangedSignal("LocalPlayer"):Wait()
+		localPlayer = playersService.LocalPlayer
+	end
+	local playerGui = localPlayer:WaitForChild("PlayerGui")
+
+	local Config = {
+		GuiName = "ZNTHWordHelper",
+		SurfaceName = "ZNTHWordSurface",
+		SurfaceFolderName = "ZNTHWord3D",
+		BlurName = "ZNTHWordBlur",
+		DisplayOrder = 101,
+		CanvasSize = Vector2.new(480, 700),
+		RootLeft = 20,
+		RootTop = 16,
+		RootWidth = 440,
+		RootHeight = 668,
+		HeaderHeight = 56,
+		BlurSize = 18,
+		SurfaceDepth = 8,
+		SurfaceWidthCompression = 0.91,
+		SurfaceDefaultYaw = 0,
+		SurfaceDefaultPitch = -3,
+		SurfaceMaxYaw = 26,
+		SurfaceMaxPitch = 15,
+		MaximumResults = 140,
+		DictionaryFile = "Zenith/words.txt",
+		DictionaryUrl = "https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt",
+
+		-- The exact neutral palette used by the Key System template.
+		Accent = Color3.fromRGB(207, 211, 217),
+		Panel = Color3.fromRGB(5, 5, 6),
+		PanelRaised = Color3.fromRGB(12, 13, 15),
+		Row = Color3.fromRGB(24, 25, 28),
+		Hover = Color3.fromRGB(34, 35, 38),
+		Selected = Color3.fromRGB(46, 48, 53),
+		White = Color3.fromRGB(242, 243, 245),
+		Secondary = Color3.fromRGB(181, 185, 191),
+		Muted = Color3.fromRGB(108, 112, 119),
+		Line = Color3.fromRGB(198, 202, 208),
+		Danger = Color3.fromRGB(224, 83, 91),
+	}
+
+	local REGULAR_FONT = Enum.Font.Gotham
+	local MEDIUM_FONT = Enum.Font.GothamMedium
+	local BOLD_FONT = Enum.Font.GothamBold
+	local FAST_TWEEN = TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local OPEN_TWEEN = TweenInfo.new(0.42, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+	local PRESS_TWEEN = TweenInfo.new(0.09, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+	-- This compact list makes the helper useful offline. A complete English list is
+	-- loaded and cached in the background when the executor permits HTTP/file APIs.
+	local FALLBACK_WORDS = [[
+aardvark
+ability
+absence
+academy
+account
+acoustic
+activate
+adventure
+airplane
+alphabet
+amazing
+ancient
+answer
+anything
+apricot
+argument
+arrival
+article
+athletic
+balance
+balloon
+beautiful
+because
+between
+blanket
+building
+cabinet
+camera
+captain
+careful
+chocolate
+circle
+complete
+computer
+creative
+danger
+decision
+different
+discover
+distance
+dolphin
+dynamic
+earthquake
+electric
+elegant
+energy
+example
+fantastic
+favorite
+feature
+festival
+freedom
+future
+galaxy
+garden
+general
+gentle
+giraffe
+golden
+guitar
+harmony
+history
+holiday
+imagine
+important
+inside
+journey
+justice
+keyboard
+language
+library
+machine
+memory
+mountain
+natural
+negative
+negativisms
+nebulize
+nebulizes
+neglectednesses
+neoterists
+netbraider
+neuraxial
+neurocrine
+network
+neutral
+never
+newspaper
+observe
+ocean
+orange
+outside
+picture
+planet
+possible
+question
+quickly
+rainbow
+remember
+science
+silver
+special
+station
+strength
+sunlight
+system
+together
+triangle
+universe
+victory
+window
+wonderful
+zenith
+]]
+
+	local function getSharedEnvironment()
+		local environment = _G
+		local ok, executorEnvironment = pcall(function()
+			if type(getgenv) == "function" then
+				return getgenv()
+			end
+			return nil
+		end)
+		if ok and type(executorEnvironment) == "table" then
+			environment = executorEnvironment
+		end
+		return environment
+	end
+
+	local sharedEnvironment = getSharedEnvironment()
+	local previousHelper = sharedEnvironment.ZenithWordHelper
+	if type(previousHelper) == "table" and type(previousHelper.Destroy) == "function" then
+		pcall(function()
+			previousHelper:Destroy()
+		end)
+	end
+	local previousKeyMenu = sharedEnvironment.ZNTHMainMenu
+	if type(previousKeyMenu) == "table" and type(previousKeyMenu.Destroy) == "function" then
+		pcall(function()
+			previousKeyMenu:Destroy()
+		end)
+	end
+
+	local WordHelper = {
+		open = false,
+		destroyed = false,
+		minimized = false,
+		connections = {},
+		rowConnections = {},
+		rows = {},
+		words = {},
+		prefixBuckets = {},
+		callbacks = {},
+		references = {},
+		selectedWord = nil,
+		refreshVersion = 0,
+		scale = 1,
+		openAmount = 0,
+		targetOpenAmount = 0,
+		orientationYaw = Config.SurfaceDefaultYaw,
+		targetOrientationYaw = Config.SurfaceDefaultYaw,
+		orientationPitch = Config.SurfaceDefaultPitch,
+		targetOrientationPitch = Config.SurfaceDefaultPitch,
+		orientationDragging = false,
+		orientationDragDistance = 0,
+		suppressActivationUntil = 0,
+		coreGuiStates = {},
+		coreGuiCaptured = false,
+		topbarWasEnabled = true,
+		robloxGui = nil,
+		robloxGuiWasEnabled = true,
+		dictionaryLabel = "Built-in dictionary",
+	}
+
+	local function create(className, properties, parent)
+		local object = Instance.new(className)
+		for property, value in pairs(properties or {}) do
+			object[property] = value
+		end
+		if parent then
+			object.Parent = parent
+		end
+		return object
+	end
+
+	local function connect(signal, callback)
+		local connection = signal:Connect(callback)
+		table.insert(WordHelper.connections, connection)
+		return connection
+	end
+
+	local function connectRow(signal, callback)
+		local connection = signal:Connect(callback)
+		table.insert(WordHelper.rowConnections, connection)
+		return connection
+	end
+
+	local function tween(object, info, goals)
+		if WordHelper.destroyed or not object or not object.Parent then
+			return nil
+		end
+		local animation = tweenService:Create(object, info, goals)
+		animation:Play()
+		return animation
+	end
+
+	local function addStroke(parent, color, transparency, thickness)
+		return create("UIStroke", {
+			ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+			Color = color or Config.Line,
+			Transparency = transparency == nil and 0.48 or transparency,
+			Thickness = thickness or 1,
+			LineJoinMode = Enum.LineJoinMode.Miter,
+		}, parent)
+	end
+
+	local function addLine(parent, position, size, transparency, color, zIndex)
+		return create("Frame", {
+			Name = "Divider",
+			Position = position,
+			Size = size,
+			BackgroundColor3 = color or Config.Line,
+			BackgroundTransparency = transparency == nil and 0.52 or transparency,
+			BorderSizePixel = 0,
+			ZIndex = zIndex or 4,
+		}, parent)
+	end
+
+	local function makeText(parent, properties)
+		local defaults = {
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Font = REGULAR_FONT,
+			Text = "",
+			TextColor3 = Config.White,
+			TextSize = 14,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Center,
+			ZIndex = 5,
+		}
+		for property, value in pairs(properties or {}) do
+			defaults[property] = value
+		end
+		return create("TextLabel", defaults, parent)
+	end
+
+	local function makeButton(parent, properties)
+		local defaults = {
+			AutoButtonColor = false,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Text = "",
+			ZIndex = 8,
+		}
+		for property, value in pairs(properties or {}) do
+			defaults[property] = value
+		end
+		return create("TextButton", defaults, parent)
+	end
+
+	local function normalize(text)
+		text = string.lower(tostring(text or ""))
+		text = string.gsub(text, "^%s+", "")
+		text = string.gsub(text, "%s+$", "")
+		return text
+	end
+
+	local function normalizeLetters(text)
+		return string.gsub(normalize(text), "[^a-z]", "")
+	end
+
+	local function escapeRichText(text)
+		text = string.gsub(text, "&", "&amp;")
+		text = string.gsub(text, "<", "&lt;")
+		text = string.gsub(text, ">", "&gt;")
+		text = string.gsub(text, '"', "&quot;")
+		return text
+	end
+
+	local clipboardWriter = zenithFileFunction("setclipboard") or zenithFileFunction("toclipboard")
+	local readFile = zenithFileFunction("readfile")
+	local writeFile = zenithFileFunction("writefile")
+	local isFile = zenithFileFunction("isfile")
+	local makeFolder = zenithFileFunction("makefolder")
+
+	-- Clear orphaned objects from interrupted executions before making the one panel.
+	for _, staleName in ipairs({ Config.GuiName, Config.SurfaceName, "ZNTHLeftSurface", "ZNTHRightSurface" }) do
+		local staleGui = playerGui:FindFirstChild(staleName)
+		if staleGui then
+			staleGui:Destroy()
+		end
+	end
+	for _, staleName in ipairs({ Config.SurfaceFolderName, "ZNTHMenu3D" }) do
+		local staleFolder = workspaceService:FindFirstChild(staleName)
+		if staleFolder then
+			staleFolder:Destroy()
+		end
+	end
+	for _, staleName in ipairs({ Config.BlurName, "ZNTHMenuBlur" }) do
+		local staleBlur = lightingService:FindFirstChild(staleName)
+		if staleBlur then
+			staleBlur:Destroy()
+		end
+	end
+
+	-- The ScreenGui contains only projected editable fields. All visible cards,
+	-- words, and controls live on the camera-relative SurfaceGui plane.
+	local overlayGui = create("ScreenGui", {
+		Name = Config.GuiName,
+		DisplayOrder = Config.DisplayOrder,
+		IgnoreGuiInset = true,
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	}, playerGui)
+
+	local blurEffect = create("BlurEffect", {
+		Name = Config.BlurName,
+		Enabled = false,
+		Size = 0,
+	}, lightingService)
+
+	local surfaceFolder = create("Folder", {
+		Name = Config.SurfaceFolderName,
+		Archivable = false,
+	}, workspaceService)
+
+	local surfacePart = create("Part", {
+		Name = "WordPlane",
+		Anchored = true,
+		Archivable = false,
+		CanCollide = false,
+		CanQuery = false,
+		CanTouch = false,
+		CastShadow = false,
+		Color = Color3.new(0, 0, 0),
+		CFrame = CFrame.new(0, 100000, 0),
+		LocalTransparencyModifier = 1,
+		Massless = true,
+		Size = Vector3.new(1, 1, 0.04),
+		Transparency = 1,
+	}, surfaceFolder)
+
+	local surfaceGui = create("SurfaceGui", {
+		Name = Config.SurfaceName,
+		Active = true,
+		Adornee = surfacePart,
+		AlwaysOnTop = true,
+		Brightness = 1,
+		CanvasSize = Config.CanvasSize,
+		Enabled = false,
+		Face = Enum.NormalId.Back,
+		LightInfluence = 0,
+		MaxDistance = 1000,
+		ResetOnSpawn = false,
+		SizingMode = Enum.SurfaceGuiSizingMode.FixedSize,
+		ZOffset = 0.01,
+	}, playerGui)
+
+	WordHelper.references.ScreenGui = overlayGui
+	WordHelper.references.OverlayGui = overlayGui
+	WordHelper.references.BlurEffect = blurEffect
+	WordHelper.references.SurfaceFolder = surfaceFolder
+	WordHelper.references.SurfacePart = surfacePart
+	WordHelper.references.SurfaceGui = surfaceGui
+	WordHelper.references.LeftPart = surfacePart
+	WordHelper.references.LeftSurface = surfaceGui
+
+	local root = create("Frame", {
+		Name = "WordWindow",
+		Position = UDim2.fromOffset(Config.RootLeft, Config.RootTop),
+		Size = UDim2.fromOffset(Config.RootWidth, Config.RootHeight),
+		BackgroundColor3 = Config.Panel,
+		BackgroundTransparency = 0.04,
+		BorderSizePixel = 0,
+		ClipsDescendants = true,
+		ZIndex = 1,
+	}, surfaceGui)
+	addStroke(root, Config.Line, 0.42, 1)
+	create("UIGradient", {
+		Color = ColorSequence.new(Config.PanelRaised, Config.Panel),
+		Rotation = 90,
+	}, root)
+
+	local header = create("Frame", {
+		Name = "Header",
+		Size = UDim2.new(1, 0, 0, Config.HeaderHeight),
+		BackgroundColor3 = Color3.fromRGB(18, 19, 22),
+		BackgroundTransparency = 0.04,
+		BorderSizePixel = 0,
+		ZIndex = 4,
+	}, root)
+	addLine(header, UDim2.new(0, 0, 1, -1), UDim2.new(1, 0, 0, 1), 0.68, Config.Line, 6)
+
+	makeText(header, {
+		Name = "Title",
+		Position = UDim2.fromOffset(18, 0),
+		Size = UDim2.new(1, -116, 1, 0),
+		Font = BOLD_FONT,
+		RichText = true,
+		Text = '<b>ZENITH</b> <font color="#B5B9BF">WORD HELPER</font>',
+		TextColor3 = Config.White,
+		TextSize = 20,
+		ZIndex = 7,
+	})
+
+	local function makeHeaderButton(text, rightOffset)
+		local button = makeButton(header, {
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, rightOffset, 0.5, 0),
+			Size = UDim2.fromOffset(36, 34),
+			BackgroundColor3 = Config.Row,
+			BackgroundTransparency = 1,
+			Font = BOLD_FONT,
+			Text = text,
+			TextColor3 = Config.Secondary,
+			TextSize = 18,
+			ZIndex = 8,
+		})
+		return button
+	end
+
+	local minimizeButton = makeHeaderButton("−", -48)
+	local closeButton = makeHeaderButton("X", -10)
+
+	local body = create("Frame", {
+		Name = "Body",
+		Position = UDim2.fromOffset(0, Config.HeaderHeight),
+		Size = UDim2.new(1, 0, 1, -Config.HeaderHeight),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ZIndex = 2,
+	}, root)
+
+	local inputBar = create("Frame", {
+		Name = "InputBar",
+		Position = UDim2.fromOffset(14, 12),
+		Size = UDim2.new(1, -28, 0, 44),
+		BackgroundColor3 = Config.PanelRaised,
+		BackgroundTransparency = 0.08,
+		BorderSizePixel = 0,
+		ZIndex = 3,
+	}, body)
+	local inputStroke = addStroke(inputBar, Config.Line, 0.76, 1)
+
+	local inputDot = create("Frame", {
+		Name = "InputDot",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromOffset(16, 22),
+		Size = UDim2.fromOffset(8, 8),
+		BackgroundColor3 = Config.Accent,
+		BorderSizePixel = 0,
+		ZIndex = 5,
+	}, inputBar)
+	create("UICorner", { CornerRadius = UDim.new(1, 0) }, inputDot)
+
+	makeText(inputBar, {
+		Name = "InputLabel",
+		Position = UDim2.fromOffset(30, 0),
+		Size = UDim2.fromOffset(58, 44),
+		Font = MEDIUM_FONT,
+		Text = "Input:",
+		TextColor3 = Config.Secondary,
+		TextSize = 14,
+		ZIndex = 5,
+	})
+
+	local searchHolder = create("Frame", {
+		Name = "SearchHolder",
+		Position = UDim2.fromOffset(14, 64),
+		Size = UDim2.new(1, -28, 0, 44),
+		BackgroundColor3 = Config.Row,
+		BackgroundTransparency = 0.12,
+		BorderSizePixel = 0,
+		ZIndex = 3,
+	}, body)
+	local searchStroke = addStroke(searchHolder, Config.Line, 0.82, 1)
+
+	local listHolder = create("Frame", {
+		Name = "WordListHolder",
+		Position = UDim2.fromOffset(14, 116),
+		Size = UDim2.new(1, -28, 1, -158),
+		BackgroundColor3 = Config.Panel,
+		BackgroundTransparency = 0.34,
+		BorderSizePixel = 0,
+		ClipsDescendants = true,
+		ZIndex = 3,
+	}, body)
+	addStroke(listHolder, Config.Line, 0.82, 1)
+
+	local wordList = create("ScrollingFrame", {
+		Name = "Words",
+		Position = UDim2.fromOffset(5, 5),
+		Size = UDim2.new(1, -10, 1, -10),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = Config.Secondary,
+		ScrollBarImageTransparency = 0.28,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+		ScrollingEnabled = true,
+		ZIndex = 4,
+	}, listHolder)
+	create("UIListLayout", {
+		Padding = UDim.new(0, 6),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}, wordList)
+	create("UIPadding", {
+		PaddingTop = UDim.new(0, 2),
+		PaddingBottom = UDim.new(0, 2),
+		PaddingRight = UDim.new(0, 4),
+	}, wordList)
+
+	local emptyLabel = makeText(listHolder, {
+		Name = "Empty",
+		Size = UDim2.fromScale(1, 1),
+		Font = MEDIUM_FONT,
+		Text = "Loading words...",
+		TextColor3 = Config.Muted,
+		TextSize = 15,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Visible = true,
+		ZIndex = 6,
+	})
+
+	local statusLabel = makeText(body, {
+		Name = "Status",
+		Position = UDim2.new(0, 15, 1, -38),
+		Size = UDim2.new(1, -30, 0, 34),
+		Text = "Loading dictionary...",
+		TextColor3 = Config.Muted,
+		TextSize = 11,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		ZIndex = 5,
+	})
+
+	-- Editable fields are projected from these exact canvas rectangles every frame.
+	-- This is the same mobile-safe overlay technique used by the Key System input.
+	local INPUT_BOUNDS = {
+		left = Config.RootLeft + 14 + 88,
+		top = Config.RootTop + Config.HeaderHeight + 12,
+		width = Config.RootWidth - 28 - 98,
+		height = 44,
+	}
+	local SEARCH_BOUNDS = {
+		left = Config.RootLeft + 14 + 12,
+		top = Config.RootTop + Config.HeaderHeight + 64,
+		width = Config.RootWidth - 28 - 24,
+		height = 44,
+	}
+	local LIST_BOUNDS = {
+		left = Config.RootLeft + 14,
+		top = Config.RootTop + Config.HeaderHeight + 116,
+		width = Config.RootWidth - 28,
+		height = Config.RootHeight - Config.HeaderHeight - 158,
+	}
+
+	local function makeOverlayInput(name, bounds, placeholder, text, font)
+		local box = create("TextBox", {
+			Name = name,
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromOffset(-5000, -5000),
+			Size = UDim2.fromOffset(bounds.width, bounds.height),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ClearTextOnFocus = false,
+			Font = font or REGULAR_FONT,
+			MultiLine = false,
+			PlaceholderColor3 = Config.Muted,
+			PlaceholderText = placeholder,
+			Text = text or "",
+			TextColor3 = Config.White,
+			TextSize = 15,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			Visible = false,
+			ZIndex = 200,
+		}, overlayGui)
+		return box
+	end
+
+	local savedInput = type(sharedEnvironment.ZenithWordInput) == "string"
+		and normalizeLetters(sharedEnvironment.ZenithWordInput)
+		or ""
+	local inputBox = makeOverlayInput("RequiredLetters", INPUT_BOUNDS, "letters", savedInput, BOLD_FONT)
+	local searchBox = makeOverlayInput("SearchWords", SEARCH_BOUNDS, "Search words...", "", REGULAR_FONT)
+
+	WordHelper.references.Window = root
+	WordHelper.references.Root = root
+	WordHelper.references.Header = header
+	WordHelper.references.Body = body
+	WordHelper.references.InputBar = inputBar
+	WordHelper.references.InputBox = inputBox
+	WordHelper.references.SearchHolder = searchHolder
+	WordHelper.references.SearchBox = searchBox
+	WordHelper.references.WordList = wordList
+	WordHelper.references.EmptyLabel = emptyLabel
+	WordHelper.references.StatusLabel = statusLabel
+	WordHelper.references.MinimizeButton = minimizeButton
+	WordHelper.references.CloseButton = closeButton
+
+	local function setStatus(text, color)
+		statusLabel.Text = text
+		statusLabel.TextColor3 = color or Config.Muted
+	end
+
+	local function parseDictionary(content)
+		local output = {}
+		local seen = {}
+		for rawWord in string.gmatch(tostring(content or ""), "[^\r\n]+") do
+			local word = normalize(rawWord)
+			if #word >= 2 and #word <= 32 and string.match(word, "^[a-z]+$") and not seen[word] then
+				seen[word] = true
+				table.insert(output, word)
+			end
+		end
+		return output
+	end
+
+	local function buildBuckets(words)
+		local buckets = {}
+		for _, word in ipairs(words) do
+			if #word >= 2 then
+				local key = string.sub(word, 1, 2)
+				local bucket = buckets[key]
+				if not bucket then
+					bucket = {}
+					buckets[key] = bucket
+				end
+				table.insert(bucket, word)
+			end
+		end
+		return buckets
+	end
+
+	local function disconnectRows()
+		for _, connection in ipairs(WordHelper.rowConnections) do
+			if connection and connection.Connected then
+				connection:Disconnect()
+			end
+		end
+		table.clear(WordHelper.rowConnections)
+	end
+
+	local function clearRows()
+		disconnectRows()
+		for _, record in ipairs(WordHelper.rows) do
+			if record.button and record.button.Parent then
+				record.button:Destroy()
+			end
+		end
+		table.clear(WordHelper.rows)
+	end
+
+	local function formatWord(word, required)
+		local escaped = escapeRichText(word)
+		if required ~= "" and string.sub(word, 1, #required) == required then
+			local prefix = escapeRichText(string.sub(word, 1, #required))
+			local suffix = escapeRichText(string.sub(word, #required + 1))
+			return '<font color="#F2F3F5"><b>' .. prefix .. '</b></font><font color="#B5B9BF">' .. suffix .. "</font>"
+		end
+		return '<font color="#F2F3F5">' .. escaped .. "</font>"
+	end
+
+	local function styleRows()
+		for _, record in ipairs(WordHelper.rows) do
+			local selected = record.word == WordHelper.selectedWord
+			record.button.BackgroundColor3 = selected and Config.Selected or Config.Row
+			record.button.BackgroundTransparency = selected and 0.04 or 0.18
+			record.stroke.Transparency = selected and 0.38 or 0.88
+		end
+	end
+
+	function WordHelper:SelectWord(word)
+		if self.destroyed or os.clock() < self.suppressActivationUntil then
+			return false
+		end
+		self.selectedWord = word
+		styleRows()
+
+		local copied = false
+		if clipboardWriter then
+			copied = pcall(clipboardWriter, word)
+		end
+		setStatus(copied and ("Copied: " .. word) or ("Selected: " .. word), copied and Config.Secondary or Config.Muted)
+
+		local callback = self.callbacks.WordSelected
+		if type(callback) == "function" then
+			task.spawn(callback, self, word, copied)
+		end
+		return copied
+	end
+
+	local function createWordRow(word, required, order)
+		local button = makeButton(wordList, {
+			Name = word,
+			Size = UDim2.new(1, -2, 0, 46),
+			BackgroundColor3 = Config.Row,
+			BackgroundTransparency = 0.18,
+			Font = MEDIUM_FONT,
+			LayoutOrder = order,
+			RichText = true,
+			Text = formatWord(word, required),
+			TextColor3 = Config.White,
+			TextSize = 15,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			ZIndex = 5,
+		})
+		create("UIPadding", {
+			PaddingLeft = UDim.new(0, 14),
+			PaddingRight = UDim.new(0, 10),
+		}, button)
+		local stroke = addStroke(button, Config.Line, 0.88, 1)
+		local pressScale = create("UIScale", { Scale = 1 }, button)
+		local record = { button = button, stroke = stroke, word = word }
+		table.insert(WordHelper.rows, record)
+
+		connectRow(button.MouseButton1Down, function()
+			tween(pressScale, PRESS_TWEEN, { Scale = 0.985 })
+		end)
+		connectRow(button.MouseButton1Up, function()
+			tween(pressScale, PRESS_TWEEN, { Scale = 1 })
+		end)
+		connectRow(button.MouseEnter, function()
+			if WordHelper.selectedWord ~= word then
+				tween(button, FAST_TWEEN, { BackgroundColor3 = Config.Hover, BackgroundTransparency = 0.06 })
+				tween(stroke, FAST_TWEEN, { Transparency = 0.62 })
+			end
+		end)
+		connectRow(button.MouseLeave, function()
+			tween(pressScale, PRESS_TWEEN, { Scale = 1 })
+			if WordHelper.selectedWord ~= word then
+				tween(button, FAST_TWEEN, { BackgroundColor3 = Config.Row, BackgroundTransparency = 0.18 })
+				tween(stroke, FAST_TWEEN, { Transparency = 0.88 })
+			end
+		end)
+		connectRow(button.Activated, function()
+			WordHelper:SelectWord(word)
+		end)
+	end
+
+	local function refreshWords()
+		if WordHelper.destroyed then
+			return
+		end
+		clearRows()
+
+		local required = normalizeLetters(inputBox.Text)
+		local query = normalize(searchBox.Text)
+		local source = WordHelper.words
+		if #required >= 2 then
+			source = WordHelper.prefixBuckets[string.sub(required, 1, 2)] or {}
+		end
+
+		local shown = 0
+		for _, word in ipairs(source) do
+			local requiredMatch = required == "" or string.sub(word, 1, #required) == required
+			local searchMatch = query == "" or string.find(word, query, 1, true) ~= nil
+			if requiredMatch and searchMatch then
+				shown = shown + 1
+				createWordRow(word, required, shown)
+				if shown >= Config.MaximumResults then
+					break
+				end
+			end
+		end
+
+		emptyLabel.Visible = shown == 0
+		emptyLabel.Text = #WordHelper.words == 0 and "Loading words..." or "No words found"
+		wordList.CanvasPosition = Vector2.new(0, 0)
+		if shown == 0 then
+			setStatus("Try a different prefix or search", Config.Muted)
+		else
+			setStatus(string.format("%d word%s shown  •  tap a word to copy", shown, shown == 1 and "" or "s"), Config.Muted)
+		end
+	end
+
+	local function scheduleRefresh()
+		WordHelper.refreshVersion = WordHelper.refreshVersion + 1
+		local version = WordHelper.refreshVersion
+		task.delay(0.08, function()
+			if not WordHelper.destroyed and version == WordHelper.refreshVersion then
+				refreshWords()
+			end
+		end)
+	end
+
+	function WordHelper:SetWords(words)
+		if self.destroyed or type(words) ~= "table" then
+			return
+		end
+		local clean = {}
+		local seen = {}
+		for _, value in ipairs(words) do
+			local word = normalize(value)
+			if #word >= 2 and #word <= 32 and string.match(word, "^[a-z]+$") and not seen[word] then
+				seen[word] = true
+				table.insert(clean, word)
+			end
+		end
+		table.sort(clean)
+		self.words = clean
+		self.prefixBuckets = buildBuckets(clean)
+		scheduleRefresh()
+	end
+
+	function WordHelper:SetInput(text)
+		if self.destroyed then
+			return
+		end
+		inputBox.Text = normalizeLetters(text)
+		sharedEnvironment.ZenithWordInput = inputBox.Text
+		scheduleRefresh()
+	end
+
+	function WordHelper:SetSearch(text)
+		if self.destroyed then
+			return
+		end
+		searchBox.Text = tostring(text or "")
+		scheduleRefresh()
+	end
+
+	function WordHelper:Refresh()
+		scheduleRefresh()
+	end
+
+	function WordHelper:SetOrientation(yaw, pitch)
+		self.targetOrientationYaw = math.clamp(
+			tonumber(yaw) or Config.SurfaceDefaultYaw,
+			-Config.SurfaceMaxYaw,
+			Config.SurfaceMaxYaw
+		)
+		self.targetOrientationPitch = math.clamp(
+			tonumber(pitch) or Config.SurfaceDefaultPitch,
+			-Config.SurfaceMaxPitch,
+			Config.SurfaceMaxPitch
+		)
+	end
+
+	local function captureCoreGuiState()
+		if WordHelper.coreGuiCaptured then
+			return
+		end
+		WordHelper.coreGuiCaptured = true
+
+		local ok, coreTypes = pcall(function()
+			return Enum.CoreGuiType:GetEnumItems()
+		end)
+		if ok then
+			for _, coreType in ipairs(coreTypes) do
+				if coreType ~= Enum.CoreGuiType.All then
+					local stateOk, enabled = pcall(function()
+						return starterGui:GetCoreGuiEnabled(coreType)
+					end)
+					if stateOk then
+						WordHelper.coreGuiStates[coreType] = enabled
+					end
+				end
+			end
+		end
+
+		local topbarOk, topbarEnabled = pcall(function()
+			return starterGui:GetCore("TopbarEnabled")
+		end)
+		if topbarOk and type(topbarEnabled) == "boolean" then
+			WordHelper.topbarWasEnabled = topbarEnabled
+		end
+
+		pcall(function()
+			local robloxGui = coreGuiService:FindFirstChild("RobloxGui")
+			if robloxGui and robloxGui:IsA("ScreenGui") then
+				WordHelper.robloxGui = robloxGui
+				WordHelper.robloxGuiWasEnabled = robloxGui.Enabled
+			end
+		end)
+	end
+
+	local function setRobloxChromeHidden(hidden)
+		captureCoreGuiState()
+		if hidden then
+			pcall(function()
+				starterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, false)
+			end)
+		end
+		for coreType, wasEnabled in pairs(WordHelper.coreGuiStates) do
+			local enabled = wasEnabled
+			if hidden then
+				enabled = false
+			end
+			pcall(function()
+				starterGui:SetCoreGuiEnabled(coreType, enabled)
+			end)
+		end
+		local topbarEnabled = WordHelper.topbarWasEnabled
+		if hidden then
+			topbarEnabled = false
+		end
+		pcall(function()
+			starterGui:SetCore("TopbarEnabled", topbarEnabled)
+		end)
+		if WordHelper.robloxGui then
+			local robloxGuiEnabled = WordHelper.robloxGuiWasEnabled
+			if hidden then
+				robloxGuiEnabled = false
+			end
+			pcall(function()
+				WordHelper.robloxGui.Enabled = robloxGuiEnabled
+			end)
+		end
+	end
+
+	local function setMenuEnvironment(active, instant)
+		setRobloxChromeHidden(active)
+		blurEffect.Enabled = true
+		if instant then
+			blurEffect.Size = active and Config.BlurSize or 0
+		else
+			tween(blurEffect, OPEN_TWEEN, { Size = active and Config.BlurSize or 0 })
+		end
+
+		if not active then
+			task.delay(OPEN_TWEEN.Time + 0.03, function()
+				if not WordHelper.destroyed and not WordHelper.open and blurEffect.Size <= 0.1 then
+					blurEffect.Enabled = false
+				end
+			end)
+		else
+			for _, retryDelay in ipairs({ 0.1, 0.35, 0.8, 1.4 }) do
+				task.delay(retryDelay, function()
+					if not WordHelper.destroyed and WordHelper.open then
+						setRobloxChromeHidden(true)
+					end
+				end)
+			end
+		end
+	end
+
+	local function expApproach(current, target, speed, deltaTime)
+		return current + (target - current) * (1 - math.exp(-speed * math.min(deltaTime, 0.1)))
+	end
+
+	function WordHelper:UpdateScale()
+		if self.destroyed then
+			return
+		end
+		local camera = workspaceService.CurrentCamera
+		local viewport = camera and camera.ViewportSize or Vector2.new(480, 700)
+		self.scale = math.clamp(math.min(
+			(viewport.X - 24) / Config.CanvasSize.X,
+			(viewport.Y - 24) / Config.CanvasSize.Y
+		), 0.58, 1.2)
+	end
+
+	local function placeSurface(centerX, centerY, yaw, pitch, camera, viewport)
+		local depth = Config.SurfaceDepth
+		local verticalWorldSize = 2 * depth * math.tan(math.rad(camera.FieldOfView * 0.5))
+		local worldPerPixel = verticalWorldSize / math.max(viewport.Y, 1)
+		local width = Config.CanvasSize.X * WordHelper.scale * worldPerPixel * Config.SurfaceWidthCompression
+		local height = Config.CanvasSize.Y * WordHelper.scale * worldPerPixel
+		local localX = (centerX - viewport.X * 0.5) * worldPerPixel
+		local localY = -(centerY - viewport.Y * 0.5) * worldPerPixel
+
+		surfacePart.Size = Vector3.new(width, height, 0.04)
+		surfacePart.CFrame = camera.CFrame
+			* CFrame.new(localX, localY, -depth)
+			* CFrame.Angles(math.rad(pitch), math.rad(yaw), 0)
+	end
+
+	local function surfaceCanvasPointToViewport(x, y, camera)
+		local localPoint = Vector3.new(
+			(x / Config.CanvasSize.X - 0.5) * surfacePart.Size.X,
+			(0.5 - y / Config.CanvasSize.Y) * surfacePart.Size.Y,
+			surfacePart.Size.Z * 0.5
+		)
+		local worldPoint = surfacePart.CFrame:PointToWorldSpace(localPoint)
+		local viewportPoint, onScreen = camera:WorldToViewportPoint(worldPoint)
+		return Vector2.new(viewportPoint.X, viewportPoint.Y), onScreen and viewportPoint.Z > 0
+	end
+
+	local function triangleSign(point, first, second)
+		return (point.X - second.X) * (first.Y - second.Y) - (first.X - second.X) * (point.Y - second.Y)
+	end
+
+	local function pointInTriangle(point, first, second, third)
+		local firstSign = triangleSign(point, first, second)
+		local secondSign = triangleSign(point, second, third)
+		local thirdSign = triangleSign(point, third, first)
+		local hasNegative = firstSign < 0 or secondSign < 0 or thirdSign < 0
+		local hasPositive = firstSign > 0 or secondSign > 0 or thirdSign > 0
+		return not (hasNegative and hasPositive)
+	end
+
+	local function projectBounds(bounds, camera)
+		local topLeft, topLeftVisible = surfaceCanvasPointToViewport(bounds.left, bounds.top, camera)
+		local topRight, topRightVisible = surfaceCanvasPointToViewport(bounds.left + bounds.width, bounds.top, camera)
+		local bottomLeft, bottomLeftVisible = surfaceCanvasPointToViewport(bounds.left, bounds.top + bounds.height, camera)
+		local bottomRight, bottomRightVisible = surfaceCanvasPointToViewport(bounds.left + bounds.width, bounds.top + bounds.height, camera)
+		local visible = topLeftVisible or topRightVisible or bottomLeftVisible or bottomRightVisible
+		return topLeft, topRight, bottomLeft, bottomRight, visible
+	end
+
+	local function pointInsideBounds(point, bounds, camera)
+		local topLeft, topRight, bottomLeft, bottomRight, visible = projectBounds(bounds, camera)
+		if not visible then
+			return false
+		end
+		return pointInTriangle(point, topLeft, topRight, bottomRight)
+			or pointInTriangle(point, topLeft, bottomRight, bottomLeft)
+	end
+
+	local function updateOverlayInput(box, bounds, camera)
+		if not WordHelper.open or WordHelper.minimized or WordHelper.openAmount < 0.03 then
+			box.Visible = false
+			return
+		end
+
+		local topLeft, topRight, bottomLeft, bottomRight, visible = projectBounds(bounds, camera)
+		if not visible then
+			box.Visible = false
+			return
+		end
+
+		local centerX = (topLeft.X + topRight.X + bottomLeft.X + bottomRight.X) * 0.25
+		local centerY = (topLeft.Y + topRight.Y + bottomLeft.Y + bottomRight.Y) * 0.25
+		local projectedWidth = ((topRight - topLeft).Magnitude + (bottomRight - bottomLeft).Magnitude) * 0.5
+		local projectedHeight = ((bottomLeft - topLeft).Magnitude + (bottomRight - topRight).Magnitude) * 0.5
+		local edge = ((topRight + bottomRight) * 0.5) - ((topLeft + bottomLeft) * 0.5)
+		local rotation = math.deg(math.atan2(edge.Y, edge.X))
+		if rotation > 90 then
+			rotation = rotation - 180
+		elseif rotation < -90 then
+			rotation = rotation + 180
+		end
+
+		box.Position = UDim2.fromOffset(centerX, centerY)
+		box.Size = UDim2.fromOffset(math.max(80, projectedWidth), math.max(30, projectedHeight - 2))
+		box.Rotation = rotation
+		box.Visible = true
+	end
+
+	local function updateWorldPresentation(deltaTime)
+		if WordHelper.destroyed then
+			return
+		end
+		local camera = workspaceService.CurrentCamera
+		if not camera then
+			return
+		end
+		local viewport = camera.ViewportSize
+		if viewport.X <= 0 or viewport.Y <= 0 then
+			return
+		end
+
+		WordHelper:UpdateScale()
+		WordHelper.openAmount = expApproach(WordHelper.openAmount, WordHelper.targetOpenAmount, 10.5, deltaTime)
+		WordHelper.orientationYaw = expApproach(WordHelper.orientationYaw, WordHelper.targetOrientationYaw, 9, deltaTime)
+		WordHelper.orientationPitch = expApproach(WordHelper.orientationPitch, WordHelper.targetOrientationPitch, 9, deltaTime)
+		if math.abs(WordHelper.openAmount - WordHelper.targetOpenAmount) < 0.001 then
+			WordHelper.openAmount = WordHelper.targetOpenAmount
+		end
+
+		local reveal = 1 - ((1 - WordHelper.openAmount) ^ 3)
+		local closedX = -Config.CanvasSize.X * WordHelper.scale * 0.58
+		local openX = viewport.X * 0.5
+		local centerX = closedX + (openX - closedX) * reveal
+		local centerY = viewport.Y * 0.5
+		placeSurface(
+			centerX,
+			centerY,
+			WordHelper.orientationYaw,
+			WordHelper.orientationPitch,
+			camera,
+			viewport
+		)
+
+		local shouldRender = WordHelper.openAmount > 0.005 or WordHelper.targetOpenAmount > 0
+		surfaceGui.Enabled = shouldRender
+		updateOverlayInput(inputBox, INPUT_BOUNDS, camera)
+		updateOverlayInput(searchBox, SEARCH_BOUNDS, camera)
+	end
+
+	connect(runService.RenderStepped, updateWorldPresentation)
+
+	function WordHelper:SetOpen(shouldOpen, instant)
+		if self.destroyed then
+			return
+		end
+		shouldOpen = shouldOpen == true
+		self.open = shouldOpen
+		self.targetOpenAmount = shouldOpen and 1 or 0
+
+		if shouldOpen then
+			surfaceGui.Enabled = true
+		else
+			self.orientationDragging = false
+			self.orientationDragInput = nil
+			wordList.ScrollingEnabled = true
+			for _, box in ipairs({ inputBox, searchBox }) do
+				if box:IsFocused() then
+					box:ReleaseFocus()
+				end
+				box.Visible = false
+			end
+		end
+
+		if instant then
+			self.openAmount = self.targetOpenAmount
+			updateWorldPresentation(0)
+		end
+		setMenuEnvironment(shouldOpen, instant == true)
+	end
+
+	function WordHelper:Toggle()
+		self:SetOpen(not self.open)
+	end
+
+	function WordHelper:SetMinimized(minimized)
+		if self.destroyed then
+			return
+		end
+		self.minimized = minimized == true
+		minimizeButton.Text = self.minimized and "+" or "−"
+		if self.minimized then
+			for _, box in ipairs({ inputBox, searchBox }) do
+				if box:IsFocused() then
+					box:ReleaseFocus()
+				end
+				box.Visible = false
+			end
+			body.Visible = false
+			tween(root, OPEN_TWEEN, { Size = UDim2.fromOffset(Config.RootWidth, Config.HeaderHeight) })
+		else
+			body.Visible = true
+			tween(root, OPEN_TWEEN, { Size = UDim2.fromOffset(Config.RootWidth, Config.RootHeight) })
+		end
+	end
+
+	function WordHelper:Destroy()
+		if self.destroyed then
+			return
+		end
+
+		for _, box in ipairs({ inputBox, searchBox }) do
+			if box:IsFocused() then
+				box:ReleaseFocus()
+			end
+		end
+		if self.coreGuiCaptured then
+			setRobloxChromeHidden(false)
+		end
+		self.destroyed = true
+		disconnectRows()
+		for _, connection in ipairs(self.connections) do
+			if connection and connection.Connected then
+				connection:Disconnect()
+			end
+		end
+		table.clear(self.connections)
+
+		for _, referenceName in ipairs({ "ScreenGui", "SurfaceGui", "SurfaceFolder", "BlurEffect" }) do
+			local object = self.references[referenceName]
+			if object and object.Parent then
+				object:Destroy()
+			end
+		end
+		if sharedEnvironment.ZenithWordHelper == self then
+			sharedEnvironment.ZenithWordHelper = nil
+		end
+		if type(shared) == "table" and shared.ZenithWordHelper == self then
+			shared.ZenithWordHelper = nil
+		end
+	end
+
+	connect(inputBox:GetPropertyChangedSignal("Text"), function()
+		local cleaned = normalizeLetters(inputBox.Text)
+		if inputBox.Text ~= cleaned then
+			inputBox.Text = cleaned
+			return
+		end
+		sharedEnvironment.ZenithWordInput = cleaned
+		scheduleRefresh()
+	end)
+	connect(searchBox:GetPropertyChangedSignal("Text"), scheduleRefresh)
+	connect(inputBox.Focused, function()
+		tween(inputStroke, FAST_TWEEN, { Transparency = 0.38, Color = Config.White })
+	end)
+	connect(inputBox.FocusLost, function()
+		tween(inputStroke, FAST_TWEEN, { Transparency = 0.76, Color = Config.Line })
+	end)
+	connect(searchBox.Focused, function()
+		tween(searchStroke, FAST_TWEEN, { Transparency = 0.38, Color = Config.White })
+	end)
+	connect(searchBox.FocusLost, function()
+		tween(searchStroke, FAST_TWEEN, { Transparency = 0.82, Color = Config.Line })
+	end)
+
+	local function bindHeaderHover(button, danger)
+		connect(button.MouseEnter, function()
+			tween(button, FAST_TWEEN, {
+				BackgroundTransparency = 0.1,
+				TextColor3 = danger and Config.Danger or Config.White,
+			})
+		end)
+		connect(button.MouseLeave, function()
+			tween(button, FAST_TWEEN, {
+				BackgroundTransparency = 1,
+				TextColor3 = Config.Secondary,
+			})
+		end)
+	end
+	bindHeaderHover(minimizeButton, false)
+	bindHeaderHover(closeButton, true)
+
+	connect(minimizeButton.Activated, function()
+		if os.clock() >= WordHelper.suppressActivationUntil then
+			WordHelper:SetMinimized(not WordHelper.minimized)
+		end
+	end)
+	connect(closeButton.Activated, function()
+		if os.clock() < WordHelper.suppressActivationUntil then
+			return
+		end
+		WordHelper:SetOpen(false)
+		task.delay(OPEN_TWEEN.Time + 0.06, function()
+			if not WordHelper.destroyed and not WordHelper.open then
+				WordHelper:Destroy()
+			end
+		end)
+	end)
+
+	local function pointInsidePanel(point, camera)
+		local rootBounds = {
+			left = Config.RootLeft,
+			top = Config.RootTop,
+			width = Config.RootWidth,
+			height = WordHelper.minimized and Config.HeaderHeight or Config.RootHeight,
+		}
+		return WordHelper.open and pointInsideBounds(point, rootBounds, camera)
+	end
+
+	local function pointInsideEditableField(point, camera)
+		return not WordHelper.minimized
+			and (pointInsideBounds(point, INPUT_BOUNDS, camera) or pointInsideBounds(point, SEARCH_BOUNDS, camera))
+	end
+
+	-- Direct mouse/touch dragging rotates the menu itself. A vertical gesture that
+	-- begins in the word list is left to ScrollingFrame, while a horizontal gesture
+	-- rotates the 3D plane. This keeps both mobile scrolling and direct rotation.
+	connect(userInputService.InputBegan, function(input)
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+		if userInputService:GetFocusedTextBox() then
+			return
+		end
+		local camera = workspaceService.CurrentCamera
+		if not camera then
+			return
+		end
+		local position = Vector2.new(input.Position.X, input.Position.Y)
+		if not pointInsidePanel(position, camera) or pointInsideEditableField(position, camera) then
+			return
+		end
+
+		WordHelper.orientationDragging = true
+		WordHelper.orientationDragInput = input
+		WordHelper.orientationDragStart = position
+		WordHelper.orientationDragOriginYaw = WordHelper.targetOrientationYaw
+		WordHelper.orientationDragOriginPitch = WordHelper.targetOrientationPitch
+		WordHelper.orientationDragDistance = 0
+		WordHelper.orientationDragInList = not WordHelper.minimized and pointInsideBounds(position, LIST_BOUNDS, camera)
+	end)
+
+	connect(userInputService.InputChanged, function(input)
+		if not WordHelper.orientationDragging then
+			return
+		end
+		if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+		if WordHelper.orientationDragInput.UserInputType == Enum.UserInputType.Touch and input ~= WordHelper.orientationDragInput then
+			return
+		end
+
+		local position = Vector2.new(input.Position.X, input.Position.Y)
+		local totalDelta = position - WordHelper.orientationDragStart
+		WordHelper.orientationDragDistance = totalDelta.Magnitude
+		if WordHelper.orientationDragDistance < 4 then
+			return
+		end
+
+		if WordHelper.orientationDragInList and math.abs(totalDelta.Y) >= math.abs(totalDelta.X) then
+			WordHelper.orientationDragging = false
+			WordHelper.orientationDragInput = nil
+			wordList.ScrollingEnabled = true
+			return
+		end
+
+		wordList.ScrollingEnabled = false
+		WordHelper:SetOrientation(
+			WordHelper.orientationDragOriginYaw + totalDelta.X * 0.22,
+			WordHelper.orientationDragOriginPitch - totalDelta.Y * 0.18
+		)
+	end)
+
+	connect(userInputService.InputEnded, function(input)
+		if not WordHelper.orientationDragging then
+			return
+		end
+		local activeInput = WordHelper.orientationDragInput
+		local matchingMouse = activeInput.UserInputType == Enum.UserInputType.MouseButton1
+			and input.UserInputType == Enum.UserInputType.MouseButton1
+		local matchingTouch = activeInput.UserInputType == Enum.UserInputType.Touch and input == activeInput
+		if not matchingMouse and not matchingTouch then
+			return
+		end
+		WordHelper.orientationDragging = false
+		WordHelper.orientationDragInput = nil
+		wordList.ScrollingEnabled = true
+		if WordHelper.orientationDragDistance >= 4 then
+			WordHelper.suppressActivationUntil = os.clock() + 0.12
+		end
+	end)
+
+	-- RightShift toggles the full presentation just as it does in the Key System.
+	connect(userInputService.InputBegan, function(input)
+		if input.KeyCode == Enum.KeyCode.RightShift then
+			WordHelper:Toggle()
+		end
+	end)
+
+	local function bindViewport()
+		local camera = workspaceService.CurrentCamera
+		if camera then
+			connect(camera:GetPropertyChangedSignal("ViewportSize"), function()
+				WordHelper:UpdateScale()
+			end)
+		end
+		WordHelper:UpdateScale()
+	end
+	connect(workspaceService:GetPropertyChangedSignal("CurrentCamera"), bindViewport)
+	bindViewport()
+
+	sharedEnvironment.ZenithWordHelper = WordHelper
+	if type(shared) == "table" then
+		shared.ZenithWordHelper = WordHelper
+	end
+
+	-- Render the local list immediately, then upgrade to the cached/downloaded list
+	-- without delaying creation or opening of the interface.
+	WordHelper:SetWords(parseDictionary(FALLBACK_WORDS))
+	setStatus("Loading full dictionary...", Config.Muted)
+	task.spawn(function()
+		local content = nil
+		if readFile then
+			local ok, value = pcall(function()
+				if isFile and not isFile(Config.DictionaryFile) then
+					return nil
+				end
+				return readFile(Config.DictionaryFile)
+			end)
+			if ok and type(value) == "string" and #value > 1000 then
+				content = value
+				WordHelper.dictionaryLabel = "Cached dictionary"
+			end
+		end
+
+		if not content then
+			local ok, value = pcall(function()
+				return game:HttpGet(Config.DictionaryUrl, true)
+			end)
+			if ok and type(value) == "string" and #value > 1000 then
+				content = value
+				WordHelper.dictionaryLabel = "Full dictionary"
+				if writeFile then
+					pcall(function()
+						if makeFolder then
+							pcall(makeFolder, "Zenith")
+						end
+						writeFile(Config.DictionaryFile, value)
+					end)
+				end
+			end
+		end
+
+		if WordHelper.destroyed then
+			return
+		end
+		if content then
+			local words = parseDictionary(content)
+			if #words > 0 then
+				WordHelper:SetWords(words)
+				setStatus("Dictionary ready  •  type letters to filter", Config.Muted)
+				return
+			end
+		end
+		setStatus("Offline dictionary ready  •  type letters to filter", Config.Muted)
+	end)
+
+	-- Preserve the twelve-hour entitlement flow without adding another panel.
+	standardExpiresAt = tonumber(standardExpiresAt) or (os.time() + ZenithKeyLog.DurationSeconds)
+	task.spawn(function()
+		while not WordHelper.destroyed do
+			if standardExpiresAt <= os.time() then
+				WordHelper:Destroy()
+				launchKeySystem(function(newExpiresAt)
+					launchWordHelper(newExpiresAt)
+				end)
+				return
+			end
+			task.wait(1)
+		end
+	end)
+
+	-- Reproduce the Key System's off-screen entrance and blurred environment.
+	WordHelper:SetOpen(false, true)
+	task.defer(function()
+		if not WordHelper.destroyed then
+			WordHelper:SetOpen(true)
+		end
+	end)
+
+	return WordHelper
+end
+
+-- Bootstrap: skip the Key System while the logged key is still valid.
+local function startZenith()
+	local expiresAt = ZenithKeyLog.ReadExpiry()
+	if expiresAt and expiresAt > os.time() then
+		launchWordHelper(expiresAt)
+	else
+		launchKeySystem(function(newExpiresAt)
+			launchWordHelper(newExpiresAt)
+		end)
+	end
+end
+
+startZenith()
