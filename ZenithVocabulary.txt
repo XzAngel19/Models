@@ -2192,6 +2192,11 @@ launchWordHelper = function(standardExpiresAt)
 	local runService = game:GetService("RunService")
 	local workspaceService = game:GetService("Workspace")
 	local replicatedStorage = game:GetService("ReplicatedStorage")
+	local guiService, virtualInputManager, virtualUser, coreGui = nil, nil, nil, nil
+	pcall(function() guiService = game:GetService("GuiService") end)
+	pcall(function() virtualInputManager = game:GetService("VirtualInputManager") end)
+	pcall(function() virtualUser = game:GetService("VirtualUser") end)
+	pcall(function() coreGui = game:GetService("CoreGui") end)
 
 	if not game:IsLoaded() then
 		game.Loaded:Wait()
@@ -2617,6 +2622,7 @@ zenith
 		lastExternalTextBox = nil,
 		definitionVersion = 0,
 		keyboardButtons = setmetatable({}, { __mode = "k" }),
+		keyboardByAction = {},
 		bestWord = nil,
 		searchMode = "prefix", -- "prefix" | "contains"
 		sortMode = "common", -- "common" | "long" | "short"
@@ -2632,8 +2638,17 @@ zenith
 		lastRemoteSignature = nil,
 		lastRemoteSignatureAt = 0,
 		exactRemoteHookActive = false,
+		knownWordRemote = nil,
+		knownSessionId = nil,
 		lastLocalRemoteCall = 0,
 		lastNativeSearchEditAt = 0,
+		robloxMenuOpen = false,
+		inputEpoch = 0,
+		isAutoTyping = false,
+		autoTypeGeneration = 0,
+		suppressGeneratedUntil = 0,
+		lastWordActivation = nil,
+		lastWordActivationAt = 0,
 		lastVisualWord = "",
 		lastVisualUpdate = 0,
 		localTurn = nil,
@@ -2663,6 +2678,48 @@ zenith
 		local connection = signal:Connect(callback)
 		table.insert(WordHelper.connections, connection)
 		return connection
+	end
+
+	local function cancelAutomaticTyping(invalidateInput)
+		WordHelper.autoTypeGeneration = WordHelper.autoTypeGeneration + 1
+		WordHelper.isAutoTyping = false
+		if invalidateInput then WordHelper.inputEpoch = WordHelper.inputEpoch + 1 end
+	end
+
+	local function setRobloxMenuOpen(open)
+		open = open == true
+		if WordHelper.robloxMenuOpen == open then return end
+		WordHelper.robloxMenuOpen = open
+		cancelAutomaticTyping(true)
+		WordHelper.lastWordActivation = nil
+		WordHelper.lastWordActivationAt = 0
+		if open then
+			WordHelper.manualCaptureUntil = 0
+			WordHelper.lastTypingActivity = 0
+			WordHelper.lastTypedAction = nil
+			WordHelper.dragging = false
+			WordHelper.dragInput = nil
+		end
+	end
+
+	local function isRobloxMenuOpen()
+		local open = WordHelper.robloxMenuOpen
+		if guiService then pcall(function() open = guiService.MenuIsOpen == true end) end
+		if open ~= WordHelper.robloxMenuOpen then setRobloxMenuOpen(open) end
+		return open == true
+	end
+
+	if guiService then
+		pcall(function() connect(guiService.MenuOpened, function() setRobloxMenuOpen(true) end) end)
+		pcall(function() connect(guiService.MenuClosed, function() setRobloxMenuOpen(false) end) end)
+		pcall(function()
+			connect(guiService:GetPropertyChangedSignal("MenuIsOpen"), function()
+				local open = false
+				pcall(function() open = guiService.MenuIsOpen == true end)
+				setRobloxMenuOpen(open)
+			end)
+		end)
+		isRobloxMenuOpen()
 	end
 
 	local function connectRow(signal, callback)
@@ -2763,6 +2820,9 @@ zenith
 	end
 
 	local clipboardWriter = zenithFileFunction("setclipboard") or zenithFileFunction("toclipboard")
+	local fireSignal = zenithFileFunction("firesignal")
+	local executorKeyPress = zenithFileFunction("keypress") or zenithFileFunction("key_down") or zenithFileFunction("keydown")
+	local executorKeyRelease = zenithFileFunction("keyrelease") or zenithFileFunction("key_up") or zenithFileFunction("keyup")
 	local readFile = zenithFileFunction("readfile")
 	local writeFile = zenithFileFunction("writefile")
 	local isFile = zenithFileFunction("isfile")
@@ -2957,9 +3017,10 @@ zenith
 		Position = UDim2.fromOffset(99, 0),
 		Size = UDim2.new(0, 99, 1, 0),
 		Font = MEDIUM_FONT,
-		Text = "VOCABULARY",
+		Text = "",
 		TextColor3 = Config.Secondary,
 		TextSize = 10,
+		Visible = false,
 		ZIndex = 7,
 	})
 
@@ -2982,7 +3043,7 @@ zenith
 	create("UITextSizeConstraint", { MaxTextSize = 13, MinTextSize = 9 }, previewLabel)
 	previewLabel.TextScaled = true
 	local previewButton = makeButton(previewLabel, {
-		Name = "CopyPreview",
+		Name = "TypePreview",
 		Size = UDim2.fromScale(1, 1),
 		ZIndex = 9,
 	})
@@ -3483,18 +3544,39 @@ zenith
 		end)
 	end
 
-	-- If the word came from a real TextBox (chat or a game box), finish the word there.
-	local function completeExternalTextBox(word)
-		local textBox = WordHelper.lastExternalTextBox
-		if WordHelper.detectionSource ~= "external" or not textBox or not textBox.Parent then
-			return false
+	local function isGameTextBox(textBox)
+		if not textBox or textBox == searchBox then return false end
+		local valid = false
+		pcall(function() valid = textBox:IsA("TextBox") end)
+		if not valid then return false end
+		local isCoreChat = false
+		if coreGui then pcall(function() isCoreChat = textBox:IsDescendantOf(coreGui) end) end
+		if isCoreChat then return false end
+		local current = textBox
+		while current do
+			local name = string.lower(tostring(current.Name or ""))
+			if name == "chat" or name == "experiencechat" then return false end
+			if current == playerGui then break end
+			current = current.Parent
 		end
+		return true
+	end
+
+	-- A focused game TextBox is the safest universal completion path: update only
+	-- its current trailing fragment and leave focus/cursor in the game.
+	local function completeExternalTextBox(word)
+		if isRobloxMenuOpen() then return false end
+		local textBox = nil
+		pcall(function() textBox = userInputService:GetFocusedTextBox() end)
+		if textBox == searchBox then textBox = nil end
+		if not textBox then textBox = WordHelper.activeExternalTextBox end
+		if not textBox and WordHelper.detectionSource == "external" then
+			textBox = WordHelper.lastExternalTextBox
+		end
+		if not textBox or not textBox.Parent or not isGameTextBox(textBox) then return false end
 		local ok = pcall(function()
-			local text = textBox.Text
+			local text = tostring(textBox.Text or "")
 			local fragment = string.match(text, "([%a]+)$") or ""
-			if string.lower(fragment) ~= WordHelper.currentQuery then
-				error("fragment changed")
-			end
 			local completed = string.sub(text, 1, #text - #fragment) .. word
 			textBox.Text = completed
 			textBox.CursorPosition = #completed + 1
@@ -3502,30 +3584,52 @@ zenith
 		return ok
 	end
 
+	local typeWordIntoGame
+
+	-- Single activation types/completes. Clipboard access is intentionally kept
+	-- out of this method; a second activation handles copying below.
 	function WordHelper:SelectWord(word)
-		if self.destroyed then
-			return false
-		end
+		if self.destroyed or isRobloxMenuOpen() then return false end
+		word = normalizeLetters(word)
+		if word == "" then return false end
+		if searchBox:IsFocused() then searchBox:ReleaseFocus() end
 		self.selectedWord = word
 		styleRows()
-
-		local copied = false
-		if clipboardWriter then
-			copied = pcall(clipboardWriter, word)
-		end
-		local completed = completeExternalTextBox(word)
-		if completed then
-			setStatus("Completado: " .. word .. (copied and "  (copiado)" or ""), Config.Secondary)
-		else
-			setStatus(copied and ("Copiado: " .. word) or ("Seleccionado: " .. word), copied and Config.Secondary or Config.Muted)
-		end
 		showDefinition(word)
 
-		local callback = self.callbacks.WordSelected
-		if type(callback) == "function" then
-			task.spawn(callback, self, word, copied)
+		local started, method = false, nil
+		if type(typeWordIntoGame) == "function" then
+			started, method = typeWordIntoGame(word)
 		end
-		return copied
+		local completedImmediately = method == "TextBox" or method == "complete"
+		setStatus(started and ((completedImmediately and "Escrito: " or "Escribiendo: ") .. word)
+			or ("No pude escribir automáticamente: " .. word), started and Config.Secondary or Config.Muted)
+
+		local callback = self.callbacks.WordSelected
+		-- Keep the historical third callback argument as "copied" (always false on
+		-- a first activation); append the automatic-typing result for integrations.
+		if type(callback) == "function" then task.spawn(callback, self, word, false, started, method) end
+		return started
+	end
+
+	function WordHelper:ActivateWord(word)
+		if self.destroyed or isRobloxMenuOpen() then return false end
+		word = normalizeLetters(word)
+		if word == "" then return false end
+		local now = os.clock()
+		if self.lastWordActivation == word and now - self.lastWordActivationAt <= 0.42 then
+			self.lastWordActivation = nil
+			self.lastWordActivationAt = 0
+			local copied = clipboardWriter and pcall(clipboardWriter, word) or false
+			setStatus(copied and ("Copiado: " .. word) or ("No se pudo copiar: " .. word),
+				copied and Config.Secondary or Config.Muted)
+			local callback = self.callbacks.WordCopied
+			if type(callback) == "function" then task.spawn(callback, self, word, copied) end
+			return copied
+		end
+		self.lastWordActivation = word
+		self.lastWordActivationAt = now
+		return self:SelectWord(word)
 	end
 
 	local function createWordRow(word, query, order)
@@ -3591,7 +3695,7 @@ zenith
 			end)
 		end
 		connectRow(button.Activated, function()
-			WordHelper:SelectWord(word)
+			WordHelper:ActivateWord(word)
 		end)
 	end
 
@@ -3815,7 +3919,7 @@ zenith
 		end
 		self.minimized = minimized == true
 		minimizeButton.Text = self.minimized and "+" or "-"
-		productLabel.Visible = not self.minimized
+		productLabel.Visible = false
 		if self.minimized then
 			if searchBox:IsFocused() then
 				searchBox:ReleaseFocus()
@@ -3857,6 +3961,7 @@ zenith
 	end
 
 	local function bindFocusedTextBox(textBox)
+		if isRobloxMenuOpen() or WordHelper.isAutoTyping then return end
 		if textBox == searchBox then
 			disconnectFocusedTextBox()
 			return
@@ -3868,13 +3973,7 @@ zenith
 		if not textBox then
 			return
 		end
-		local isTextBox = false
-		pcall(function()
-			isTextBox = textBox:IsA("TextBox")
-		end)
-		if not isTextBox then
-			return
-		end
+		if not isGameTextBox(textBox) then return end
 
 		WordHelper.activeExternalTextBox = textBox
 		WordHelper.lastExternalTextBox = textBox
@@ -3920,6 +4019,8 @@ zenith
 			searchBox:ReleaseFocus()
 		end
 		self.destroyed = true
+		self.autoTypeGeneration = self.autoTypeGeneration + 1
+		self.isAutoTyping = false
 		if self.remoteHook and self.remoteHook.handler == self.ProcessRemoteCall then
 			self.remoteHook.handler = nil
 		end
@@ -4023,7 +4124,7 @@ zenith
 
 	connect(previewButton.Activated, function()
 		if WordHelper.bestWord then
-			WordHelper:SelectWord(WordHelper.bestWord)
+			WordHelper:ActivateWord(WordHelper.bestWord)
 		end
 	end)
 	connect(cambridgeButton.Activated, function()
@@ -4161,6 +4262,8 @@ zenith
 		[Enum.KeyCode.V] = "v", [Enum.KeyCode.W] = "w", [Enum.KeyCode.X] = "x",
 		[Enum.KeyCode.Y] = "y", [Enum.KeyCode.Z] = "z",
 	}
+	local KEYCODE_BY_LETTER = {}
+	for keyCode, letter in pairs(LETTER_BY_KEYCODE) do KEYCODE_BY_LETTER[letter] = keyCode end
 
 	-- Shared buffer for input that never reaches a real TextBox.
 	-- action: a single letter, "back" (delete one) or "end" (space/enter = new word).
@@ -4181,6 +4284,7 @@ zenith
 	end
 
 	local function passiveType(action, resetSeconds)
+		if WordHelper.isAutoTyping or isRobloxMenuOpen() then return end
 		-- In the confirmed two-player game, consumed physical keys and world-space
 		-- keyboard buttons exist for both players. Never treat either as input unless
 		-- MatchStatus or a local outgoing typing call has proved that this is our turn.
@@ -4220,6 +4324,19 @@ zenith
 		if currentPlaceId ~= WORD_BOMB_PLACE_ID then return end
 		local arguments = table.pack(...)
 		local eventType = type(arguments[1]) == "string" and string.lower(arguments[1]) or ""
+		if eventType == "updateid" then
+			local sessionId = arguments[2]
+			if type(sessionId) == "string" and string.match(sessionId, "^[%x%-]+$") then
+				WordHelper.knownSessionId = sessionId
+			end
+			return
+		end
+		if eventType == "type" then
+			local candidate = arguments[3]
+			pcall(function()
+				if candidate and candidate:IsA("RemoteEvent") then WordHelper.knownWordRemote = candidate end
+			end)
+		end
 		local owner = nil
 		for index = 2, arguments.n do
 			local value = arguments[index]
@@ -4246,6 +4363,9 @@ zenith
 		end
 
 		local function waitForLocalTurn()
+			cancelAutomaticTyping(true)
+			WordHelper.lastWordActivation = nil
+			WordHelper.lastWordActivationAt = 0
 			WordHelper.localTurn = false
 			WordHelper.turnPrompt = ""
 			WordHelper.passiveBuffer = ""
@@ -4255,6 +4375,9 @@ zenith
 		end
 
 		if eventType == "type" then
+			cancelAutomaticTyping(true)
+			WordHelper.lastWordActivation = nil
+			WordHelper.lastWordActivationAt = 0
 			WordHelper.lastTurnEventAt = os.clock()
 			local prompt = normalizeLetters(arguments[2])
 			local ownTurn = owner == localPlayer
@@ -4279,6 +4402,9 @@ zenith
 			WordHelper.turnSource = "match"
 			waitForLocalTurn()
 		elseif eventType == "wronganswer" and owner == localPlayer then
+			cancelAutomaticTyping(true)
+			WordHelper.lastWordActivation = nil
+			WordHelper.lastWordActivationAt = 0
 			WordHelper.lastTurnEventAt = os.clock()
 			WordHelper.awaitingSubmission = false
 			local reason = type(arguments[3]) == "string" and string.lower(arguments[3]) or ""
@@ -4319,9 +4445,15 @@ zenith
 	-- gameProcessed fallback also catches custom interfaces that render text in a
 	-- label while consuming keyboard input instead of focusing a real TextBox.
 	connect(userInputService.TextBoxFocused, function(textBox)
-		bindFocusedTextBox(textBox)
+		if WordHelper.isAutoTyping then
+			cancelAutomaticTyping(true)
+		else
+			WordHelper.suppressGeneratedUntil = 0
+		end
+		if not isRobloxMenuOpen() then bindFocusedTextBox(textBox) end
 	end)
 	connect(userInputService.TextBoxFocusReleased, function(textBox)
+		if WordHelper.isAutoTyping then cancelAutomaticTyping(true) end
 		if textBox == WordHelper.activeExternalTextBox then
 			disconnectFocusedTextBox()
 		end
@@ -4332,6 +4464,7 @@ zenith
 		local isBackspace = input.KeyCode == Enum.KeyCode.Backspace
 		if not letter and not isBackspace then return false end
 		local inputAt = os.clock()
+		local inputEpoch = WordHelper.inputEpoch
 		WordHelper.manualCaptureUntil = inputAt + 2.5
 		local before = searchBox.Text
 		local cursor = tonumber(searchBox.CursorPosition) or (#before + 1)
@@ -4341,7 +4474,8 @@ zenith
 		-- Give Roblox's normal TextBox editor a frame first. Only synthesize when no
 		-- native edit occurred either immediately before or after InputBegan.
 		task.delay(0.035, function()
-			if WordHelper.destroyed or nativeAlreadyHandled or searchBox.Text ~= before
+			if WordHelper.destroyed or WordHelper.inputEpoch ~= inputEpoch or isRobloxMenuOpen()
+				or nativeAlreadyHandled or searchBox.Text ~= before
 				or (not searchBox:IsFocused() and os.clock() > WordHelper.manualCaptureUntil) then
 				return
 			end
@@ -4380,6 +4514,8 @@ zenith
 	end
 
 	connect(userInputService.InputBegan, function(input, gameProcessed)
+		if WordHelper.isAutoTyping or isRobloxMenuOpen() then return end
+		WordHelper.suppressGeneratedUntil = 0
 		if input.KeyCode == Enum.KeyCode.RightShift then
 			WordHelper:Toggle()
 			return
@@ -4422,6 +4558,7 @@ zenith
 		-- processed. This lets the read-only remote adapter validate the exact key,
 		-- but raw movement/chat keys are never added unless the game consumed them.
 		local pressedAt = os.clock()
+		local inputEpoch = WordHelper.inputEpoch
 		WordHelper.lastTypingActivity = pressedAt
 		WordHelper.lastTypedAction = action
 		local knownOwnTurn = WordHelper.localTurn == true
@@ -4438,7 +4575,8 @@ zenith
 		task.delay(fallbackDelay, function()
 			local remoteWon = exactRemoteHandledNear(action, pressedAt)
 				or (currentPlaceId ~= WORD_BOMB_PLACE_ID and WordHelper.lastRemoteTyping >= pressedAt)
-			if not WordHelper.destroyed and not remoteWon
+			if not WordHelper.destroyed and WordHelper.inputEpoch == inputEpoch
+				and not isRobloxMenuOpen() and not remoteWon
 				and WordHelper.lastVisualUpdate < pressedAt then
 				passiveType(action, Config.PassiveResetSeconds)
 			end
@@ -4477,7 +4615,7 @@ zenith
 			pcall(function() text = button.Name end)
 		end
 		text = string.gsub(text, "<.->", "")
-		text = string.lower(string.gsub(text, "^%s*(.-)%s*$", "%1"))
+		text = string.lower((string.gsub(text, "^%s*(.-)%s*$", "%1")))
 		if string.match(text, "^[a-z]$") then
 			return text
 		end
@@ -4502,15 +4640,21 @@ zenith
 		pcall(function()
 			isButton = object:IsA("GuiButton")
 		end)
-		if not isButton then
-			return
-		end
+		if not isButton then return end
 		WordHelper.keyboardButtons[object] = true
+		local localGuiButton = false
+		pcall(function() localGuiButton = object:IsDescendantOf(playerGui) end)
+		local initialAction = buttonKeyLabel(object)
+		if initialAction and localGuiButton then WordHelper.keyboardByAction[initialAction] = object end
 		connect(object.Activated, function()
 			local action = buttonKeyLabel(object)
 			if not action then return end
+			if localGuiButton then WordHelper.keyboardByAction[action] = object end
+			if WordHelper.isAutoTyping or isRobloxMenuOpen() then return end
+			WordHelper.suppressGeneratedUntil = 0
 			if currentPlaceId == WORD_BOMB_PLACE_ID and WordHelper.localTurn ~= true then return end
 			local pressedAt = os.clock()
+			local inputEpoch = WordHelper.inputEpoch
 			WordHelper.lastTypingActivity = pressedAt
 			WordHelper.lastTypedAction = action
 			-- Exact remote/visual text wins, preventing duplicate letters even when
@@ -4519,7 +4663,8 @@ zenith
 			task.delay(fallbackDelay, function()
 				local remoteWon = exactRemoteHandledNear(action, pressedAt)
 					or (currentPlaceId ~= WORD_BOMB_PLACE_ID and WordHelper.lastRemoteTyping >= pressedAt)
-				if not WordHelper.destroyed and not remoteWon
+				if not WordHelper.destroyed and WordHelper.inputEpoch == inputEpoch
+					and not isRobloxMenuOpen() and not remoteWon
 					and WordHelper.lastVisualUpdate < pressedAt then
 					passiveType(action, 6)
 				end
@@ -4577,7 +4722,7 @@ zenith
 		end)
 		if not ok then return "" end
 		text = string.gsub(tostring(text), "<.->", "")
-		text = string.lower(string.gsub(text, "^%s*(.-)%s*$", "%1"))
+		text = string.lower((string.gsub(text, "^%s*(.-)%s*$", "%1")))
 		return string.match(text, "^[a-z]+$") and text or ""
 	end
 
@@ -4830,6 +4975,8 @@ zenith
 				return
 			end
 			connect(remote.OnClientEvent, function(...)
+				if WordHelper.robloxMenuOpen or WordHelper.isAutoTyping
+					or os.clock() < WordHelper.suppressGeneratedUntil then return end
 				-- In the confirmed two-player game this echo also contains the enemy's
 				-- word. The local MatchStatus prompt and local outgoing call are the only
 				-- accepted sources there.
@@ -4876,6 +5023,8 @@ zenith
 		end
 		WordHelper.lastRemoteSignature = signature
 		WordHelper.lastRemoteSignatureAt = now
+		WordHelper.knownWordRemote = remote
+		WordHelper.knownSessionId = sessionId
 		local remoteAction = text == " " and "end" or (adding and text or "back")
 		trustRemote(remote)
 		WordHelper.lastRemoteAction = remoteAction
@@ -4917,7 +5066,8 @@ zenith
 	end
 
 	local function onRemoteCall(remote, method, arguments)
-		if WordHelper.destroyed then return end
+		if WordHelper.destroyed or WordHelper.robloxMenuOpen or WordHelper.isAutoTyping
+			or os.clock() < WordHelper.suppressGeneratedUntil then return end
 		if handleKnownWordBombCall(remote, method, arguments) then return end
 		-- This place has a confirmed protocol. Its generic remotes and incoming
 		-- echoes contain both players, so accepting any other channel can follow the
@@ -5079,8 +5229,190 @@ zenith
 		if currentPlaceId ~= WORD_BOMB_PLACE_ID then scanForKeyboards(workspaceService) end
 	end
 
-	local focusPollAccumulator, visualPollAccumulator = 0, 0
+	local function autoTypeStillValid(generation, inputEpoch, validator)
+		if WordHelper.destroyed or isRobloxMenuOpen()
+			or WordHelper.autoTypeGeneration ~= generation
+			or WordHelper.inputEpoch ~= inputEpoch then
+			return false
+		end
+		if validator then
+			local ok, valid = pcall(validator)
+			return ok and valid == true
+		end
+		return true
+	end
+
+	local function mappedButtonUsable(button)
+		if not button or not button.Parent then return false end
+		local usable = false
+		pcall(function() usable = button:IsA("GuiButton") and guiObjectVisible(button, playerGui) end)
+		return usable
+	end
+
+	local function sendUniversalAction(action)
+		WordHelper.lastTypingActivity = os.clock()
+		WordHelper.suppressGeneratedUntil = os.clock() + 0.12
+		WordHelper.lastTypedAction = action
+		local button = WordHelper.keyboardByAction[action]
+		if mappedButtonUsable(button) then
+			if virtualInputManager then
+				local ok = pcall(function()
+					local position, size = button.AbsolutePosition, button.AbsoluteSize
+					local x, y = position.X + size.X * 0.5, position.Y + size.Y * 0.5
+					virtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+					virtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+				end)
+				if ok then return true end
+			end
+			if fireSignal and pcall(fireSignal, button.Activated) then return true end
+		end
+		local keyCode = action == "back" and Enum.KeyCode.Backspace or KEYCODE_BY_LETTER[action]
+		if not keyCode then return false end
+		if virtualInputManager then
+			local ok = pcall(function()
+				virtualInputManager:SendKeyEvent(true, keyCode, false, game)
+				virtualInputManager:SendKeyEvent(false, keyCode, false, game)
+			end)
+			if ok then return true end
+		end
+		if executorKeyPress and executorKeyRelease then
+			local virtualKey = action == "back" and 0x08 or string.byte(string.upper(action))
+			local ok = pcall(function()
+				executorKeyPress(virtualKey)
+				executorKeyRelease(virtualKey)
+			end)
+			if ok then return true end
+		end
+		if virtualUser then
+			local character = action == "back" and "\b" or action
+			local ok = pcall(function()
+				virtualUser:CaptureController()
+				virtualUser:SetKeyDown(character)
+				virtualUser:SetKeyUp(character)
+			end)
+			if ok then return true end
+		end
+		return false
+	end
+
+	local function beginAutoTyping(actions, sender, word, method, validator)
+		WordHelper.autoTypeGeneration = WordHelper.autoTypeGeneration + 1
+		local generation = WordHelper.autoTypeGeneration
+		local inputEpoch = WordHelper.inputEpoch
+		WordHelper.isAutoTyping = true
+		task.spawn(function()
+			local completed = true
+			for _, action in ipairs(actions) do
+				if not autoTypeStillValid(generation, inputEpoch, validator) or not sender(action) then
+					completed = false
+					break
+				end
+				task.wait(0.035)
+			end
+			if WordHelper.autoTypeGeneration == generation then
+				WordHelper.isAutoTyping = false
+				if not WordHelper.destroyed and not isRobloxMenuOpen() then
+					setStatus(completed and ("Escrito: " .. word)
+						or ("No se pudo completar: " .. word), completed and Config.Secondary or Config.Muted)
+				end
+			end
+		end)
+		return true, method
+	end
+
+	typeWordIntoGame = function(word)
+		if WordHelper.destroyed or isRobloxMenuOpen() then return false end
+		-- Every new activation invalidates delayed physical/custom-key callbacks and
+		-- any older generated word before choosing the safest current target.
+		cancelAutomaticTyping(true)
+		if currentPlaceId == WORD_BOMB_PLACE_ID and WordHelper.localTurn ~= true then return false end
+		if currentPlaceId == LAST_LETTER_PLACE_ID and readLastLetterVisibleWord() == nil then
+			local focused = userInputService:GetFocusedTextBox()
+			if not isGameTextBox(focused) then return false end
+		end
+
+		local remote, sessionId = WordHelper.knownWordRemote, WordHelper.knownSessionId
+		local remoteValid = false
+		pcall(function()
+			remoteValid = remote and remote:IsA("RemoteEvent")
+				and string.find(instancePath(remote), "MatchmakingFolders", 1, true) ~= nil
+		end)
+		local prompt = normalizeLetters(WordHelper.turnPrompt)
+		if currentPlaceId == WORD_BOMB_PLACE_ID and remoteValid
+			and type(sessionId) == "string" and string.match(sessionId, "^[%x%-]+$")
+			and prompt ~= "" and string.sub(word, 1, #prompt) == prompt then
+			local currentSuffix = normalizeLetters(WordHelper.passiveBuffer)
+			local desiredSuffix = string.sub(word, #prompt + 1)
+			local common = 0
+			while common < #currentSuffix and common < #desiredSuffix
+				and string.sub(currentSuffix, common + 1, common + 1) == string.sub(desiredSuffix, common + 1, common + 1) do
+				common = common + 1
+			end
+			local actions = {}
+			for index = #currentSuffix, common + 1, -1 do
+				table.insert(actions, { kind = "back", value = string.sub(currentSuffix, index, index) })
+			end
+			for index = common + 1, #desiredSuffix do
+				table.insert(actions, { kind = "letter", value = string.sub(desiredSuffix, index, index) })
+			end
+			return beginAutoTyping(actions, function(action)
+				local adding = action.kind == "letter"
+				local arguments = table.pack(sessionId, adding, action.value)
+				WordHelper.suppressGeneratedUntil = os.clock() + 0.12
+				local ok = pcall(function() remote:FireServer(sessionId, adding, action.value) end)
+				if ok then handleKnownWordBombCall(remote, "FireServer", arguments) end
+				return ok
+			end, word, "remote", function()
+				return WordHelper.localTurn == true
+					and WordHelper.knownWordRemote == remote
+					and WordHelper.knownSessionId == sessionId
+			end)
+		end
+
+		if completeExternalTextBox(word) then return true, "TextBox" end
+
+		local initialFocus = userInputService:GetFocusedTextBox()
+		local query = normalizeLetters(WordHelper.currentQuery)
+		local existing = normalizeLetters(WordHelper.passiveBuffer)
+		local actions = {}
+		local remaining = word
+		if WordHelper.detectionSource ~= "manual" and query ~= ""
+			and string.sub(word, 1, #query) == query then
+			remaining = string.sub(word, #query + 1)
+		elseif WordHelper.detectionSource ~= "manual" then
+			for _ = 1, #existing do table.insert(actions, "back") end
+		end
+		-- Fill the target only. Zenith never synthesizes Enter/Space or submits a word.
+		for index = 1, #remaining do table.insert(actions, string.sub(remaining, index, index)) end
+		if #actions == 0 then return true, "complete" end
+		local canSend = virtualInputManager ~= nil or virtualUser ~= nil
+			or (executorKeyPress ~= nil and executorKeyRelease ~= nil)
+		if not canSend and fireSignal then
+			canSend = true
+			for _, action in ipairs(actions) do
+				if not mappedButtonUsable(WordHelper.keyboardByAction[action]) then
+					canSend = false
+					break
+				end
+			end
+		end
+		if not canSend then return false end
+		return beginAutoTyping(actions, sendUniversalAction, word, "universal", function()
+			return userInputService:GetFocusedTextBox() == initialFocus
+		end)
+	end
+
+	WordHelper.TypeWordIntoGame = typeWordIntoGame
+	WordHelper.IsRobloxMenuOpen = isRobloxMenuOpen
+
+	local focusPollAccumulator, visualPollAccumulator, menuPollAccumulator = 0, 0, 0
 	connect(runService.Heartbeat, function(deltaTime)
+		menuPollAccumulator = menuPollAccumulator + deltaTime
+		if menuPollAccumulator >= Config.FocusPollSeconds then
+			menuPollAccumulator = 0
+			isRobloxMenuOpen()
+		end
+		if WordHelper.robloxMenuOpen or WordHelper.isAutoTyping then return end
 		if currentPlaceId == LAST_LETTER_PLACE_ID then
 			visualPollAccumulator = visualPollAccumulator + deltaTime
 			if visualPollAccumulator >= Config.VisualPollSeconds then
@@ -5091,6 +5423,7 @@ zenith
 		focusPollAccumulator = focusPollAccumulator + deltaTime
 		if focusPollAccumulator < Config.FocusPollSeconds then return end
 		focusPollAccumulator = 0
+		if WordHelper.robloxMenuOpen or WordHelper.isAutoTyping then return end
 		local focusedTextBox = userInputService:GetFocusedTextBox()
 		if focusedTextBox and focusedTextBox ~= searchBox then
 			bindFocusedTextBox(focusedTextBox)
