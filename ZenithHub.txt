@@ -2184,8 +2184,8 @@ end
 -- ===================== ZENITH ASSISTANT =====================
 launchWordHelper = function(standardExpiresAt)
 	-- Compact, movable Zenith assistant. Outside chess it detects typed word
-	-- fragments; in supported chess games it reads the live board and asks
-	-- Stockfish Online only when it is the local player's turn. It never moves a
+	-- fragments; in supported chess games a separate Zenith Chess window reads
+	-- the live board and asks Chess-API only on the local player's turn. It never moves a
 	-- piece, blurs the game, or changes CoreGui.
 	local playersService = game:GetService("Players")
 	local userInputService = game:GetService("UserInputService")
@@ -2217,9 +2217,14 @@ launchWordHelper = function(standardExpiresAt)
 		DictionaryFile = "Zenith/words.txt",
 		DictionaryUrl = "https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt",
 		PassiveResetSeconds = 1.35,
-		StockfishEndpoint = "https://stockfish.online/api/s/v2.php",
-		StockfishDepth = 12,
+		ChessApiEndpoint = "https://chess-api.com/v1",
+		ChessApiDepth = 12,
+		ChessApiThinkingTime = 50,
 		ChessPollSeconds = 0.35,
+		ChessWindowWidth = 300,
+		ChessWindowHeight = 330,
+		ChessIconFile = "Zenith/zenith-chess-icon.png",
+		ChessIconUrl = "https://raw.githubusercontent.com/XzAngel19/Models/arena/cbc36148-models/SCP-Main-Menu/assets/zenith-chess-icon.png",
 		SupportedChessGames = {
 			[130878180532794] = "RoChess",
 			[89083628291452] = "Chess Duels",
@@ -2428,6 +2433,9 @@ zenith
 		chess = {
 			supported = supportedChessGame ~= nil,
 			gameName = supportedChessGame or "Unsupported game",
+			minimized = false,
+			dragging = false,
+			hasUserPosition = false,
 			adapter = nil,
 			lastFen = nil,
 			lastRequestedFen = nil,
@@ -2562,6 +2570,7 @@ zenith
 	local writeFile = zenithFileFunction("writefile")
 	local isFile = zenithFileFunction("isfile")
 	local makeFolder = zenithFileFunction("makefolder")
+	local getCustomAsset = zenithFileFunction("getcustomasset") or zenithFileFunction("getsynasset")
 	local executorRequest = zenithFileFunction("request")
 		or zenithFileFunction("http_request")
 		or zenithFileFunction("httprequest")
@@ -2570,7 +2579,7 @@ zenith
 		executorRequest = sharedEnvironment.syn.request
 	end
 
-	for _, guiName in ipairs({ Config.GuiName, "ZenithAssistant" }) do
+	for _, guiName in ipairs({ Config.GuiName, "ZenithAssistant", "ZenithChess", "ZenithChessBoardGuide" }) do
 		local previousGui = playerGui:FindFirstChild(guiName)
 		if previousGui then
 			previousGui:Destroy()
@@ -2602,6 +2611,7 @@ zenith
 	local screenGui = create("ScreenGui", {
 		Name = Config.GuiName,
 		DisplayOrder = Config.DisplayOrder,
+		Enabled = not WordHelper.chess.supported,
 		IgnoreGuiInset = true,
 		ResetOnSpawn = false,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
@@ -2639,7 +2649,7 @@ zenith
 	local titleLabel = makeText(header, {
 		Name = "Title",
 		Position = UDim2.fromOffset(12, 0),
-		Size = UDim2.new(1, -120, 1, 0),
+		Size = UDim2.new(1, -86, 1, 0),
 		Font = BOLD_FONT,
 		RichText = true,
 		Text = '<b>Zenith</b> <font color="#B5B9BF">WORDS</font>',
@@ -2663,8 +2673,6 @@ zenith
 		})
 	end
 
-	local modeButton = makeHeaderButton(WordHelper.mode == "Chess" and "W" or "♟", -70)
-	modeButton.TextSize = WordHelper.mode == "Chess" and 13 or 17
 	local minimizeButton = makeHeaderButton("−", -38)
 	local closeButton = makeHeaderButton("X", -6)
 
@@ -2682,7 +2690,7 @@ zenith
 		Size = UDim2.fromScale(1, 1),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
-		Visible = WordHelper.mode == "Words",
+		Visible = true,
 		ZIndex = 2,
 	}, body)
 
@@ -2799,14 +2807,97 @@ zenith
 		ZIndex = 5,
 	})
 
+	-- Chess is intentionally a separate menu, not a tab inside the Words helper.
+	local chessScreenGui = create("ScreenGui", {
+		Name = "ZenithChess",
+		DisplayOrder = Config.DisplayOrder + 1,
+		Enabled = WordHelper.chess.supported,
+		IgnoreGuiInset = true,
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	}, playerGui)
+	local chessWindow = create("Frame", {
+		Name = "Window",
+		Position = UDim2.fromOffset(16, 16),
+		Size = UDim2.fromOffset(Config.ChessWindowWidth, Config.ChessWindowHeight),
+		BackgroundColor3 = Config.Panel,
+		BackgroundTransparency = 0.035,
+		BorderSizePixel = 0,
+		ClipsDescendants = true,
+		Active = true,
+		ZIndex = 2,
+	}, chessScreenGui)
+	addStroke(chessWindow, Config.Line, 0.42, 1)
+	create("UIGradient", {
+		Color = ColorSequence.new(Config.PanelRaised, Config.Panel),
+		Rotation = 90,
+	}, chessWindow)
+	local chessWindowScale = create("UIScale", { Scale = 1 }, chessWindow)
+	local chessHeader = create("Frame", {
+		Name = "Header",
+		Size = UDim2.new(1, 0, 0, Config.HeaderHeight),
+		BackgroundColor3 = Color3.fromRGB(18, 19, 22),
+		BackgroundTransparency = 0.04,
+		BorderSizePixel = 0,
+		Active = true,
+		ZIndex = 4,
+	}, chessWindow)
+	addLine(chessHeader, UDim2.new(0, 0, 1, -1), UDim2.new(1, 0, 0, 1), 0.68, Config.Line, 6)
+	local chessIconFallback = makeText(chessHeader, {
+		Name = "IconFallback",
+		Position = UDim2.fromOffset(9, 3),
+		Size = UDim2.fromOffset(34, 34),
+		Font = REGULAR_FONT,
+		Text = "♟",
+		TextColor3 = Config.White,
+		TextSize = 27,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		ZIndex = 7,
+	})
+	local chessIcon = create("ImageLabel", {
+		Name = "Icon",
+		Position = UDim2.fromOffset(8, 3),
+		Size = UDim2.fromOffset(34, 34),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Image = "",
+		ImageTransparency = 1,
+		ScaleType = Enum.ScaleType.Fit,
+		ZIndex = 8,
+	}, chessHeader)
+	local function makeChessHeaderButton(text, rightOffset)
+		return makeButton(chessHeader, {
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, rightOffset, 0.5, 0),
+			Size = UDim2.fromOffset(30, 30),
+			BackgroundColor3 = Config.Row,
+			BackgroundTransparency = 1,
+			Font = BOLD_FONT,
+			Text = text,
+			TextColor3 = Config.Secondary,
+			TextSize = 16,
+			ZIndex = 8,
+		})
+	end
+	local chessMinimizeButton = makeChessHeaderButton("−", -38)
+	local chessCloseButton = makeChessHeaderButton("X", -6)
+	local chessBody = create("Frame", {
+		Name = "Body",
+		Position = UDim2.fromOffset(0, Config.HeaderHeight),
+		Size = UDim2.new(1, 0, 1, -Config.HeaderHeight),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ZIndex = 2,
+	}, chessWindow)
+
 	local chessView = create("Frame", {
 		Name = "ChessView",
 		Size = UDim2.fromScale(1, 1),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
-		Visible = WordHelper.mode == "Chess",
+		Visible = true,
 		ZIndex = 2,
-	}, body)
+	}, chessBody)
 
 	local chessGameCard = create("Frame", {
 		Name = "GameCard",
@@ -2833,7 +2924,7 @@ zenith
 		Name = "Mode",
 		Position = UDim2.fromOffset(11, 24),
 		Size = UDim2.new(1, -22, 0, 17),
-		Text = WordHelper.chess.supported and "READ-ONLY • verificando partida" or "FEN MANUAL • juego no compatible",
+		Text = WordHelper.chess.supported and "READ-ONLY • verificando partida" or "READ-ONLY • juego no compatible",
 		TextColor3 = Config.Muted,
 		TextSize = 10,
 		TextTruncate = Enum.TextTruncate.AtEnd,
@@ -2902,77 +2993,116 @@ zenith
 		ZIndex = 5,
 	})
 
+	local chessMoveGuide = create("Frame", {
+		Name = "MoveGuide",
+		Position = UDim2.fromOffset(10, 176),
+		Size = UDim2.new(1, -20, 0, 42),
+		BackgroundColor3 = Config.Row,
+		BackgroundTransparency = 0.12,
+		BorderSizePixel = 0,
+		ZIndex = 3,
+	}, chessView)
+	addStroke(chessMoveGuide, Config.Line, 0.82, 1)
+	local chessMoveGuideLabel = makeText(chessMoveGuide, {
+		Name = "Instruction",
+		Position = UDim2.fromOffset(10, 0),
+		Size = UDim2.new(1, -20, 1, 0),
+		Font = BOLD_FONT,
+		Text = "Esperando el mejor movimiento...",
+		TextColor3 = Config.White,
+		TextSize = 12,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		ZIndex = 5,
+	})
 	local chessStateLabel = makeText(chessView, {
 		Name = "State",
-		Position = UDim2.fromOffset(11, 176),
-		Size = UDim2.new(1, -22, 0, 42),
+		Position = UDim2.fromOffset(11, 222),
+		Size = UDim2.new(1, -22, 0, 32),
 		Font = MEDIUM_FONT,
-		Text = WordHelper.chess.supported and "Buscando tablero y contexto seguro..." or "Usa FEN manual para analizar esta posición.",
+		Text = WordHelper.chess.supported and "Leyendo automáticamente el tablero..." or "Juego no compatible.",
 		TextColor3 = Config.Secondary,
-		TextSize = 11,
+		TextSize = 10,
 		TextWrapped = true,
 		ZIndex = 5,
 	})
 	local noAutoplayLabel = makeText(chessView, {
 		Name = "NoAutoplay",
-		Position = UDim2.fromOffset(11, 218),
-		Size = UDim2.new(1, -22, 0, 20),
+		Position = UDim2.fromOffset(11, 253),
+		Size = UDim2.new(1, -22, 0, 16),
 		Text = "SOLO LECTURA • nunca mueve piezas",
 		TextColor3 = Config.Muted,
 		TextSize = 9,
 		ZIndex = 5,
 	})
-
-	local manualFenHolder = create("Frame", {
-		Name = "ManualFenHolder",
-		Position = UDim2.fromOffset(10, 242),
-		Size = UDim2.new(1, -20, 0, 38),
-		BackgroundColor3 = Config.Row,
-		BackgroundTransparency = 0.1,
-		BorderSizePixel = 0,
-		ZIndex = 3,
-	}, chessView)
-	addStroke(manualFenHolder, Config.Line, 0.78, 1)
-	local manualFenBox = create("TextBox", {
-		Name = "ManualFen",
-		Position = UDim2.fromOffset(10, 0),
-		Size = UDim2.new(1, -82, 1, 0),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		ClearTextOnFocus = false,
-		Font = REGULAR_FONT,
-		MultiLine = false,
-		PlaceholderColor3 = Config.Muted,
-		PlaceholderText = "FEN manual o post-partida...",
-		Text = "",
-		TextColor3 = Config.White,
-		TextSize = 11,
-		TextTruncate = Enum.TextTruncate.AtEnd,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		ZIndex = 5,
-	}, manualFenHolder)
-	local analyzeFenButton = makeButton(manualFenHolder, {
-		Name = "AnalyzeFen",
-		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, -4, 0.5, 0),
-		Size = UDim2.fromOffset(64, 30),
-		BackgroundColor3 = Config.Selected,
-		BackgroundTransparency = 0.08,
-		Font = BOLD_FONT,
-		Text = "ANALIZAR",
-		TextColor3 = Config.White,
-		TextSize = 9,
-		ZIndex = 6,
-	})
 	local chessFooterLabel = makeText(chessView, {
 		Name = "Footer",
-		Position = UDim2.fromOffset(11, 286),
-		Size = UDim2.new(1, -22, 0, 22),
-		Text = "Stockfish Online • profundidad " .. tostring(Config.StockfishDepth),
+		Position = UDim2.fromOffset(11, 269),
+		Size = UDim2.new(1, -22, 0, 16),
+		Text = "chess-api.com • automático • profundidad " .. tostring(Config.ChessApiDepth),
 		TextColor3 = Config.Muted,
 		TextSize = 9,
 		TextTruncate = Enum.TextTruncate.AtEnd,
 		ZIndex = 5,
+	})
+
+	-- Screen-space guidance is visual only. It never captures input or calls a
+	-- move remote; the highlighted squares and arrow sit over the detected board.
+	local moveOverlayGui = create("ScreenGui", {
+		Name = "ZenithChessBoardGuide",
+		DisplayOrder = Config.DisplayOrder,
+		Enabled = WordHelper.chess.supported,
+		IgnoreGuiInset = true,
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Global,
+	}, playerGui)
+	local moveOverlayRoot = create("Frame", {
+		Name = "Guide",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Active = false,
+		Visible = false,
+		ZIndex = 100,
+	}, moveOverlayGui)
+	local sourceSquareGuide = create("Frame", {
+		Name = "From",
+		BackgroundColor3 = Color3.fromRGB(246, 181, 72),
+		BackgroundTransparency = 0.5,
+		BorderSizePixel = 0,
+		Active = false,
+		ZIndex = 101,
+	}, moveOverlayRoot)
+	addStroke(sourceSquareGuide, Color3.fromRGB(255, 221, 143), 0.08, 2)
+	local targetSquareGuide = create("Frame", {
+		Name = "To",
+		BackgroundColor3 = Color3.fromRGB(112, 151, 255),
+		BackgroundTransparency = 0.42,
+		BorderSizePixel = 0,
+		Active = false,
+		ZIndex = 101,
+	}, moveOverlayRoot)
+	addStroke(targetSquareGuide, Color3.fromRGB(190, 210, 255), 0.04, 2)
+	local moveArrow = create("Frame", {
+		Name = "Arrow",
+		AnchorPoint = Vector2.new(0, 0.5),
+		BackgroundColor3 = Color3.fromRGB(88, 131, 245),
+		BackgroundTransparency = 0.14,
+		BorderSizePixel = 0,
+		Active = false,
+		ZIndex = 102,
+	}, moveOverlayRoot)
+	create("UICorner", { CornerRadius = UDim.new(1, 0) }, moveArrow)
+	local moveArrowHead = makeText(moveOverlayRoot, {
+		Name = "ArrowHead",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Size = UDim2.fromOffset(28, 28),
+		Font = BOLD_FONT,
+		Text = "▶",
+		TextColor3 = Color3.fromRGB(112, 151, 255),
+		TextSize = 24,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		ZIndex = 103,
 	})
 
 	WordHelper.references.ScreenGui = screenGui
@@ -2982,8 +3112,15 @@ zenith
 	WordHelper.references.Body = body
 	WordHelper.references.TitleLabel = titleLabel
 	WordHelper.references.WordsView = wordsView
+	WordHelper.references.ChessScreenGui = chessScreenGui
+	WordHelper.references.ChessWindow = chessWindow
+	WordHelper.references.ChessWindowScale = chessWindowScale
+	WordHelper.references.ChessHeader = chessHeader
+	WordHelper.references.ChessBody = chessBody
+	WordHelper.references.ChessIcon = chessIcon
 	WordHelper.references.ChessView = chessView
-	WordHelper.references.ModeButton = modeButton
+	WordHelper.references.MoveOverlayGui = moveOverlayGui
+	WordHelper.references.MoveOverlayRoot = moveOverlayRoot
 	WordHelper.references.SearchBox = searchBox
 	WordHelper.references.WordList = wordList
 	WordHelper.references.EmptyLabel = emptyLabel
@@ -2995,11 +3132,46 @@ zenith
 	WordHelper.references.ChessEvalLabel = chessEvalLabel
 	WordHelper.references.ChessPonderLabel = chessPonderLabel
 	WordHelper.references.ChessLineLabel = chessLineLabel
+	WordHelper.references.ChessMoveGuideLabel = chessMoveGuideLabel
 	WordHelper.references.ChessStateLabel = chessStateLabel
-	WordHelper.references.ManualFenBox = manualFenBox
-	WordHelper.references.AnalyzeFenButton = analyzeFenButton
 	WordHelper.references.MinimizeButton = minimizeButton
 	WordHelper.references.CloseButton = closeButton
+	WordHelper.references.ChessMinimizeButton = chessMinimizeButton
+	WordHelper.references.ChessCloseButton = chessCloseButton
+
+	local function loadChessIcon()
+		if not getCustomAsset then return end
+		local path = Config.ChessIconFile
+		local available = false
+		if isFile then
+			local ok, value = pcall(isFile, path)
+			available = ok and value == true
+		end
+		if not available and writeFile then
+			local ok, bytes = pcall(function()
+				return game:HttpGet(Config.ChessIconUrl, true)
+			end)
+			if ok and type(bytes) == "string" and #bytes > 100 then
+				pcall(function()
+					if makeFolder then pcall(makeFolder, "Zenith") end
+					writeFile(path, bytes)
+					available = true
+				end)
+			end
+		end
+		if not available and readFile then
+			local ok, bytes = pcall(readFile, path)
+			available = ok and type(bytes) == "string" and #bytes > 100
+		end
+		if available then
+			local ok, asset = pcall(getCustomAsset, path)
+			if ok and type(asset) == "string" and asset ~= "" and not WordHelper.destroyed then
+				chessIcon.Image = asset
+				chessIcon.ImageTransparency = 0
+				chessIconFallback.Visible = false
+			end
+		end
+	end
 
 	local function setStatus(text, color)
 		statusLabel.Text = text
@@ -3277,11 +3449,11 @@ zenith
 	end
 
 	function WordHelper:SetVisible(visible)
-		if self.destroyed then
-			return
-		end
+		if self.destroyed then return end
 		self.visible = visible == true
-		screenGui.Enabled = self.visible
+		screenGui.Enabled = self.visible and not self.chess.supported
+		chessScreenGui.Enabled = self.visible and self.chess.supported
+		moveOverlayGui.Enabled = self.visible and self.chess.supported
 	end
 
 	function WordHelper:Toggle()
@@ -3289,18 +3461,11 @@ zenith
 	end
 
 	function WordHelper:SetMinimized(minimized)
-		if self.destroyed then
-			return
-		end
+		if self.destroyed then return end
 		self.minimized = minimized == true
 		minimizeButton.Text = self.minimized and "+" or "−"
 		if self.minimized then
-			if searchBox:IsFocused() then
-				searchBox:ReleaseFocus()
-			end
-			if manualFenBox:IsFocused() then
-				manualFenBox:ReleaseFocus()
-			end
+			if searchBox:IsFocused() then searchBox:ReleaseFocus() end
 			body.Visible = false
 			tween(window, OPEN_TWEEN, { Size = UDim2.fromOffset(Config.WindowWidth, Config.CollapsedHeight) })
 		else
@@ -3309,20 +3474,34 @@ zenith
 		end
 	end
 
-	function WordHelper:SetMode(mode)
-		if self.destroyed then
-			return
+	function WordHelper:SetChessMinimized(minimized)
+		if self.destroyed then return end
+		self.chess.minimized = minimized == true
+		chessMinimizeButton.Text = self.chess.minimized and "+" or "−"
+		if self.chess.minimized then
+			chessBody.Visible = false
+			tween(chessWindow, OPEN_TWEEN, { Size = UDim2.fromOffset(Config.ChessWindowWidth, Config.CollapsedHeight) })
+		else
+			chessBody.Visible = true
+			tween(chessWindow, OPEN_TWEEN, { Size = UDim2.fromOffset(Config.ChessWindowWidth, Config.ChessWindowHeight) })
 		end
-		mode = mode == "Chess" and "Chess" or "Words"
-		self.mode = mode
-		local chessMode = mode == "Chess"
-		wordsView.Visible = not chessMode
-		chessView.Visible = chessMode
-		titleLabel.Text = chessMode
-			and '<b>Zenith</b> <font color="#B5B9BF">CHESS</font>'
-			or '<b>Zenith</b> <font color="#B5B9BF">WORDS</font>'
-		modeButton.Text = chessMode and "W" or "♟"
-		modeButton.TextSize = chessMode and 13 or 17
+	end
+
+	-- Compatibility only: switches between two independent ScreenGuis, never
+	-- combines Words and Chess inside the same menu.
+	function WordHelper:SetMode(mode)
+		if self.destroyed then return end
+		if mode == "Chess" and self.chess.supported then
+			self.mode = "Chess"
+			screenGui.Enabled = false
+			chessScreenGui.Enabled = self.visible
+			moveOverlayGui.Enabled = self.visible
+		else
+			self.mode = "Words"
+			chessScreenGui.Enabled = false
+			moveOverlayGui.Enabled = false
+			screenGui.Enabled = self.visible
+		end
 	end
 
 	local function splitWords(value)
@@ -3543,6 +3722,158 @@ zenith
 			if isLayerCollector and current.Enabled == false then return false end
 			current = current.Parent
 		end
+		return true
+	end
+
+	local function isAssistantGui(object)
+		local current = object
+		while current do
+			if current == screenGui or current == chessScreenGui or current == moveOverlayGui then return true end
+			current = current.Parent
+		end
+		return false
+	end
+
+	local function boardCandidateScore(object)
+		if isAssistantGui(object) or not isEffectivelyVisible(object) then return nil end
+		local ok, position, size = pcall(function()
+			return object.AbsolutePosition, object.AbsoluteSize
+		end)
+		if not ok or not size or size.X < 240 or size.Y < 240 then return nil end
+		local minimum, maximum = math.min(size.X, size.Y), math.max(size.X, size.Y)
+		if maximum <= 0 or minimum / maximum < 0.82 then return nil end
+		local name = string.lower(tostring(object.Name or ""))
+		local score = minimum * 0.12 - math.abs(size.X - size.Y) * 0.5
+		if string.find(name, "board", 1, true) then score = score + 500 end
+		if string.find(name, "chess", 1, true) then score = score + 220 end
+		if string.find(name, "grid", 1, true) then score = score + 120 end
+		local childCount, descendantCount = 0, 0
+		pcall(function()
+			for _, child in ipairs(object:GetChildren()) do
+				if child:IsA("GuiObject") then childCount = childCount + 1 end
+			end
+			descendantCount = math.min(#object:GetDescendants(), 200)
+		end)
+		if childCount >= 60 and childCount <= 80 then score = score + 260 end
+		if descendantCount >= 64 then score = score + math.min(descendantCount, 128) end
+		return score, position, size
+	end
+
+	local function boardInstancePath(object)
+		local names, current = {}, object
+		for _ = 1, 12 do
+			if not current then break end
+			table.insert(names, 1, tostring(current.Name))
+			current = current.Parent
+		end
+		return table.concat(names, ".")
+	end
+
+	local function locateBoardGui(force)
+		local cached = WordHelper.chess.boardGui
+		local cachedUsable = cached and cached.Parent and isEffectivelyVisible(cached)
+		if not force and cachedUsable and os.clock() < (WordHelper.chess.nextBoardScan or 0) then return cached end
+		if not force and not cachedUsable and os.clock() < (WordHelper.chess.nextBoardScan or 0) then return nil end
+		WordHelper.chess.nextBoardScan = os.clock() + 2.5
+		local ok, descendants = pcall(function() return playerGui:GetDescendants() end)
+		if not ok then return nil end
+		local best, bestScore = nil, -math.huge
+		for index, object in ipairs(descendants) do
+			if index > 5000 then break end
+			local guiObject = false
+			pcall(function() guiObject = object:IsA("GuiObject") end)
+			if guiObject then
+				local score = boardCandidateScore(object)
+				if score and score > bestScore then best, bestScore = object, score end
+			end
+		end
+		WordHelper.chess.boardGui = best
+		if best then WordHelper.chess.boardPath = boardInstancePath(best) end
+		return best
+	end
+
+	local function clearBoardMove()
+		moveOverlayRoot.Visible = false
+		WordHelper.chess.overlayMove = nil
+	end
+
+	local function squareCenter(square, boardPosition, boardSize, whiteBottom)
+		if type(square) ~= "string" or not string.match(square, "^[a-h][1-8]$") then return nil end
+		local file = string.byte(string.sub(square, 1, 1)) - string.byte("a")
+		local rank = tonumber(string.sub(square, 2, 2)) - 1
+		local column, row
+		if whiteBottom then
+			column, row = file, 7 - rank
+		else
+			column, row = 7 - file, rank
+		end
+		local squareWidth, squareHeight = boardSize.X / 8, boardSize.Y / 8
+		return Vector2.new(
+			boardPosition.X + (column + 0.5) * squareWidth,
+			boardPosition.Y + (row + 0.5) * squareHeight
+		), squareWidth, squareHeight
+	end
+
+	local function boardWhiteAtBottom(board, boardPosition, boardSize, fallback)
+		local ok, descendants = pcall(function() return board:GetDescendants() end)
+		if ok then
+			for index, object in ipairs(descendants) do
+				if index > 800 then break end
+				local isText = false
+				pcall(function() isText = object:IsA("TextLabel") or object:IsA("TextButton") end)
+				if isText and isEffectivelyVisible(object) then
+					local text, position, size = "", nil, nil
+					pcall(function() text, position, size = string.lower(tostring(object.Text or "")), object.AbsolutePosition, object.AbsoluteSize end)
+					if position and size then
+						local centerX, centerY = position.X + size.X / 2, position.Y + size.Y / 2
+						if centerY > boardPosition.Y + boardSize.Y * 0.82 then
+							if text == "a" then return centerX < boardPosition.X + boardSize.X * 0.5 end
+							if text == "h" then return centerX > boardPosition.X + boardSize.X * 0.5 end
+							if text == "1" then return true end
+							if text == "8" then return false end
+						end
+						if centerX < boardPosition.X + boardSize.X * 0.18 then
+							if text == "1" then return true end
+							if text == "8" then return false end
+						end
+					end
+				end
+			end
+		end
+		return fallback
+	end
+
+	local function renderBoardMove(move, snapshot)
+		if type(move) ~= "string" then clearBoardMove() return false end
+		local from = string.sub(string.lower(move), 1, 2)
+		local to = string.sub(string.lower(move), 3, 4)
+		if not string.match(from, "^[a-h][1-8]$") or not string.match(to, "^[a-h][1-8]$") then
+			clearBoardMove()
+			return false
+		end
+		local board = locateBoardGui(false)
+		if not board then clearBoardMove() return false end
+		local ok, boardPosition, boardSize = pcall(function() return board.AbsolutePosition, board.AbsoluteSize end)
+		if not ok then clearBoardMove() return false end
+		local whiteBottom = boardWhiteAtBottom(board, boardPosition, boardSize, not snapshot or snapshot.ownSide ~= "b")
+		local fromPoint, squareWidth, squareHeight = squareCenter(from, boardPosition, boardSize, whiteBottom)
+		local toPoint = squareCenter(to, boardPosition, boardSize, whiteBottom)
+		if not fromPoint or not toPoint then clearBoardMove() return false end
+		local boxWidth, boxHeight = math.max(12, squareWidth - 4), math.max(12, squareHeight - 4)
+		sourceSquareGuide.Position = UDim2.fromOffset(fromPoint.X - boxWidth / 2, fromPoint.Y - boxHeight / 2)
+		sourceSquareGuide.Size = UDim2.fromOffset(boxWidth, boxHeight)
+		targetSquareGuide.Position = UDim2.fromOffset(toPoint.X - boxWidth / 2, toPoint.Y - boxHeight / 2)
+		targetSquareGuide.Size = UDim2.fromOffset(boxWidth, boxHeight)
+		local dx, dy = toPoint.X - fromPoint.X, toPoint.Y - fromPoint.Y
+		local distance = math.sqrt(dx * dx + dy * dy)
+		local angle = math.deg(math.atan2(dy, dx))
+		moveArrow.Position = UDim2.fromOffset(fromPoint.X, fromPoint.Y)
+		moveArrow.Size = UDim2.fromOffset(math.max(8, distance - math.min(squareWidth, squareHeight) * 0.22), math.clamp(math.min(squareWidth, squareHeight) * 0.11, 5, 12))
+		moveArrow.Rotation = angle
+		moveArrowHead.Position = UDim2.fromOffset(toPoint.X, toPoint.Y)
+		moveArrowHead.Rotation = angle
+		moveOverlayRoot.Visible = true
+		WordHelper.chess.overlayMove = move
 		return true
 	end
 
@@ -4063,6 +4394,100 @@ zenith
 		}
 	end
 
+	local VisualBoardAdapter = { Name = "lector visual del tablero", lastRead = -math.huge, lastSnapshot = nil }
+
+	local function visibleTurnMetadata(board, bottomSide)
+		local activeSide, ownTurn = nil, nil
+		local ok, descendants = pcall(function() return playerGui:GetDescendants() end)
+		if not ok then return nil, nil end
+		for index, object in ipairs(descendants) do
+			if index > 3500 then break end
+			local isText = false
+			pcall(function() isText = object:IsA("TextLabel") or object:IsA("TextButton") end)
+			if isText and not isAssistantGui(object) and isEffectivelyVisible(object) then
+				local text = ""
+				pcall(function() text = string.lower(tostring(object.Text or "")) end)
+				if string.find(text, "white to move", 1, true) or string.find(text, "white's turn", 1, true)
+					or string.find(text, "turno de blanc", 1, true) then activeSide = "w" end
+				if string.find(text, "black to move", 1, true) or string.find(text, "black's turn", 1, true)
+					or string.find(text, "turno de negr", 1, true) then activeSide = "b" end
+				if string.find(text, "your turn", 1, true) or string.find(text, "tu turno", 1, true) then ownTurn = true end
+				if string.find(text, "opponent's turn", 1, true) or string.find(text, "turno del oponente", 1, true) then ownTurn = false end
+			end
+		end
+		if ownTurn == true and not activeSide then activeSide = bottomSide end
+		if ownTurn == false and not activeSide and bottomSide then activeSide = bottomSide == "w" and "b" or "w" end
+		if activeSide and bottomSide and ownTurn == nil then ownTurn = activeSide == bottomSide end
+		return activeSide, ownTurn
+	end
+
+	function VisualBoardAdapter:Read()
+		if os.clock() - self.lastRead < 0.8 then return self.lastSnapshot end
+		self.lastRead = os.clock()
+		local board = locateBoardGui(false)
+		if not board then self.lastSnapshot = nil return nil end
+		local ok, boardPosition, boardSize, descendants = pcall(function()
+			return board.AbsolutePosition, board.AbsoluteSize, board:GetDescendants()
+		end)
+		if not ok then return nil end
+		local visualBoard, whiteBottomPieces, blackBottomPieces = {}, 0, 0
+		local occupied = 0
+		for index, object in ipairs(descendants) do
+			if index > 1500 then break end
+			local guiObject = false
+			pcall(function() guiObject = object:IsA("GuiObject") end)
+			if guiObject and isEffectivelyVisible(object) then
+				local piece = nil
+				local attributes = {}
+				pcall(function() attributes = object:GetAttributes() end)
+				if type(attributes) == "table" and next(attributes) then piece = select(1, decodePiece(attributes)) end
+				if not piece then piece = select(1, decodePiece(object.Name)) end
+				if not piece then
+					pcall(function()
+						if object:IsA("TextLabel") or object:IsA("TextButton") then piece = select(1, decodePiece(object.Text)) end
+					end)
+				end
+				if piece then
+					local position, size = object.AbsolutePosition, object.AbsoluteSize
+					local centerX, centerY = position.X + size.X / 2, position.Y + size.Y / 2
+					local column = math.floor((centerX - boardPosition.X) / (boardSize.X / 8))
+					local row = math.floor((centerY - boardPosition.Y) / (boardSize.Y / 8))
+					if column >= 0 and column < 8 and row >= 0 and row < 8 then
+						local squareIndex = row * 8 + column + 1
+						if not visualBoard[squareIndex] then occupied = occupied + 1 end
+						visualBoard[squareIndex] = piece
+						if row >= 4 then
+							if string.upper(piece) == piece then whiteBottomPieces = whiteBottomPieces + 1 else blackBottomPieces = blackBottomPieces + 1 end
+						end
+					end
+				end
+			end
+		end
+		WordHelper.chess.visualPieces = occupied
+		if occupied < 4 then self.lastSnapshot = nil return nil end
+		local bottomSide = whiteBottomPieces >= blackBottomPieces and "w" or "b"
+		local activeSide, ownTurn = visibleTurnMetadata(board, bottomSide)
+		if not activeSide then
+			WordHelper.chess.visualPositionDetected = true
+			self.lastSnapshot = nil
+			return nil
+		end
+		local fen = boardTableToFen({ board = visualBoard, turn = activeSide })
+		if not fen then self.lastSnapshot = nil return nil end
+		local allowed, reason = classifyContext()
+		self.lastSnapshot = {
+			fen = fen,
+			ownTurn = ownTurn,
+			ownSide = bottomSide,
+			activeSide = activeSide,
+			over = false,
+			contextAllowed = allowed,
+			contextReason = reason,
+			source = self.Name,
+		}
+		return self.lastSnapshot
+	end
+
 	local function requireModule(module)
 		if not module then return nil end
 		local ok, result = pcall(require, module)
@@ -4229,58 +4654,112 @@ zenith
 		chessEvalLabel.Text = "EVAL —"
 		chessPonderLabel.Text = "RESPUESTA —"
 		chessLineLabel.Text = line or "Esperando una posición válida..."
+		chessMoveGuideLabel.Text = "Esperando el mejor movimiento..."
+		clearBoardMove()
 		WordHelper.chess.bestMove = nil
 		WordHelper.chess.ponder = nil
 		WordHelper.chess.evaluation = nil
 		WordHelper.chess.mate = nil
 	end
 
-	local function performStockfishRequest(fen)
-		local encoded = httpService:UrlEncode(fen)
-		local url = Config.StockfishEndpoint .. "?fen=" .. encoded
-			.. "&depth=" .. tostring(Config.StockfishDepth) .. "&mode=bestmove"
+	local PIECE_NAMES_ES = {
+		p = "Peón", n = "Caballo", b = "Alfil", r = "Torre", q = "Reina", k = "Rey",
+	}
+
+	local function pieceAtSquare(fen, square)
+		if type(fen) ~= "string" or type(square) ~= "string" then return nil end
+		local board = string.match(fen, "^(%S+)")
+		if not board then return nil end
+		local targetFile = string.byte(string.sub(square, 1, 1)) - string.byte("a") + 1
+		local targetRank = tonumber(string.sub(square, 2, 2))
+		if not targetRank or targetFile < 1 or targetFile > 8 then return nil end
+		local rowIndex = 0
+		for row in string.gmatch(board, "[^/]+") do
+			rowIndex = rowIndex + 1
+			if 9 - rowIndex == targetRank then
+				local file = 0
+				for index = 1, #row do
+					local symbol = string.sub(row, index, index)
+					local empty = tonumber(symbol)
+					if empty then
+						file = file + empty
+					else
+						file = file + 1
+						if file == targetFile then return string.lower(symbol) end
+					end
+				end
+			end
+		end
+		return nil
+	end
+
+	local function performChessApiRequest(fen, generation)
+		local payload = httpService:JSONEncode({
+			fen = fen,
+			variants = 1,
+			depth = Config.ChessApiDepth,
+			maxThinkingTime = Config.ChessApiThinkingTime,
+			taskId = "zenith-" .. tostring(generation) .. "-" .. tostring(math.floor(os.clock() * 1000)),
+		})
 		local body = nil
 		if type(executorRequest) == "function" then
 			local response = executorRequest({
-				Url = url,
-				Method = "GET",
-				Headers = { Accept = "application/json" },
-				Timeout = 10,
+				Url = Config.ChessApiEndpoint,
+				Method = "POST",
+				Headers = { ["Content-Type"] = "application/json", Accept = "application/json" },
+				Body = payload,
+				Timeout = 12,
 			})
 			if type(response) == "table" then
 				local statusCode = tonumber(response.StatusCode or response.Status or response.status_code)
-				if statusCode and (statusCode < 200 or statusCode >= 300) then
-					error("HTTP " .. tostring(statusCode), 0)
-				end
+				if statusCode and (statusCode < 200 or statusCode >= 300) then error("HTTP " .. tostring(statusCode), 0) end
 				body = response.Body or response.body or response.ResponseBody
 			elseif type(response) == "string" then
 				body = response
 			end
 		else
-			body = game:HttpGet(url, true)
+			body = game:HttpPost(Config.ChessApiEndpoint, payload, Enum.HttpContentType.ApplicationJson, false)
 		end
 		if type(body) ~= "string" or body == "" then error("respuesta vacía", 0) end
 		local decoded = httpService:JSONDecode(body)
 		if type(decoded) ~= "table" then error("JSON inválido", 0) end
-		if decoded.success ~= true then
-			error(tostring(decoded.error or decoded.message or "Stockfish rechazó la posición"), 0)
+		local best = tostring(decoded.move or decoded.lan or "")
+		if best == "" and type(decoded.from) == "string" and type(decoded.to) == "string" then
+			best = decoded.from .. decoded.to .. tostring(decoded.promotion or "")
 		end
-		local bestRaw = tostring(decoded.bestmove or decoded.bestMove or "")
-		local best = string.match(bestRaw, "bestmove%s+([a-h][1-8][a-h][1-8][qrbn]?)")
-			or string.match(bestRaw, "^([a-h][1-8][a-h][1-8][qrbn]?)$")
-		local ponder = string.match(bestRaw, "ponder%s+([a-h][1-8][a-h][1-8][qrbn]?)")
-		if not best then error("Stockfish no devolvió un movimiento válido", 0) end
+		best = string.lower(best)
+		if not string.match(best, "^[a-h][1-8][a-h][1-8][qrbn]?$") then
+			error(tostring(decoded.error or decoded.message or decoded.text or "Chess-API no devolvió un movimiento válido"), 0)
+		end
+		local continuation = {}
+		if type(decoded.continuationArr) == "table" then
+			for _, move in ipairs(decoded.continuationArr) do
+				if type(move) == "string" and string.match(string.lower(move), "^[a-h][1-8][a-h][1-8][qrbn]?$") then
+					table.insert(continuation, string.lower(move))
+				end
+			end
+		end
+		local ponder = nil
+		for _, move in ipairs(continuation) do
+			if move ~= best then ponder = move break end
+		end
 		return {
 			best = best,
+			from = tostring(decoded.from or string.sub(best, 1, 2)),
+			to = tostring(decoded.to or string.sub(best, 3, 4)),
+			piece = type(decoded.piece) == "string" and string.lower(decoded.piece) or nil,
+			san = decoded.san,
 			ponder = ponder,
-			evaluation = decoded.evaluation,
+			evaluation = decoded.eval,
 			mate = decoded.mate,
-			continuation = type(decoded.continuation) == "string" and decoded.continuation or "",
+			depth = decoded.depth,
+			continuation = continuation,
+			text = decoded.text,
 		}
 	end
 
-	local startStockfishRequest
-	startStockfishRequest = function(snapshot)
+	local startChessApiRequest
+	startChessApiRequest = function(snapshot)
 		if WordHelper.destroyed or not snapshot then return end
 		if WordHelper.chess.busy then
 			WordHelper.chess.requestGeneration = WordHelper.chess.requestGeneration + 1
@@ -4293,17 +4772,18 @@ zenith
 		local generation = WordHelper.chess.requestGeneration
 		WordHelper.chess.lastRequestedFen = snapshot.fen
 		WordHelper.chess.lastError = nil
-		setChessState(snapshot.manual and "Analizando FEN manual..." or "Stockfish está analizando tu turno...", Config.White)
-		chessLineLabel.Text = "Consultando Stockfish Online..."
+		setChessState("Chess-API está analizando tu posición...", Config.White)
+		chessLineLabel.Text = "Consultando chess-api.com..."
 
 		task.spawn(function()
-			local ok, result = pcall(performStockfishRequest, snapshot.fen)
+			local ok, result = pcall(performChessApiRequest, snapshot.fen, generation)
 			local current = not WordHelper.destroyed and generation == WordHelper.chess.requestGeneration
 			if current and ok then
 				WordHelper.chess.bestMove = result.best
 				WordHelper.chess.ponder = result.ponder
 				WordHelper.chess.evaluation = result.evaluation
 				WordHelper.chess.mate = result.mate
+				WordHelper.chess.lastResult = result
 				bestMoveLabel.Text = formatUci(result.best) or string.upper(result.best)
 				if result.mate ~= nil and tostring(result.mate) ~= "" and tostring(result.mate) ~= "null" then
 					chessEvalLabel.Text = "MATE " .. tostring(result.mate)
@@ -4313,29 +4793,31 @@ zenith
 				else
 					chessEvalLabel.Text = "EVAL —"
 				end
-				chessPonderLabel.Text = result.ponder and ("RESPUESTA " .. (formatUci(result.ponder) or result.ponder)) or "RESPUESTA —"
+				local depthText = result.depth and ("D" .. tostring(result.depth)) or ""
+				chessPonderLabel.Text = result.ponder and ("SIGUE " .. (formatUci(result.ponder) or result.ponder)) or depthText
 				local line = {}
-				for move in string.gmatch(result.continuation, "%S+") do
+				for _, move in ipairs(result.continuation) do
 					local formatted = formatUci(move)
 					if formatted then table.insert(line, formatted) end
 					if #line >= 4 then break end
 				end
-				chessLineLabel.Text = #line > 0 and table.concat(line, "  •  ") or "Análisis listo"
-				setChessState(snapshot.manual and "FEN manual analizado. No se realizó ninguna jugada."
-					or (snapshot.over and "Análisis post-partida listo." or "Tu turno • recomendación lista"), Config.Secondary)
+				chessLineLabel.Text = #line > 0 and table.concat(line, "  •  ") or (result.text or "Análisis listo")
+				local piece = result.piece or pieceAtSquare(snapshot.fen, result.from) or "p"
+				local pieceName = PIECE_NAMES_ES[piece] or "Pieza"
+				chessMoveGuideLabel.Text = string.format("MUEVE %s  %s → %s", pieceName, result.from, result.to)
+				renderBoardMove(result.best, snapshot)
+				setChessState(snapshot.over and "Análisis post-partida listo." or "Tu turno • movimiento marcado en el tablero", Config.Secondary)
 			elseif current then
 				WordHelper.chess.lastError = tostring(result)
 				WordHelper.chess.retryAt = os.clock() + 4
 				WordHelper.chess.lastRequestedFen = nil
-				clearChessRecommendation(snapshot.manual
-					and "Stockfish no está disponible; pulsa ANALIZAR para reintentar."
-					or "Stockfish no está disponible; se reintentará.")
-				setChessState("No se pudo consultar Stockfish Online.", Config.Danger)
+				clearChessRecommendation("Chess-API no está disponible; se reintentará.")
+				setChessState("No se pudo consultar chess-api.com.", Config.Danger)
 			end
 			WordHelper.chess.busy = false
 			local pending = WordHelper.chess.pendingSnapshot
 			WordHelper.chess.pendingSnapshot = nil
-			if pending and not WordHelper.destroyed then startStockfishRequest(pending) end
+			if pending and not WordHelper.destroyed then startChessApiRequest(pending) end
 		end)
 	end
 
@@ -4352,9 +4834,9 @@ zenith
 
 	local function handleChessSnapshot(snapshot)
 		if type(snapshot) == "table" then snapshot.__zenithSnapshot = true end
-		local fen, fenError = normalizeFen(snapshot and snapshot.fen)
+		local fen = normalizeFen(snapshot and snapshot.fen)
 		if not fen then
-			blockLiveAnalysis("invalid", "La posición detectada no contiene un FEN válido.", fenError)
+			blockLiveAnalysis("invalid", "La posición detectada todavía no es válida.", "Esperando que el tablero termine de actualizarse.")
 			return
 		end
 		snapshot.fen = fen
@@ -4365,57 +4847,27 @@ zenith
 			or ((snapshot.source or "posición detectada") .. " • solo lectura")
 
 		if not snapshot.over and snapshot.contextAllowed ~= true then
-			if WordHelper.chess.manualDisplay then return end
-			blockLiveAnalysis(fen .. ":context", "Análisis en vivo bloqueado: " .. tostring(snapshot.contextReason or "contexto no confirmado") .. ".", "Usa FEN manual o análisis post-partida.")
+			blockLiveAnalysis(fen .. ":context", "Análisis en vivo bloqueado: " .. tostring(snapshot.contextReason or "contexto no confirmado") .. ".", "Disponible en bot, práctica, privado o post-partida.")
 			return
 		end
 		if not snapshot.over and snapshot.ownTurn ~= true then
-			if WordHelper.chess.manualDisplay then return end
 			local text = snapshot.ownTurn == false and "Turno del oponente. Zenith espera sin analizar."
 				or "Posición detectada; falta confirmar tu color y turno."
 			blockLiveAnalysis(fen .. ":turn:" .. tostring(snapshot.ownTurn), text, "Sin recomendación fuera de tu turno.")
 			return
 		end
 		if not snapshot.over and snapshot.ownSide and snapshot.activeSide and snapshot.ownSide ~= snapshot.activeSide then
-			if WordHelper.chess.manualDisplay then return end
 			blockLiveAnalysis(fen .. ":side", "El lado activo no coincide con tu color.", "Sin recomendación fuera de tu turno.")
 			return
 		end
 
-		WordHelper.chess.manualDisplay = false
 		WordHelper.chess.gateSignature = fen .. ":allowed"
 		if WordHelper.chess.lastRequestedFen ~= fen and os.clock() >= WordHelper.chess.retryAt then
-			startStockfishRequest(snapshot)
+			startChessApiRequest(snapshot)
 		elseif not WordHelper.chess.busy and WordHelper.chess.bestMove then
-			setChessState(snapshot.over and "Análisis post-partida listo." or "Tu turno • recomendación lista", Config.Secondary)
+			renderBoardMove(WordHelper.chess.bestMove, snapshot)
+			setChessState(snapshot.over and "Análisis post-partida listo." or "Tu turno • movimiento marcado en el tablero", Config.Secondary)
 		end
-	end
-
-	function WordHelper:AnalyzeFen(value)
-		local fen, reason = normalizeFen(value)
-		if not fen then
-			self.chess.manualDisplay = false
-			clearChessRecommendation(reason)
-			setChessState("FEN manual inválido.", Config.Danger)
-			return false, reason
-		end
-		self.chess.manualDisplay = true
-		self.chess.gateSignature = fen .. ":manual"
-		if self.chess.lastRequestedFen == fen and self.chess.bestMove then
-			setChessState("Esta posición ya está analizada. No se realizó ninguna jugada.", Config.Secondary)
-			return true
-		end
-		startStockfishRequest({
-			__zenithSnapshot = true,
-			fen = fen,
-			activeSide = fenTurn(fen),
-			over = true,
-			manual = true,
-			contextAllowed = true,
-			contextReason = "FEN manual",
-			source = "FEN manual",
-		})
-		return true
 	end
 
 	function WordHelper:GetChessDiagnostics()
@@ -4426,6 +4878,11 @@ zenith
 		generic.ownTurn = self.chess.lastSnapshot and self.chess.lastSnapshot.ownTurn or nil
 		generic.contextAllowed = self.chess.lastSnapshot and self.chess.lastSnapshot.contextAllowed or nil
 		generic.contextReason = self.chess.lastSnapshot and self.chess.lastSnapshot.contextReason or nil
+		generic.boardPath = self.chess.boardPath
+		generic.visualPieces = self.chess.visualPieces
+		generic.visualPositionDetected = self.chess.visualPositionDetected
+		generic.overlayMove = self.chess.overlayMove
+		generic.api = Config.ChessApiEndpoint
 		generic.lastError = self.chess.lastError
 		return generic
 	end
@@ -4456,11 +4913,19 @@ zenith
 			local ok, result = pcall(function() return GenericAdapter:Read() end)
 			if ok then snapshot = result end
 		end
+		if not snapshot then
+			local ok, result = pcall(function() return VisualBoardAdapter:Read() end)
+			if ok then snapshot = result end
+		end
 		if snapshot then
 			handleChessSnapshot(snapshot)
 		elseif not WordHelper.chess.lastFen then
-			chessModeLabel.Text = "READ-ONLY • esperando estado del juego"
-			setChessState("Buscando tablero, color, turno y modo de partida...", Config.Secondary)
+			chessModeLabel.Text = "READ-ONLY • lectura automática de pantalla/UI"
+			if WordHelper.chess.visualPositionDetected then
+				setChessState("Tablero visible detectado; confirmando color y turno...", Config.Secondary)
+			else
+				setChessState("Buscando tablero, piezas, color y turno...", Config.Secondary)
+			end
 		end
 	end
 
@@ -4487,7 +4952,7 @@ zenith
 	end
 
 	local function bindFocusedTextBox(textBox)
-		if textBox == searchBox or textBox == manualFenBox then
+		if textBox == searchBox then
 			disconnectFocusedTextBox()
 			return
 		end
@@ -4537,9 +5002,6 @@ zenith
 		if searchBox:IsFocused() then
 			searchBox:ReleaseFocus()
 		end
-		if manualFenBox:IsFocused() then
-			manualFenBox:ReleaseFocus()
-		end
 		self.destroyed = true
 		self.chess.requestGeneration = self.chess.requestGeneration + 1
 		self.chess.pendingSnapshot = nil
@@ -4551,9 +5013,9 @@ zenith
 			end
 		end
 		table.clear(self.connections)
-		if screenGui and screenGui.Parent then
-			screenGui:Destroy()
-		end
+		if screenGui and screenGui.Parent then screenGui:Destroy() end
+		if chessScreenGui and chessScreenGui.Parent then chessScreenGui:Destroy() end
+		if moveOverlayGui and moveOverlayGui.Parent then moveOverlayGui:Destroy() end
 		if sharedEnvironment.ZenithAssistant == self then
 			sharedEnvironment.ZenithAssistant = nil
 		end
@@ -4586,16 +5048,6 @@ zenith
 	connect(searchBox.FocusLost, function()
 		tween(searchStroke, FAST_TWEEN, { Transparency = 0.78, Color = Config.Line })
 	end)
-	connect(manualFenBox.Focused, function()
-		disconnectFocusedTextBox()
-	end)
-	connect(manualFenBox.FocusLost, function(enterPressed)
-		if enterPressed then WordHelper:AnalyzeFen(manualFenBox.Text) end
-	end)
-	connect(analyzeFenButton.Activated, function()
-		WordHelper:AnalyzeFen(manualFenBox.Text)
-	end)
-
 	local function bindHeaderHover(button, danger)
 		connect(button.MouseEnter, function()
 			tween(button, FAST_TWEEN, {
@@ -4610,21 +5062,24 @@ zenith
 			})
 		end)
 	end
-	bindHeaderHover(modeButton, false)
 	bindHeaderHover(minimizeButton, false)
 	bindHeaderHover(closeButton, true)
+	bindHeaderHover(chessMinimizeButton, false)
+	bindHeaderHover(chessCloseButton, true)
 
-	connect(modeButton.Activated, function()
-		WordHelper:SetMode(WordHelper.mode == "Chess" and "Words" or "Chess")
-	end)
 	connect(minimizeButton.Activated, function()
 		WordHelper:SetMinimized(not WordHelper.minimized)
 	end)
+	connect(chessMinimizeButton.Activated, function()
+		WordHelper:SetChessMinimized(not WordHelper.chess.minimized)
+	end)
 	connect(closeButton.Activated, function()
 		tween(windowScale, FAST_TWEEN, { Scale = windowScale.Scale * 0.92 })
-		task.delay(FAST_TWEEN.Time + 0.03, function()
-			WordHelper:Destroy()
-		end)
+		task.delay(FAST_TWEEN.Time + 0.03, function() WordHelper:Destroy() end)
+	end)
+	connect(chessCloseButton.Activated, function()
+		tween(chessWindowScale, FAST_TWEEN, { Scale = chessWindowScale.Scale * 0.92 })
+		task.delay(FAST_TWEEN.Time + 0.03, function() WordHelper:Destroy() end)
 	end)
 
 	local function currentViewport()
@@ -4651,9 +5106,7 @@ zenith
 	end
 
 	local function updateResponsivePlacement()
-		if WordHelper.destroyed then
-			return
-		end
+		if WordHelper.destroyed then return end
 		local viewport = currentViewport()
 		local scale = targetScale()
 		windowScale.Scale = scale
@@ -4668,6 +5121,40 @@ zenith
 		end
 	end
 
+	local function chessTargetScale()
+		local viewport = currentViewport()
+		return math.clamp(math.min(
+			(viewport.X - 12) / Config.ChessWindowWidth,
+			(viewport.Y - 12) / Config.ChessWindowHeight,
+			1
+		), 0.68, 1)
+	end
+
+	local function clampChessWindowPosition(x, y)
+		local viewport = currentViewport()
+		local scale = chessWindowScale.Scale
+		local width = Config.ChessWindowWidth * scale
+		local height = (WordHelper.chess.minimized and Config.CollapsedHeight or Config.ChessWindowHeight) * scale
+		return math.clamp(x, 6, math.max(6, viewport.X - width - 6)),
+			math.clamp(y, 6, math.max(6, viewport.Y - height - 6))
+	end
+
+	local function updateChessResponsivePlacement()
+		if WordHelper.destroyed then return end
+		local viewport = currentViewport()
+		local scale = chessTargetScale()
+		chessWindowScale.Scale = scale
+		if not WordHelper.chess.hasUserPosition then
+			local x = 16
+			local y = (viewport.Y - Config.ChessWindowHeight * scale) * 0.5
+			x, y = clampChessWindowPosition(x, y)
+			chessWindow.Position = UDim2.fromOffset(x, y)
+		else
+			local x, y = clampChessWindowPosition(chessWindow.Position.X.Offset, chessWindow.Position.Y.Offset)
+			chessWindow.Position = UDim2.fromOffset(x, y)
+		end
+	end
+
 	-- Dragging the compact header moves the assistant anywhere on screen. It no
 	-- longer rotates or takes over the game view.
 	connect(header.InputBegan, function(input)
@@ -4677,41 +5164,50 @@ zenith
 		WordHelper.dragging = true
 		WordHelper.dragInput = input
 		WordHelper.dragStart = Vector2.new(input.Position.X, input.Position.Y)
-		local absolutePosition = window.AbsolutePosition
-		WordHelper.dragWindowStart = Vector2.new(absolutePosition.X, absolutePosition.Y)
+		-- Position offsets stay in the same coordinate space while dragging. Using
+		-- AbsolutePosition here caused the menu to jump upward on scaled/inset UIs.
+		WordHelper.dragWindowStart = Vector2.new(window.Position.X.Offset, window.Position.Y.Offset)
+	end)
+
+	connect(chessHeader.InputBegan, function(input)
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
+		WordHelper.chess.dragging = true
+		WordHelper.chess.dragInput = input
+		WordHelper.chess.dragStart = Vector2.new(input.Position.X, input.Position.Y)
+		WordHelper.chess.dragWindowStart = Vector2.new(chessWindow.Position.X.Offset, chessWindow.Position.Y.Offset)
 	end)
 
 	connect(userInputService.InputChanged, function(input)
-		if not WordHelper.dragging then
-			return
-		end
-		if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then
-			return
-		end
-		if WordHelper.dragInput.UserInputType == Enum.UserInputType.Touch and input ~= WordHelper.dragInput then
-			return
-		end
+		if not WordHelper.dragging and not WordHelper.chess.dragging then return end
+		if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
 		local position = Vector2.new(input.Position.X, input.Position.Y)
-		local delta = position - WordHelper.dragStart
-		local x, y = clampWindowPosition(
-			WordHelper.dragWindowStart.X + delta.X,
-			WordHelper.dragWindowStart.Y + delta.Y
-		)
-		WordHelper.hasUserPosition = true
-		window.Position = UDim2.fromOffset(x, y)
+		if WordHelper.dragging then
+			if WordHelper.dragInput.UserInputType == Enum.UserInputType.Touch and input ~= WordHelper.dragInput then return end
+			local delta = position - WordHelper.dragStart
+			local x, y = clampWindowPosition(WordHelper.dragWindowStart.X + delta.X, WordHelper.dragWindowStart.Y + delta.Y)
+			WordHelper.hasUserPosition = true
+			window.Position = UDim2.fromOffset(x, y)
+		elseif WordHelper.chess.dragging then
+			if WordHelper.chess.dragInput.UserInputType == Enum.UserInputType.Touch and input ~= WordHelper.chess.dragInput then return end
+			local delta = position - WordHelper.chess.dragStart
+			local x, y = clampChessWindowPosition(WordHelper.chess.dragWindowStart.X + delta.X, WordHelper.chess.dragWindowStart.Y + delta.Y)
+			WordHelper.chess.hasUserPosition = true
+			chessWindow.Position = UDim2.fromOffset(x, y)
+		end
 	end)
 
 	connect(userInputService.InputEnded, function(input)
-		if not WordHelper.dragging then
-			return
+		if WordHelper.dragging then
+			local activeInput = WordHelper.dragInput
+			local matchingMouse = activeInput.UserInputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseButton1
+			local matchingTouch = activeInput.UserInputType == Enum.UserInputType.Touch and input == activeInput
+			if matchingMouse or matchingTouch then WordHelper.dragging, WordHelper.dragInput = false, nil end
 		end
-		local activeInput = WordHelper.dragInput
-		local matchingMouse = activeInput.UserInputType == Enum.UserInputType.MouseButton1
-			and input.UserInputType == Enum.UserInputType.MouseButton1
-		local matchingTouch = activeInput.UserInputType == Enum.UserInputType.Touch and input == activeInput
-		if matchingMouse or matchingTouch then
-			WordHelper.dragging = false
-			WordHelper.dragInput = nil
+		if WordHelper.chess.dragging then
+			local activeInput = WordHelper.chess.dragInput
+			local matchingMouse = activeInput.UserInputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseButton1
+			local matchingTouch = activeInput.UserInputType == Enum.UserInputType.Touch and input == activeInput
+			if matchingMouse or matchingTouch then WordHelper.chess.dragging, WordHelper.chess.dragInput = false, nil end
 		end
 	end)
 
@@ -4794,12 +5290,14 @@ zenith
 		end
 	end)
 
+	local function updateAllResponsivePlacement()
+		updateResponsivePlacement()
+		updateChessResponsivePlacement()
+	end
 	local function bindViewport()
 		local camera = workspaceService.CurrentCamera
-		if camera then
-			connect(camera:GetPropertyChangedSignal("ViewportSize"), updateResponsivePlacement)
-		end
-		updateResponsivePlacement()
+		if camera then connect(camera:GetPropertyChangedSignal("ViewportSize"), updateAllResponsivePlacement) end
+		updateAllResponsivePlacement()
 	end
 	connect(workspaceService:GetPropertyChangedSignal("CurrentCamera"), bindViewport)
 	bindViewport()
@@ -4814,6 +5312,7 @@ zenith
 	WordHelper:SetWords(parseDictionary(FALLBACK_WORDS))
 	WordHelper:SetMode(WordHelper.mode)
 	if WordHelper.chess.supported then
+		task.spawn(loadChessIcon)
 		task.spawn(function()
 			pollChess()
 			while not WordHelper.destroyed do
@@ -4823,49 +5322,47 @@ zenith
 		end)
 	end
 
-	-- Upgrade to the full cached/downloaded English dictionary in the background.
-	task.spawn(function()
-		local content = nil
-		if readFile then
-			local ok, value = pcall(function()
-				if isFile and not isFile(Config.DictionaryFile) then
-					return nil
-				end
-				return readFile(Config.DictionaryFile)
-			end)
-			if ok and type(value) == "string" and #value > 1000 then
-				content = value
-				WordHelper.dictionaryLabel = "Cached dictionary"
-			end
-		end
-
-		if not content then
-			local ok, value = pcall(function()
-				return game:HttpGet(Config.DictionaryUrl, true)
-			end)
-			if ok and type(value) == "string" and #value > 1000 then
-				content = value
-				WordHelper.dictionaryLabel = "Full dictionary"
-				if writeFile then
-					pcall(function()
-						if makeFolder then
-							pcall(makeFolder, "Zenith")
-						end
-						writeFile(Config.DictionaryFile, value)
-					end)
+	-- Upgrade Words only when its separate menu is the active product.
+	if not WordHelper.chess.supported then
+		task.spawn(function()
+			local content = nil
+			if readFile then
+				local ok, value = pcall(function()
+					if isFile and not isFile(Config.DictionaryFile) then
+						return nil
+					end
+					return readFile(Config.DictionaryFile)
+				end)
+				if ok and type(value) == "string" and #value > 1000 then
+					content = value
+					WordHelper.dictionaryLabel = "Cached dictionary"
 				end
 			end
-		end
 
-		if WordHelper.destroyed or not content then
-			return
-		end
-		local words = parseDictionary(content)
-		if #words > 0 then
-			installCleanWords(words)
-			scheduleRefresh()
-		end
-	end)
+			if not content then
+				local ok, value = pcall(function()
+					return game:HttpGet(Config.DictionaryUrl, true)
+				end)
+				if ok and type(value) == "string" and #value > 1000 then
+					content = value
+					WordHelper.dictionaryLabel = "Full dictionary"
+					if writeFile then
+						pcall(function()
+							if makeFolder then pcall(makeFolder, "Zenith") end
+							writeFile(Config.DictionaryFile, value)
+						end)
+					end
+				end
+			end
+
+			if WordHelper.destroyed or not content then return end
+			local words = parseDictionary(content)
+			if #words > 0 then
+				installCleanWords(words)
+				scheduleRefresh()
+			end
+		end)
+	end
 
 	-- Keep the existing twelve-hour entitlement without adding a timer/stat panel.
 	standardExpiresAt = tonumber(standardExpiresAt) or (os.time() + ZenithKeyLog.DurationSeconds)
@@ -4883,11 +5380,20 @@ zenith
 	end)
 
 	-- Small, non-blocking entrance; there is deliberately no BlurEffect.
-	local finalScale = targetScale()
-	windowScale.Scale = finalScale * 0.9
-	updateResponsivePlacement()
-	windowScale.Scale = finalScale * 0.9
-	tween(windowScale, OPEN_TWEEN, { Scale = finalScale })
+	updateAllResponsivePlacement()
+	if WordHelper.chess.supported then
+		local finalScale = chessTargetScale()
+		chessWindowScale.Scale = finalScale * 0.9
+		updateChessResponsivePlacement()
+		chessWindowScale.Scale = finalScale * 0.9
+		tween(chessWindowScale, OPEN_TWEEN, { Scale = finalScale })
+	else
+		local finalScale = targetScale()
+		windowScale.Scale = finalScale * 0.9
+		updateResponsivePlacement()
+		windowScale.Scale = finalScale * 0.9
+		tween(windowScale, OPEN_TWEEN, { Scale = finalScale })
+	end
 
 	return WordHelper
 end
