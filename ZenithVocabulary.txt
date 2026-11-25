@@ -2767,6 +2767,14 @@ zenith
 		exactRemoteHookActive = false,
 		knownWordRemote = nil,
 		knownSessionId = nil,
+		knownMatchPlayers = {},
+		matchCurrentWords = {},
+		matchWordHistory = {},
+		wordBombRemoteListeners = setmetatable({}, { __mode = "k" }),
+		wordBombTypingGui = nil,
+		letterSelectionActive = false,
+		letterSelectionOwner = nil,
+		letterSelectionLetters = {},
 		lastLocalRemoteCall = 0,
 		lastNativeSearchEditAt = 0,
 		robloxMenuOpen = false,
@@ -2774,6 +2782,7 @@ zenith
 		isAutoTyping = false,
 		autoTypeGeneration = 0,
 		autoTypeTextBox = nil,
+		autoTypeMethod = nil,
 		suppressGeneratedUntil = 0,
 		lastWordActivation = nil,
 		lastWordActivationAt = 0,
@@ -2812,6 +2821,7 @@ zenith
 		WordHelper.autoTypeGeneration = WordHelper.autoTypeGeneration + 1
 		WordHelper.isAutoTyping = false
 		WordHelper.autoTypeTextBox = nil
+		WordHelper.autoTypeMethod = nil
 		if invalidateInput then WordHelper.inputEpoch = WordHelper.inputEpoch + 1 end
 	end
 
@@ -4423,6 +4433,7 @@ zenith
 
 	local updateResponsivePlacement
 	local markUsed
+	local bindKnownWordBombRemote
 
 	function WordHelper:SetMinimized(minimized)
 		if self.destroyed then
@@ -4661,6 +4672,7 @@ zenith
 	connect(usedChip.Activated, function()
 		table.clear(WordHelper.usedWords)
 		table.clear(WordHelper.pendingUsedWords)
+		table.clear(WordHelper.matchWordHistory)
 		WordHelper.usedCount = 0
 		updateUsedChip()
 		setStatus("Lista de palabras usadas reiniciada", Config.Secondary)
@@ -4828,6 +4840,46 @@ zenith
 		updateUsedChip()
 	end
 
+	local function matchParticipantKey(player)
+		if player == localPlayer then return "local" end
+		local userId, name = nil, nil
+		pcall(function()
+			userId = player.UserId
+			name = player.Name
+		end)
+		if type(userId) == "number" and userId > 0 then return "user:" .. tostring(userId) end
+		if type(name) == "string" and name ~= "" then return "player:" .. name end
+		if type(player) == "table" then
+			userId = player.UserId
+			name = player.PlayerName or player.Name
+			if type(userId) == "number" and userId > 0 then return "user:" .. tostring(userId) end
+			if type(name) == "string" and name ~= "" then return "player:" .. name end
+		end
+		return "unknown"
+	end
+
+	local function setMatchCurrentWord(player, word)
+		local key = matchParticipantKey(player)
+		word = normalizeLetters(word)
+		WordHelper.matchCurrentWords[key] = word
+		return word
+	end
+
+	local function rememberMatchWord(player, word)
+		word = normalizeLetters(word)
+		if #word < 2 then return false end
+		local key = matchParticipantKey(player)
+		local history = WordHelper.matchWordHistory[key]
+		if not history then
+			history = {}
+			WordHelper.matchWordHistory[key] = history
+		end
+		history[word] = true
+		WordHelper.matchCurrentWords[key] = ""
+		markUsed(word)
+		return true
+	end
+
 	local function passiveType(action, resetSeconds)
 		if not Settings.autoDetect or WordHelper.isAutoTyping or isRobloxMenuOpen() then return end
 		-- In the confirmed two-player game, consumed physical keys and world-space
@@ -4843,9 +4895,10 @@ zenith
 			WordHelper.passiveBuffer = string.sub(WordHelper.passiveBuffer, 1, math.max(0, #WordHelper.passiveBuffer - 1))
 		elseif action == "end" then
 			if currentPlaceId == WORD_BOMB_PLACE_ID then
-				-- The server's confirm event is authoritative. Invalid words leave the
-				-- same turn active, so do not hide a word before confirmation.
+				-- The server's confirm event is authoritative. Preserve the complete
+				-- attempt so confirm/wrongAnswer can attribute it before clearing input.
 				WordHelper.awaitingSubmission = true
+				setMatchCurrentWord(localPlayer, WordHelper.turnPrompt .. WordHelper.passiveBuffer)
 				WordHelper.passiveBuffer = ""
 				applyDetectedQuery(WordHelper.turnPrompt, "turn", true)
 			else
@@ -4857,54 +4910,75 @@ zenith
 		else
 			WordHelper.passiveBuffer = string.sub(WordHelper.passiveBuffer .. action, -32)
 		end
+		if currentPlaceId == WORD_BOMB_PLACE_ID then
+			setMatchCurrentWord(localPlayer, WordHelper.turnPrompt .. WordHelper.passiveBuffer)
+		end
 		applyDetectedQuery(queryForTypedBuffer(WordHelper.passiveBuffer), "passive", true)
 	end
 
-	-- The confirmed trace emits MatchStatus as:
+	-- The supplied live trace emits the exact MatchStatus protocol below:
+	--   updateId(sessionUUID, { players... })
 	--   type(prompt, typingRemote, startedAt, Player, turnConfig)
 	--   confirm(Player, word, ...) / wrongAnswer(Player, reason, ...)
-	-- The Player instance is authoritative and stops opponent words from ever
-	-- becoming Zenith's query.
+	-- Use the protocol's fixed owner positions first. This matters when another
+	-- argument happens to contain the local player: the active Player, not merely
+	-- the first familiar value, decides whether Zenith may type.
+	local function protocolPlayer(value)
+		if value == localPlayer then return localPlayer end
+		local player = nil
+		pcall(function()
+			if typeof(value) == "Instance" and value:IsA("Player") then player = value end
+		end)
+		if player then return player end
+		if type(value) == "table" then
+			local ownerName = value.Player or value.PlayerName or value.Name
+			if (type(ownerName) == "string" and (ownerName == localPlayer.Name or ownerName == localPlayer.DisplayName))
+				or (value.UserId ~= nil and localPlayer.UserId ~= nil and value.UserId == localPlayer.UserId) then
+				return localPlayer
+			end
+			if type(ownerName) == "string" or value.UserId ~= nil then return value end
+		end
+		return nil
+	end
+
 	local function processMatchStatus(...)
 		if currentPlaceId ~= WORD_BOMB_PLACE_ID then return end
 		local arguments = table.pack(...)
 		local eventType = type(arguments[1]) == "string" and string.lower(arguments[1]) or ""
 		if eventType == "updateid" then
-			local sessionId = arguments[2]
+			local sessionId, participants = arguments[2], arguments[3]
 			if type(sessionId) == "string" and string.match(sessionId, "^[%x%-]+$") then
 				WordHelper.knownSessionId = sessionId
 			end
+			table.clear(WordHelper.knownMatchPlayers)
+			if type(participants) == "table" then
+				for _, participant in pairs(participants) do
+					local player = protocolPlayer(participant)
+					if player then table.insert(WordHelper.knownMatchPlayers, player) end
+				end
+			end
 			return
 		end
+
+		local exactOwnerIndex = eventType == "type" and 5 or 2
+		local owner = protocolPlayer(arguments[exactOwnerIndex])
+		if not owner then
+			-- Compatibility fallback for a server revision that appends fields while
+			-- retaining one unambiguous Player argument.
+			for index = 2, arguments.n do
+				owner = protocolPlayer(arguments[index])
+				if owner then break end
+			end
+		end
+
 		if eventType == "type" then
 			local candidate = arguments[3]
 			pcall(function()
-				if candidate and candidate:IsA("RemoteEvent") then WordHelper.knownWordRemote = candidate end
-			end)
-		end
-		local owner = nil
-		for index = 2, arguments.n do
-			local value = arguments[index]
-			if value == localPlayer then
-				owner = value
-				break
-			end
-			pcall(function()
-				if not owner and typeof(value) == "Instance" and value:IsA("Player") then owner = value end
-			end)
-		end
-		if not owner then
-			for index = 2, arguments.n do
-				local value = arguments[index]
-				if type(value) == "table" then
-					local ownerName = value.Player or value.PlayerName or value.Name
-					if (type(ownerName) == "string" and (ownerName == localPlayer.Name or ownerName == localPlayer.DisplayName))
-						or (value.UserId ~= nil and localPlayer.UserId ~= nil and value.UserId == localPlayer.UserId) then
-						owner = localPlayer
-						break
-					end
+				if candidate and candidate:IsA("RemoteEvent") then
+					WordHelper.knownWordRemote = candidate
+					if bindKnownWordBombRemote then bindKnownWordBombRemote(candidate) end
 				end
-			end
+			end)
 		end
 
 		local function waitForLocalTurn()
@@ -4920,6 +4994,9 @@ zenith
 		end
 
 		if eventType == "type" then
+			WordHelper.letterSelectionActive = false
+			WordHelper.letterSelectionOwner = nil
+			table.clear(WordHelper.letterSelectionLetters)
 			cancelAutomaticTyping(true)
 			WordHelper.lastWordActivation = nil
 			WordHelper.lastWordActivationAt = 0
@@ -4931,6 +5008,7 @@ zenith
 			WordHelper.awaitingSubmission = false
 			WordHelper.searchMode = "prefix"
 			modeChip.Text = "Empieza con"
+			setMatchCurrentWord(owner, prompt)
 			if ownTurn then
 				WordHelper.localTurn = true
 				local recentVisual = os.clock() - WordHelper.visiblePromptAt <= 0.75 and WordHelper.visiblePrompt or ""
@@ -4941,16 +5019,25 @@ zenith
 			else
 				waitForLocalTurn()
 			end
-		elseif eventType == "confirm" and owner == localPlayer then
+		elseif eventType == "confirm" then
 			WordHelper.lastTurnEventAt = os.clock()
-			if type(arguments[3]) == "string" then markUsed(arguments[3]) end
-			WordHelper.turnSource = "match"
-			waitForLocalTurn()
-		elseif eventType == "wronganswer" and owner == localPlayer then
+			local confirmed = type(arguments[3]) == "string" and arguments[3]
+				or WordHelper.matchCurrentWords[matchParticipantKey(owner)]
+			rememberMatchWord(owner, confirmed)
+			if owner == localPlayer then
+				WordHelper.turnSource = "match"
+				waitForLocalTurn()
+			end
+		elseif eventType == "wronganswer" then
+			WordHelper.lastTurnEventAt = os.clock()
+			-- Remember complete attempted dictionary words for either participant as
+			-- well. Invalid fragments do not enter usedWords, but a server-reported
+			-- AlreadyUsed word is immediately excluded from future suggestions.
+			rememberMatchWord(owner, WordHelper.matchCurrentWords[matchParticipantKey(owner)])
+			if owner ~= localPlayer then return end
 			cancelAutomaticTyping(true)
 			WordHelper.lastWordActivation = nil
 			WordHelper.lastWordActivationAt = 0
-			WordHelper.lastTurnEventAt = os.clock()
 			WordHelper.awaitingSubmission = false
 			local reason = type(arguments[3]) == "string" and string.lower(arguments[3]) or ""
 			if reason == "healthsubtracted" then
@@ -4963,6 +5050,7 @@ zenith
 				WordHelper.turnOwner = localPlayer
 				WordHelper.turnSource = "match"
 				WordHelper.passiveBuffer = ""
+				setMatchCurrentWord(localPlayer, WordHelper.turnPrompt)
 				if WordHelper.turnPrompt == "" and os.clock() - WordHelper.visiblePromptAt <= 0.75 then
 					WordHelper.turnPrompt = WordHelper.visiblePrompt
 				end
@@ -4971,7 +5059,44 @@ zenith
 		end
 	end
 
+	local function processLetterEvent(...)
+		if currentPlaceId ~= WORD_BOMB_PLACE_ID then return end
+		local arguments = table.pack(...)
+		local eventType = type(arguments[1]) == "string" and string.lower(arguments[1]) or ""
+		if eventType == "enable" then
+			WordHelper.letterSelectionActive = true
+			WordHelper.letterSelectionOwner = protocolPlayer(arguments[5])
+			table.clear(WordHelper.letterSelectionLetters)
+			if type(arguments[2]) == "table" then
+				for _, value in pairs(arguments[2]) do
+					value = normalizeLetters(value)
+					if #value == 1 then WordHelper.letterSelectionLetters[value] = true end
+				end
+			end
+			-- LetterEvent is a separate choose-a-letter phase, not word entry. Its
+			-- visible alphabet must never be mistaken for authority to type a word.
+			cancelAutomaticTyping(true)
+			WordHelper.localTurn = false
+			WordHelper.turnOwner = WordHelper.letterSelectionOwner
+			WordHelper.turnSource = "letter-selection"
+			WordHelper.turnPrompt = ""
+			WordHelper.passiveBuffer = ""
+			applyDetectedQuery("", "turn", true)
+		elseif eventType == "update" and type(arguments[2]) == "table" then
+			table.clear(WordHelper.letterSelectionLetters)
+			for _, value in pairs(arguments[2]) do
+				value = normalizeLetters(value)
+				if #value == 1 then WordHelper.letterSelectionLetters[value] = true end
+			end
+		elseif eventType == "disable" or eventType == "clear" then
+			WordHelper.letterSelectionActive = false
+			WordHelper.letterSelectionOwner = nil
+			table.clear(WordHelper.letterSelectionLetters)
+		end
+	end
+
 	WordHelper.ProcessMatchStatus = processMatchStatus
+	WordHelper.ProcessLetterEvent = processLetterEvent
 	local boundMatchStatus = setmetatable({}, { __mode = "k" })
 	local function bindMatchStatus(remote)
 		if currentPlaceId ~= WORD_BOMB_PLACE_ID or not remote or boundMatchStatus[remote] then return end
@@ -4981,24 +5106,54 @@ zenith
 		boundMatchStatus[remote] = true
 		pcall(function() connect(remote.OnClientEvent, processMatchStatus) end)
 	end
+	local boundLetterEvents = setmetatable({}, { __mode = "k" })
+	local function bindLetterEvent(remote)
+		if currentPlaceId ~= WORD_BOMB_PLACE_ID or not remote or boundLetterEvents[remote] then return end
+		local valid = false
+		pcall(function()
+			valid = remote:IsA("RemoteEvent") and remote.Name == "LetterEvent"
+				and string.find(remote:GetFullName(), "MatchmakingFolders", 1, true) ~= nil
+		end)
+		if not valid then return end
+		boundLetterEvents[remote] = true
+		pcall(function() connect(remote.OnClientEvent, processLetterEvent) end)
+	end
 	if currentPlaceId == WORD_BOMB_PLACE_ID then
 		bindMatchStatus(replicatedStorage:FindFirstChild("MatchStatus", true))
+		bindLetterEvent(workspaceService:FindFirstChild("LetterEvent", true))
 		pcall(function() connect(replicatedStorage.DescendantAdded, bindMatchStatus) end)
+		pcall(function() connect(workspaceService.DescendantAdded, bindLetterEvent) end)
 	end
 
 	-- TextBoxFocused reports both chat and game interfaces; isGameTextBox filters
 	-- Roblox chat before binding. The passive gameProcessed fallback also catches
 	-- custom interfaces that render text in a label instead of focusing a TextBox.
 	connect(userInputService.TextBoxFocused, function(textBox)
-		if WordHelper.isAutoTyping then
+		local typingGuiEvent = false
+		pcall(function()
+			typingGuiEvent = WordHelper.wordBombTypingGui ~= nil
+				and textBox:IsDescendantOf(WordHelper.wordBombTypingGui)
+		end)
+		local verifiedGameKeyboard = currentPlaceId == WORD_BOMB_PLACE_ID
+			and WordHelper.localTurn == true and WordHelper.autoTypeMethod == "game-keyboard"
+			and typingGuiEvent
+		if WordHelper.isAutoTyping and not verifiedGameKeyboard then
 			cancelAutomaticTyping(true)
-		else
+		elseif not WordHelper.isAutoTyping then
 			WordHelper.suppressGeneratedUntil = 0
 		end
 		if not isRobloxMenuOpen() then bindFocusedTextBox(textBox) end
 	end)
 	connect(userInputService.TextBoxFocusReleased, function(textBox)
-		if WordHelper.isAutoTyping then cancelAutomaticTyping(true) end
+		local typingGuiEvent = false
+		pcall(function()
+			typingGuiEvent = WordHelper.wordBombTypingGui ~= nil
+				and textBox:IsDescendantOf(WordHelper.wordBombTypingGui)
+		end)
+		local verifiedGameKeyboard = currentPlaceId == WORD_BOMB_PLACE_ID
+			and WordHelper.localTurn == true and WordHelper.autoTypeMethod == "game-keyboard"
+			and typingGuiEvent
+		if WordHelper.isAutoTyping and not verifiedGameKeyboard then cancelAutomaticTyping(true) end
 		if textBox == WordHelper.activeExternalTextBox then
 			disconnectFocusedTextBox()
 		end
@@ -5228,24 +5383,19 @@ zenith
 	end
 
 	-- Scan screen GUIs and in-world keyboards (SurfaceGuis on tables, etc.).
-	local function scanForKeyboards(root)
-		task.spawn(function()
+	local function scanForKeyboards(root, immediate)
+		local function scan()
 			local ok, descendants = pcall(function()
 				return root:GetDescendants()
 			end)
-			if not ok then
-				return
-			end
+			if not ok then return end
 			for index, object in ipairs(descendants) do
-				if WordHelper.destroyed then
-					return
-				end
+				if WordHelper.destroyed then return end
 				bindKeyboardButton(object)
-				if index % 400 == 0 then
-					task.wait()
-				end
+				if not immediate and index % 400 == 0 then task.wait() end
 			end
-		end)
+		end
+		if immediate then scan() else task.spawn(scan) end
 		pcall(function()
 			connect(root.DescendantAdded, bindKeyboardButton)
 		end)
@@ -5557,6 +5707,56 @@ zenith
 		return ok and type(path) == "string" and path or ""
 	end
 
+	local function processKnownWordBombIncoming(remote, ...)
+		if currentPlaceId ~= WORD_BOMB_PLACE_ID or remote ~= WordHelper.knownWordRemote then return end
+		local arguments = table.pack(...)
+		local eventType = type(arguments[1]) == "string" and string.lower(arguments[1]) or ""
+		if eventType ~= "syncfilteredword" or type(arguments[2]) ~= "string" then return end
+		local owner = WordHelper.turnOwner
+		local fullWord = normalizeLetters(arguments[2])
+		local prompt = normalizeLetters(WordHelper.turnPrompt)
+		-- A delayed opponent broadcast can arrive just after ownership changes. A
+		-- local word is valid only when it retains this turn's required prefix.
+		if owner == localPlayer and prompt ~= "" and string.sub(fullWord, 1, #prompt) ~= prompt then return end
+		setMatchCurrentWord(owner, fullWord)
+		-- The same channel broadcasts the opponent's live text. Keep it in the
+		-- participant history, but only the verified local owner may drive Zenith's
+		-- query or suffix buffer.
+		if owner ~= localPlayer or WordHelper.localTurn ~= true then return end
+		local suffix = fullWord
+		if prompt ~= "" and string.sub(fullWord, 1, #prompt) == prompt then
+			suffix = string.sub(fullWord, #prompt + 1)
+		end
+		WordHelper.passiveBuffer = suffix
+		WordHelper.lastPassiveInput = os.clock()
+		WordHelper.lastRemoteTyping = os.clock()
+		if not WordHelper.isAutoTyping then
+			applyDetectedQuery(fullWord, "remote", true)
+		end
+	end
+
+	bindKnownWordBombRemote = function(remote)
+		if currentPlaceId ~= WORD_BOMB_PLACE_ID or not remote or WordHelper.wordBombRemoteListeners[remote] then return end
+		local valid = false
+		pcall(function()
+			valid = remote:IsA("RemoteEvent")
+				and string.find(instancePath(remote), "MatchmakingFolders", 1, true) ~= nil
+		end)
+		if not valid then return end
+		local connected = false
+		pcall(function()
+			connect(remote.OnClientEvent, function(...)
+				processKnownWordBombIncoming(remote, ...)
+			end)
+			connected = true
+		end)
+		if connected then WordHelper.wordBombRemoteListeners[remote] = true end
+	end
+	-- A turn can arrive during script startup after MatchStatus is connected but
+	-- before this callback is defined; finish that binding deterministically.
+	if WordHelper.knownWordRemote then bindKnownWordBombRemote(WordHelper.knownWordRemote) end
+	WordHelper.ProcessWordBombIncoming = processKnownWordBombIncoming
+
 	local function handleKnownWordBombCall(remote, method, arguments)
 		if currentPlaceId ~= WORD_BOMB_PLACE_ID or method ~= "FireServer" or arguments.n < 3 then
 			return false
@@ -5573,13 +5773,14 @@ zenith
 
 		local now = os.clock()
 		local signature = sessionId .. "|" .. tostring(adding) .. "|" .. text
-		if WordHelper.lastRemoteSignature == signature and now - WordHelper.lastRemoteSignatureAt <= 0.03 then
+		if WordHelper.lastRemoteSignature == signature and now - WordHelper.lastRemoteSignatureAt <= 0.01 then
 			return true
 		end
 		WordHelper.lastRemoteSignature = signature
 		WordHelper.lastRemoteSignatureAt = now
 		WordHelper.knownWordRemote = remote
 		WordHelper.knownSessionId = sessionId
+		if bindKnownWordBombRemote then bindKnownWordBombRemote(remote) end
 		local remoteAction = text == " " and "end" or (adding and text or "back")
 		trustRemote(remote)
 		WordHelper.lastRemoteAction = remoteAction
@@ -5604,6 +5805,9 @@ zenith
 		if text == " " then
 			WordHelper.lastSubmitAt = now
 			WordHelper.awaitingSubmission = true
+			-- Preserve the complete attempt until confirm/wrongAnswer attributes it
+			-- to this player; both outcomes arrive after the local suffix is cleared.
+			setMatchCurrentWord(localPlayer, WordHelper.turnPrompt .. WordHelper.passiveBuffer)
 			WordHelper.passiveBuffer = ""
 			applyDetectedQuery(WordHelper.turnPrompt, "turn", true)
 			return true
@@ -5616,6 +5820,7 @@ zenith
 			WordHelper.passiveBuffer = string.sub(WordHelper.passiveBuffer, 1, math.max(0, #WordHelper.passiveBuffer - 1))
 		end
 		WordHelper.lastPassiveInput = now
+		setMatchCurrentWord(localPlayer, WordHelper.turnPrompt .. WordHelper.passiveBuffer)
 		-- Generated letters update the authoritative suffix but keep the current
 		-- suggestion row stable long enough for a second tap to copy it.
 		if not WordHelper.isAutoTyping then
@@ -5625,9 +5830,12 @@ zenith
 	end
 
 	local function onRemoteCall(remote, method, arguments)
-		if WordHelper.destroyed or not Settings.autoDetect or WordHelper.robloxMenuOpen or WordHelper.isAutoTyping
-			or os.clock() < WordHelper.suppressGeneratedUntil then return end
+		if WordHelper.destroyed or not Settings.autoDetect or WordHelper.robloxMenuOpen then return end
+		-- Process this verified protocol before generated-input suppression. When
+		-- Zenith drives the game's own keyboard, its normal controller emits this
+		-- call; observing it is how a mid-turn launch learns the current UUID/remote.
 		if handleKnownWordBombCall(remote, method, arguments) then return end
+		if WordHelper.isAutoTyping or os.clock() < WordHelper.suppressGeneratedUntil then return end
 		-- This place has a confirmed protocol. Its generic remotes and incoming
 		-- echoes contain both players, so accepting any other channel can follow the
 		-- opponent. Unknown calls are deliberately ignored here.
@@ -5780,9 +5988,22 @@ zenith
 	end
 	WordHelper.exactRemoteHookActive = currentPlaceId == WORD_BOMB_PLACE_ID and type(remoteHook) == "table"
 
-	-- Avoid walking every Workspace descendant or binding every key button in the
-	-- confirmed game when its exact outgoing remote is available. This was both a
-	-- major mobile cost and a second source for the same touch letter.
+	-- The live game keeps its own input controls under PlayerGui.TypingSystemGui.
+	-- Scan only that small exact subtree even when the remote hook is available:
+	-- it gives a mid-turn launch a safe way to drive the real game keyboard rather
+	-- than assigning TextBox.Text (which never invokes the server protocol).
+	local function bindWordBombTypingGui(object)
+		if currentPlaceId ~= WORD_BOMB_PLACE_ID or not object or object.Name ~= "TypingSystemGui" then return end
+		WordHelper.wordBombTypingGui = object
+		scanForKeyboards(object, true)
+	end
+	if currentPlaceId == WORD_BOMB_PLACE_ID then
+		bindWordBombTypingGui(playerGui:FindFirstChild("TypingSystemGui", true))
+		pcall(function() connect(playerGui.DescendantAdded, bindWordBombTypingGui) end)
+	end
+
+	-- Avoid walking every Workspace descendant or binding every unrelated button
+	-- in the confirmed game. Other places retain the universal fallback scan.
 	if not WordHelper.exactRemoteHookActive then
 		scanForKeyboards(playerGui)
 		if currentPlaceId ~= WORD_BOMB_PLACE_ID then scanForKeyboards(workspaceService) end
@@ -5804,9 +6025,88 @@ zenith
 	local function mappedButtonUsable(button)
 		if not button or not button.Parent then return false end
 		local usable = false
-		pcall(function() usable = button:IsA("GuiButton") and guiObjectVisible(button, playerGui) end)
+		pcall(function()
+			usable = button:IsA("GuiButton") and button.Active ~= false
+				and button.Interactable ~= false and guiObjectVisible(button, playerGui)
+		end)
 		return usable
 	end
+
+	local function wordBombTypingUiActive()
+		if currentPlaceId ~= WORD_BOMB_PLACE_ID then return false end
+		local root = WordHelper.wordBombTypingGui
+		if not root or not root.Parent then
+			root = playerGui:FindFirstChild("TypingSystemGui", true)
+			if root then
+				WordHelper.wordBombTypingGui = root
+				scanForKeyboards(root, true)
+			end
+		end
+		if not root or not guiObjectVisible(root, playerGui) then return false end
+
+		local focused = userInputService:GetFocusedTextBox()
+		local focusInside = false
+		pcall(function()
+			focusInside = focused ~= nil and focused ~= searchBox and focused:IsDescendantOf(root)
+		end)
+		if focusInside then return true end
+
+		-- Mobile can move focus to Zenith after the turn already opened. The game's
+		-- short, editable current-word box remains visible only while this client's
+		-- TypingSystem is active, so it is also safe launch-mid-turn evidence.
+		local descendants = {}
+		pcall(function() descendants = root:GetDescendants() end)
+		for _, object in ipairs(descendants) do
+			local activeInput = false
+			pcall(function()
+				local text, size = normalizeLetters(object.Text), object.AbsoluteSize
+				activeInput = object:IsA("TextBox") and object ~= searchBox
+					and object.TextEditable ~= false and guiObjectVisible(object, root)
+					and size.X >= 20 and size.Y >= 16 and #text >= 1 and #text <= 4
+			end)
+			if activeInput then return true end
+		end
+
+		-- A visible alphabet inside the exact TypingSystemGui is the game's local
+		-- input surface. Require several keys so an unrelated one-letter control can
+		-- never turn an opponent's visible prompt into typing authority.
+		local visibleLetters = 0
+		for letter in string.gmatch("abcdefghijklmnopqrstuvwxyz", ".") do
+			local button = WordHelper.keyboardByAction[letter]
+			local inside = false
+			pcall(function() inside = button and button:IsDescendantOf(root) end)
+			if inside and mappedButtonUsable(button) then visibleLetters = visibleLetters + 1 end
+		end
+		return visibleLetters >= 8
+	end
+
+	local function recoverWordBombTurnFromUi()
+		if currentPlaceId ~= WORD_BOMB_PLACE_ID then return false end
+		-- Never overrule an explicit opponent/post-confirm state or LetterEvent's
+		-- separate choose-a-letter phase. UI recovery is only for an unknown launch.
+		if WordHelper.localTurn == false and WordHelper.turnSource ~= nil then return false end
+		if WordHelper.letterSelectionActive or not wordBombTypingUiActive() then return false end
+		local prompt = normalizeLetters(readLargePromptLetters() or "")
+		if prompt == "" then
+			local query = normalizeLetters(WordHelper.currentQuery)
+			if #query >= 1 and #query <= 4 then prompt = query end
+		end
+		if prompt == "" then return false end
+		WordHelper.localTurn = true
+		WordHelper.turnOwner = localPlayer
+		WordHelper.turnSource = "typing-ui"
+		WordHelper.turnPrompt = prompt
+		WordHelper.passiveBuffer = ""
+		WordHelper.searchMode = "prefix"
+		WordHelper.detectionSource = "turn"
+		WordHelper.lastTurnEventAt = os.clock()
+		setMatchCurrentWord(localPlayer, prompt)
+		modeChip.Text = "Empieza con"
+		detectionLabel.Text = "Texto: " .. prompt .. "  |  tu turno"
+		return true
+	end
+	WordHelper.WordBombTypingUiActive = wordBombTypingUiActive
+	WordHelper.RecoverWordBombTurnFromUi = recoverWordBombTurnFromUi
 
 	local function sendUniversalAction(action)
 		WordHelper.lastTypingActivity = os.clock()
@@ -5814,6 +6114,10 @@ zenith
 		WordHelper.lastTypedAction = action
 		local button = WordHelper.keyboardByAction[action]
 		if mappedButtonUsable(button) then
+			-- Invoke the exact game key first when the executor supports signals. A
+			-- coordinate click can otherwise land on Zenith when its window overlaps
+			-- the mobile keyboard even though the mapped game button is underneath.
+			if fireSignal and pcall(fireSignal, button.Activated) then return true end
 			if virtualInputManager then
 				local ok = pcall(function()
 					local position, size = button.AbsolutePosition, button.AbsoluteSize
@@ -5823,7 +6127,6 @@ zenith
 				end)
 				if ok then return true end
 			end
-			if fireSignal and pcall(fireSignal, button.Activated) then return true end
 		end
 		local keyCode = action == "back" and Enum.KeyCode.Backspace or KEYCODE_BY_LETTER[action]
 		if not keyCode then return false end
@@ -5859,6 +6162,7 @@ zenith
 		local generation = WordHelper.autoTypeGeneration
 		local inputEpoch = WordHelper.inputEpoch
 		WordHelper.isAutoTyping = true
+		WordHelper.autoTypeMethod = method
 		task.spawn(function()
 			local completed = true
 			for index, action in ipairs(actions) do
@@ -5874,6 +6178,7 @@ zenith
 			if WordHelper.autoTypeGeneration == generation then
 				WordHelper.isAutoTyping = false
 				WordHelper.autoTypeTextBox = nil
+				WordHelper.autoTypeMethod = nil
 				if not WordHelper.destroyed and not isRobloxMenuOpen() then
 					setStatus(completed and ("Escrito: " .. word)
 						or ("No se pudo completar: " .. word), completed and Config.Secondary or Config.Muted)
@@ -5888,22 +6193,20 @@ zenith
 		-- Every new activation invalidates delayed physical/custom-key callbacks and
 		-- any older generated word before choosing the safest current target.
 		cancelAutomaticTyping(true)
-		if currentPlaceId == WORD_BOMB_PLACE_ID and WordHelper.localTurn ~= true then return false end
-		if currentPlaceId == LAST_LETTER_PLACE_ID and readLastLetterVisibleWord() == nil then
-			local focused = userInputService:GetFocusedTextBox()
-			if not isGameTextBox(focused) then return false end
-		end
 
-		local remote, sessionId = WordHelper.knownWordRemote, WordHelper.knownSessionId
-		local remoteValid = false
-		pcall(function()
-			remoteValid = remote and remote:IsA("RemoteEvent")
-				and string.find(instancePath(remote), "MatchmakingFolders", 1, true) ~= nil
-		end)
-		local prompt = normalizeLetters(WordHelper.turnPrompt)
-		if currentPlaceId == WORD_BOMB_PLACE_ID and remoteValid
-			and type(sessionId) == "string" and string.match(sessionId, "^[%x%-]+$")
-			and prompt ~= "" and string.sub(word, 1, #prompt) == prompt then
+		if currentPlaceId == WORD_BOMB_PLACE_ID then
+			if WordHelper.localTurn ~= true and not recoverWordBombTurnFromUi() then return false end
+			local prompt = normalizeLetters(WordHelper.turnPrompt)
+			if prompt == "" then
+				prompt = normalizeLetters(readLargePromptLetters() or "")
+				if prompt == "" then
+					local query = normalizeLetters(WordHelper.currentQuery)
+					if #query >= 1 and #query <= 4 then prompt = query end
+				end
+				WordHelper.turnPrompt = prompt
+			end
+			if prompt == "" or string.sub(word, 1, #prompt) ~= prompt then return false end
+
 			local currentSuffix = normalizeLetters(WordHelper.passiveBuffer)
 			local desiredSuffix = string.sub(word, #prompt + 1)
 			local common = 0
@@ -5911,25 +6214,82 @@ zenith
 				and string.sub(currentSuffix, common + 1, common + 1) == string.sub(desiredSuffix, common + 1, common + 1) do
 				common = common + 1
 			end
-			local actions = {}
-			for index = #currentSuffix, common + 1, -1 do
-				table.insert(actions, { kind = "back", value = string.sub(currentSuffix, index, index) })
-			end
-			for index = common + 1, #desiredSuffix do
-				table.insert(actions, { kind = "letter", value = string.sub(desiredSuffix, index, index) })
-			end
-			return beginAutoTyping(actions, function(action)
-				local adding = action.kind == "letter"
-				local arguments = table.pack(sessionId, adding, action.value)
-				WordHelper.suppressGeneratedUntil = os.clock() + 0.12
-				local ok = pcall(function() remote:FireServer(sessionId, adding, action.value) end)
-				if ok then handleKnownWordBombCall(remote, "FireServer", arguments) end
-				return ok
-			end, word, "remote", function()
-				return WordHelper.localTurn == true
-					and WordHelper.knownWordRemote == remote
-					and WordHelper.knownSessionId == sessionId
+
+			local remote, sessionId = WordHelper.knownWordRemote, WordHelper.knownSessionId
+			local remoteValid = false
+			pcall(function()
+				remoteValid = remote and remote:IsA("RemoteEvent")
+					and string.find(instancePath(remote), "MatchmakingFolders", 1, true) ~= nil
 			end)
+			if remoteValid and type(sessionId) == "string" and string.match(sessionId, "^[%x%-]+$") then
+				local actions = {}
+				for index = #currentSuffix, common + 1, -1 do
+					table.insert(actions, { kind = "back", value = string.sub(currentSuffix, index, index) })
+				end
+				for index = common + 1, #desiredSuffix do
+					table.insert(actions, { kind = "letter", value = string.sub(desiredSuffix, index, index) })
+				end
+				if #actions == 0 then return true, "complete" end
+				return beginAutoTyping(actions, function(action)
+					local adding = action.kind == "letter"
+					local arguments = table.pack(sessionId, adding, action.value)
+					WordHelper.suppressGeneratedUntil = os.clock() + 0.12
+					local ok = pcall(function() remote:FireServer(sessionId, adding, action.value) end)
+					if ok then handleKnownWordBombCall(remote, "FireServer", arguments) end
+					return ok
+				end, word, "remote", function()
+					return WordHelper.localTurn == true
+						and WordHelper.knownWordRemote == remote
+						and WordHelper.knownSessionId == sessionId
+				end)
+			end
+
+			-- If Zenith began during an already-running turn, updateId/type may have
+			-- happened before it connected. Drive TypingSystemGui/ContextAction keys so
+			-- the game's own controller emits the exact remote; never assign its
+			-- TextBox.Text, which the live trace proves does not send input.
+			local actions = {}
+			for _ = #currentSuffix, common + 1, -1 do table.insert(actions, "back") end
+			for index = common + 1, #desiredSuffix do
+				table.insert(actions, string.sub(desiredSuffix, index, index))
+			end
+			if #actions == 0 then return true, "complete" end
+			local canSend = virtualInputManager ~= nil or virtualUser ~= nil
+				or (executorKeyPress ~= nil and executorKeyRelease ~= nil)
+			if not canSend and fireSignal then
+				canSend = true
+				for _, action in ipairs(actions) do
+					if not mappedButtonUsable(WordHelper.keyboardByAction[action]) then
+						canSend = false
+						break
+					end
+				end
+			end
+			if not canSend then return false end
+			local shadowSuffix = currentSuffix
+			return beginAutoTyping(actions, function(action)
+				local sent = sendUniversalAction(action)
+				if sent then
+					if action == "back" then
+						shadowSuffix = string.sub(shadowSuffix, 1, math.max(0, #shadowSuffix - 1))
+					else
+						shadowSuffix = string.sub(shadowSuffix .. action, -32)
+					end
+					-- Assignment (not append) is safe whether the outgoing hook ran
+					-- synchronously or this controller reports the call a frame later.
+					WordHelper.passiveBuffer = shadowSuffix
+					setMatchCurrentWord(localPlayer, prompt .. shadowSuffix)
+				end
+				return sent
+			end, word, "game-keyboard", function()
+				if WordHelper.localTurn ~= true then return false end
+				return WordHelper.turnSource ~= "typing-ui" or wordBombTypingUiActive()
+			end)
+		end
+
+		if currentPlaceId == LAST_LETTER_PLACE_ID and readLastLetterVisibleWord() == nil then
+			local focused = userInputService:GetFocusedTextBox()
+			if not isGameTextBox(focused) then return false end
 		end
 
 		local textActions, textSender, textValidator, textBox = prepareExternalTextBox(word)
