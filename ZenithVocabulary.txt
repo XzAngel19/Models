@@ -2222,12 +2222,18 @@ launchWordHelper = function(standardExpiresAt)
 		MinimumUIScale = 0.56,
 		MaximumResults = 60,
 		MobileMaximumResults = 30,
+		DefaultWPM = 180,
+		MinimumWPM = 30,
+		MaximumWPM = 600,
+		WPMIncrement = 30,
+		DoubleActivationSeconds = 0.65,
 		VisualPollSeconds = 0.1,
 		FocusPollSeconds = 0.2,
 		Assets = {
 			-- Optional uploaded IDs for Studio. Executors use the embedded PNGs below.
 			WordleLogo = "",
 			SavedIcon = "",
+			SettingsIcon = "",
 		},
 		-- ENABLE word list: the standard dictionary used by word games (no junk
 		-- entries like the old dwyl list). dwyl stays only as a last-resort mirror.
@@ -2421,6 +2427,103 @@ launchWordHelper = function(standardExpiresAt)
 			"cbhhsJacVQYAgEKhcEuhXP+8VB2rFUdGX7h48WJbq1rXxMbEjxOLCuXa3uLI+XqxMvrZxMTEopZ/Sg4ODrpXOtbKL8orfbhuP2rcjLa1tLRuDP0FfcnQrepC",
 			"mNQAAAAASUVORK5CYII=",
 		}),
+		SettingsIcon = table.concat({
+			"iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAAg1ElEQVR42u1de1RU19Xf5z5mxhkBHUEBwUcwKuILeWhIW1N1RRP9YpaPxljbJGqijdaaRNNW",
+			"Wkhtda1+SfpIW7XfampWVpJWjW3QpNZISFM1CgqCz4I2AupABBFERmDm3v39kTm3d2buzNx7586AKWetuwbmce85Z//Ofp2992EhMo0AAOu5AAAQ+pqexnjm",
+			"kEAECWV0hxkAcMvfTEpKsra3tw9zuVzDRVFMJoQM6e7utvTR9z/NYrF0CoLwOcMwDp7n62JiYuobGhqcPl/jAED0XL0KAIznXgIAACISq9WaIwjCg263+ysA",
+			"MB4Ahno+A/lrX/MQghCvvxHxGiHkLMdxR1iW/fDOnTsnZJyU9fwt9jQAiIf4AgCA2WweiYjfcrvdCwBgEgCAKHr1UegTB6rF5xcri2Hogqnief4vFovl7Vu3",
+			"bv1bBgSxp+ZU6qTJZBrLcdzrDMO0E0LQ0yEEAJdHHAiyjvZdoS/RM2duzxwiACAhBFmW7eA47nWTyTRWiRZRRWj//v3jWZb9JcMwd3yILvQR0fBLoGAghCDD",
+			"MHcIIb/s379/vAwEJNLEZ+gfNpvtMY7j6mQr3t23yqPGHdwUCBzH1dlstseUaBQRlj98+HALz/M7WJZFD/FdfYTvMSC4AABZlkWe53cMHz7cEimRwAIAxMfH",
+			"J7Ese8RDeHcfq+81osHt0Q+OWK3WJKNBwAIADBo0aAzLsjUe4nf3TXyvu7o9IKix2+3pRoGABQCIi4u7h+d5h0zJ65vw3nm5CCFoMpka4+Li7lEDAhJC4RMT",
+			"EhISW1pa/ikIwr0ets/dTc4Vevk6W4I1ubOKXndRcwMAx7LsRbvd/rWmpqZGSkvNpl5WVhbPsuxRmbLXq1eAhwUix3HIMIxh92UYBjmOQ5ZlDb1vpDkBy7JH",
+			"s7Ky+GAmYqAlwQGAm+f537vd7mcQ0QUAfG9d4QzDgCAIfiuV4zgYPHgwJCcnQ0pKCgwePBgSEhIgNjYWrFYr8PwXQ3K5XOB0OqGtrQ2am5vh888/h2vXroHD",
+			"4YCmpiZwuVx+z2VZFkRR7M0cwkUI4TmO+z+Xy7WK0lQNAFgAEPr16/doV1fXX0VR7HVsn2EYYBgG3G7v8QwdOhQmT54Mubm5MGXKFBg9ejQMHToUbDabrud0",
+			"dHRAQ0MDVFdXQ3l5OZSVlUFlZSVcu3bND2iiKPq6vXuFOGAYhuM47n+6u7vfp7QNBgACACQ2NnaA0+k8LQhCkgfdTG8YDcuygIjSRDMMA9nZ2TB79mx48MEH",
+			"YdKkSRATE6Mo0+lqVctZGIZR1Bna29uhqqoKDh06BH//+9+hvLwcBEGQ+kMIkf7vBU30zFuDzWabeOvWrVaZmAis9bMs+2pvkvssy3r9n56ejgUFBVhZWYm+",
+			"TRAEdLlc6Ha7URAEFEUR9TZRFFEQBHS73ehyuVAQBL/vVFVVYWFhIaanpwftcy/QB14NZRUwAEDMZnMawzCdvWEDRz6JhBCcN28eFhUVYWdnpxcRKMHDIbYW",
+			"UFBAyFtnZycWFRXhvHnzUL4h1guAIAKAwDBMp9lsTpPt4AZc/X/oaXufYRhJ22YYBh9//HEsLS31I7rSiox2oxxH3kpLS3Hp0qVeY+hh64FygT8E4gIEAKBf",
+			"v34pDMM44T9RJz1ixtH/58+f70V4yo6jsdL1cgY5KMvKynD+/PnSeDiOQ5/t8mhyAZFhGKfdbk9R0v84z77+93tK9stXyIQJE7CoqEiaSN+JDUeOyy+32x3w",
+			"/XD0B/o82vbt24cTJ05UHGu0uQDHcS/KaS5xgMWLF7Msy56VbTBErXMcx0mv+fn52NHRIU2kHsJTohrBKURR9AKFViDQ3zidTszPz0ee573GHMXL7YkjqFq8",
+			"eLHkGKIKgWi1WjM7OzvLPSYWiYaNInfiTJ48GX73u99BXl7eF7FjggAsq20vg5p5cvPt5s2bUF9fD7W1tXDlyhVoaGiAmzdvQnt7O3R3dwMhBHieh5iYGBg4",
+			"cCAkJSVBamoqjBgxAlJTU8Fut/s9QxAEyRehpsnHcuzYMVi9ejWcPn3ay5kUpYYMwxCLxTLF6XSeosog53FmbIgm+2cYRpKHTz/9NN6+fVtS7vSsXPlvPv74",
+			"Y1y/fj3m5eVhQkKC7j7Gx8fjtGnTcN26dbhr1y6sr68PyurVcBJExPb2dly5ciXKonuivVm0QS4GWM+q2R8t7Z8qejzP4/bt271Yt142LYoi3r59G5cuXRrw",
+			"mRzHqboCmW42mw1nzJiBv/rVr/Czzz7zEztqgCsf4/bt2yWRECVz0e1ZfAf84joJIXXRkP90oAkJCVhcXKxp8kLJ2kceecSL2LKopbA3l3wJZLPZcMGCBfjB",
+			"Bx8EJHAoiwER8aOPPpK4VBRAIHjGVQcAJkkwmM3mNEKIO1orPy0tDc+dO4eIiN3d3WEpaZStvvXWWwgAaDKZIm6m+hIqJycH3377bYmoapVXOvZz585hWlpa",
+			"1DgBIcTtcQpJAHjAs1KESBM/IyNDkqW+DhS9qx8R8YEHHkCGYaLmeaNgkMvvnJwc3L9/vx841QC4vr4ex48fHw0QCB5zcLoEAJ7nl0VSAZQT3+FwhCXvlRS/",
+			"trY2HDJkiESYnvBhyIm2aNEirK6ulgAaSrzRuXA4HJiRkRFpELg8iufj8u3VZyIFADqQkSNH4pUrVwwjvhwAzc3NOHDgwB4DgBIQ4uLi8Le//a1q3YB+fuXK",
+			"FRw5cmQkQUAdQqskAJhMpsJIAICyx/j4eDx//ryhxJdr/y6XC9PT06NtUqnaxFq4cCFev35dlUigc3PhwgWMj4+PlNfQRQhBi8VSKHcQvGS0CUhlJM/zWFJS",
+			"olomUttareeN3nPjxo095WELOH7al1GjRkl7GqHmgH5eUlKCPM+HbckoAcDz+lJEAUAHT+18tegP5k4NpgReu3YN7Xa7l4NJyZyT2/pUiVP6zKhJp/NgtVpx",
+			"9+7dmkCwffv2SIA68gCgLHDlypWaiV9VVYVFRUV44MABvHz5sh+hg/3+lVdekZ5PAznDYaF0FYcLCHkfduzYoQkEK1asMFof8AIAkQGg0Iiwb4ZhQBRFyMjI",
+			"gBMnToDJZAoYXiX3k3/00UdQUFAAx44dk3zjVqsVZs+eDVu2bIH09HQQRVHR/04DM7u6uiA7OxvOnz/v9bndbodRo0bBmDFjIC0tDYYOHQoDBw4Eq9UKhBDo",
+			"6uqCtrY2aGhogMuXL0NNTQ1UV1eDw+Hwi/1TCj7VEsAqiiK89tpr8N3vfhfcbjdwHBdwXwMRobOzE3JycuD8+fPS3BoRNg4AP5FzAUM4gFzul5WVhVT6KMrf",
+			"fPPNoPa13W7HI0eOBOUE9Dn79+9HAMBJkybhiy++iAcPHpSUMC2tra0NP/30U9y6dSvef//9Xv3RyxHk8Q6///3vQ3ICOqbS0lIj9YHIiQA6uPz8fNWD++CD",
+			"D6SIGV82RwiRfOUpKSnY3Nwc1K6me//l5eV+QJGHcsljAZRiApRAdurUKdy4cSMmJSWFFe4lB8Ff/vKXkPNEP8vPzzdKFEQGAHSFpKeno9PpDOrfpxN8+vRp",
+			"jImJCWm+URC88MILmkzJcGIFKZh8dyebmppw69atmJiYqHs3j/7GarVieXl50DFR4DqdThwzZowRpmFkAECRSTdHgg1IEARsbW2VBhQK1XTVWCwWyZ8QyjLw",
+			"JbpvVBA1M+Vmp5wDKP1evlIbGhpwzZo1EkvWujIpEe+55x6Js4USb++//74RXMB4ANAOPfzwwyFXKP1syZIlmkwc+oxHH300JACUuI2eRoERaF8fEbG4uFgC",
+			"slZzjX5/4cKFqkXmww8/HC4IjLcCaHTMiRMnYPLkyQGjeej7O3fuhOXLlwPHcX7ZPcEa/X5xcTHMnDlTU9TQpUuX4MyZM3Du3Dm4fPkyXL9+HTo6OgARoV+/",
+			"fjBo0CAYNmwYjB07FiZMmADjxo0Dk8nk1Xe5NUMjgziOg9bWVli9ejXs2rVLc5QPHdOOHTtg1apVIefu1KlTkJubG04mkrFWAEXx4sWLQzp0RFHEuro6jIuL",
+			"U3TYqOEAK1asCKkMylf+jh07MDMzEy0Wi6ZxjRkzBr/zne9gSUmJFxfxHZ/8f7mipnZsVB+IiYnBy5cvSyIyGBdYtGhROA4iY0UAdbhUVFR4BTqE6rwWFkYH",
+			"unHjRk3sGxFx9+7dit5A6gmkV7BooOzsbNy5cyd2dXUpBrDIx/2LX/xCMwjoM6koCDaHoihiRUVFOJnKxgGAdnzOnDmqbPRDhw6FTXwtWj197uLFizU/lwJb",
+			"TsQpU6Z4RQD5jpfKcAoCLSuU9u3gwYMhOSki4pw5c/TqAsYBgCJw//79QVc/1aBzcnI0mTF0AlesWKEYMKpmn0AURayurkabzaZZ7ATa73/mmWfw1q1bioSi",
+			"IPj+97+vS8nNysoKmvVEFwB1eOngAsYAgD743nvvxa6uroCrkk7Iu+++qwmx9HvTp0+XtHFf4itFBAd6/qZNm8I2oeQpXpmZmXjhwgU/7V1uJdCsIK1jfvfd",
+			"d4NaBaIoYldXF9577716QGAMACiyCwsLQ3ZWEATMycnxS/0KFTKemJgoBZEoKWKlpaXShlMo72BrayumpqYaEjNAxz548GD89NNP/cZPOc+NGzdw2LBhqp9J",
+			"9Ybs7OygSi59VkFBgR5l0BgA0J0yGtypxLJ8Zb/aiacg2bt3r9/k0ntWVVVJ3jjqUg2lgL7xxhuG7azJI3+OHz/u93z694EDBzQ9k87RoUOHAo6JzvXZs2f1",
+			"5BuGDwC5vKJROcEmfsGCBaqRSu/92GOPKa4sGkCZmpoqfX/UqFHY0dERdNVQz999991nOAiGDBmCFy9e9FsItO/f/OY3VT/T1zkUzKMqiiJmZWVpHU/4AFDD",
+			"/uXEslqtquL1KKuMjY3F2tpaL5uYKpmdnZ0SEeVm25YtW1RxgSNHjhgaPUzvk5mZ6bcHQgFZW1uLsbGxSAhRNQc0gERJ/BkgBsIHAO3k0aNHA0467eBrr72m",
+			"uoP0O5s2bQrI+tevX+/1XQqauLg4rK+vV+VI+da3vmVokAXty9q1a/3mQ0/IGv0ODSpVWmByQGsMhg0PAPRBSUlJUj6fEtulRJgxY4bqDR9CCNrtdvz888+9",
+			"CEkH+89//lNxEum9n3jiCdXeyNjYWN1mYTCiffLJJ159oM+8evWqtPMZ6plUGZw1a1ZADkDn/Pbt29IWtcqxhAcAOtlz584N2Dn63tWrV1Wz/2CryNePoAQm",
+			"6tGjWnkoUfCzn/3MUC5A75Obm+sX0Eqf+eSTT6riAnSuYmJisLGxMeQimzt3rpaxeAFAc/UvuhmSm5v7RRkqhQ0J+t7Ro0fB6XRK1b3UpFA/9dRTgIjSc+gm",
+			"zN69e+HEiRPAsmzAKlyCIMCGDRuCPouGVa1fvx7S0tIChplpbbT/ZWVl8N5770lp7/IQr+XLl0thYWrS3Nvb26GxsdHrPaV5prRQWwlVqanmANRMCbbvT2XW",
+			"2rVrVSGeIjcnJ8fPqtDiR6Cfvfnmm6q4AN0nMJILEEIwLy/Pz0spz18IZRJTDsDzvJSFHMzMpnECKs1s/SKAdozjOEWzx1c+TZ06VdUEU4Bs3rzZC0B0gIcP",
+			"H1Y1QCrThw0bhm1tbSHNQi06ihb/CCEET5w44fUcOiZfJTaYx3HixIlB6yXQua+pqfFSiiMmAiiLoeVXldgOZd8tLS1w8eLFgGLCl30CAMyaNUti03K296c/",
+			"/cnr/YBVEUURWJaF+vp6ePnll4NG0dJ+v/LKK9J9jRAFVNzt2bNHsWoJHWOwftHKo88995z0d7AxJCcnw+DBg8MSA6o4gJxVh1JMKioqVNv+AICJiYnY3t7u",
+			"5eSg9fdGjRqlmsVRs9Bms+HFixdVmYWvvvqqrkISSpfJZEKO43DKlCle46CvDQ0NGBsbixzHIc/zfr+n/aAWTaiIJnrfYAqyYSKAdnD+/Pkh5f9f//pXVR2i",
+			"n8+cOdNrwPT11KlTqkwnpXuGClKRf/bHP/5R8i4adZ05c8ZrLBQQdBNH6YqNjcUf//jH0nfVZhbLi2NoAYCuJJDExMSAmilt9fX1qlgS/Xzs2LESa6Ssm2EY",
+			"qKysBEQMqv0H0sj37NkDJSUlMGPGjIChVjSE66mnnoJHH30UDh06BOfPn4fOzs6QYwxmaVDrxVc8MgwD+fn5UqIHvT/HcZCWlgYzZ86EYcOGeVlCaiyGpKQk",
+			"XSJAFwDi4+NDfoeaL2pbWlqa4vtnz54NS7Zt3LgRjh07FjADR06wgQMHwje+8Q0wuvnqGE888YQqAGtpgwYN0tc3PT+KjY0N+Z2WlhZV9/JFsC9nqK2t1bUS",
+			"6SRWVFTAn//8Z8Xy8krKmyAI4Ha7DbkC9TnYM6giGwmaGMYBrFZryO90dHRoAsCAAQO8CE9fm5ubw1p9hBB455134Nvf/rYqcaRn8vVYCkY3vWci6OIA9KSN",
+			"YDK9u7tb0z0tFovife7cuaN7UmiC5aVLl8DtdqvySN6tLRhNDAfA3dbCcZF+2ZsuAPieoaPE0uVJFWoa1bp979OvX7+wCE8IgbS0NCm1+8sKhmA0MVwHcDqd",
+			"hskkSpDW1lYvwtPXhISEsCYGEWHp0qWqFEmtR8uokfVKgAtWY0BLDWKtNDEMAG1tbSG/41tkORQAGhoaFDnA8OHDdbFx6jeYMmUKLFmyBERRDGoKUquhNyiB",
+			"esxANTQxDAA3btxQ7SxS2z777DPF98ePH6/bIQMA8PLLL4PJZArqRKKmV0tLCxQXFxvmCFq+fDmMHTvWy7lFCIG3334bzpw5o+gImjFjBgwfPly1I0gLTYK1",
+			"l6CXuoIrKyt15xFqcQW//vrrmJKSYqgr2DeVnbp1x40bp8oVrKXIpIYcBP17AZHeDJKHmNF7a02A0LMZRItLgYGbQdnZ2YqbQU1NTWi320NuBj355JO9bzOI",
+			"EiA5OVk61cMXBPT/GzduoN1u1wQC33AurYEl8u/86Ec/UpVjV15erliXCMKMDfzBD36gGNtw8ODBoGD21PNHAMCdO3eGTLpBROzo6MDk5GS1i8SYgJCamhrD",
+			"A0J++tOfKk7a0aNHIxYQ8vWvf93wgBCGYaTSL3R+6Jg2bNgQEswUjBMmTJACQoJx23ACQjQBACIcEpabm+s3WBpaNXXqVMNDwnbt2hWRkLCvfvWrfqKH5jVQ",
+			"+a82JOzf//53REPCGD0aLgDAyZMnQ2rJX/va11Rp0tRBU15eDlVVVZJmTl8ZhgkZ7EnNvry8PFi2bFlAU4pq1x0dHbBp0yYghBjqHkZEeP75573uSy2Q0tJS",
+			"uHDhQsjAUPo7l8sF7e3tIb9XXl7uRZuIWQEQhbDwdevWKYaFu91unDZtmmFh4Zs3b45IWPi0adMChoXTqp+9KSxctwhISkryCuEyKjFk0KBB2NTUpJgYcvTo",
+			"USkpVel4VrWJITRVy8jEEMr+Dx8+rJgY4nA4MC4u7u5PDIEopIZRDV4pNcw3xUpPatiyZcsikhqmxL30FIzQkhpGFeSopYbJO1hQUBCR5NABAwbg1atXFZND",
+			"u7u78f7779edHHr48GFDk0PpXGRlZQVMDr1y5Yrqwlh3RXJoNNLDly1bFjA9/OrVqzhixAhd6eHB9Ai9cj8xMREvXboUMD1cSzLqXZEeDrICEWfPno1YgQh6",
+			"AJNS4YVz585Jzg+1BSJ27twZkQIR9DCIQAUi1FZGkc+R/Ei9YAUidBSQNrZETDAxEG6JmJSUFL9MYfmknDx5Ep9++ukeKxEzZMiQiJSIycnJ6f0lYrQWidq7",
+			"d6+ugkkPPvigJP/1FImiYPnhD39oeJGof/3rXxEpErVnz56Ai4qy/h4vEgVRLBO3Zs2aXlUmbtWqVREtExfsvCTfcxF6rEycvNMPPfSQqkKRxcXFugtFvvTS",
+			"S4ogULNVqqc6qdKRM1lZWQELRcpXPk0101Mo8sMPP1S1iTV79uyeLxQpXx1qS8XqqdrpW5NIC/H37Nnj1U89pWJzcnLwjTfekI56DVYqlhJfT6nYBQsW3F2l",
+			"YqEHikWvWbMGW1tbVRWLFkURt23bhpMmTUKz2axpXKNHj8Znn30WS0pKvJ7zZSsWbWi5+LKyMsjMzAxYdcOocvH/+Mc/YPr06Zpi56qrq6Vy8bW1tV7l4q1W",
+			"q1e5+IkTJ0J6ejqYzWavvgcqF3/z5k1YvXo17N69+7+vXDz0HRhh2IERaubtoYceMvTACEMAAFE8MobW5zXyyBjfz9QcGeNwOPDZZ5/VfYDUl+rIGPmAxo4d",
+			"i3fu3InIoVEbNmzo8UOjrl+/jlu2bPE6rbzv0KgoHBuXmpqKLS0tqo6NO3bsmHS4g+8z5cfDaTk2rqKiAl944QWpPrHelfilPTYOfA6OVPKPBxpcqIMjBw0a",
+			"JLlcQ7HJoqIi6fi6733ve7hv3z68du2aZg7Q2tqKhw8fxs2bN2NeXt6X9uDIiB0dO27cODh58iSYzWYpRy9YFgw9Ovb48eOSdmu1WmHOnDmwZcsWrwQLpdAo",
+			"9Bwdm5WVBRcuXPD6PDY2FtLS0mD06NGQlpYGKSkp0tGxDMNIR8c2NjZCbW0tVFdXQ01NjV+Ri3COjqX9FkURfvOb38DatWtVHx2bnZ0NFy5c6P1Hx4LCAU+h",
+			"UO7LJU6fPo379u3rOzw6SodHRwQAchNn27ZtmkHgqzCqOT7+6tWrQY+Pp4AI5QmM1PHxNpst6CaPEvHv2uPjffWBkpISVQOXm2vBNkSUJktLNe5oXJR70B1T",
+			"qhOpJX5JSYmRcl8JAD+RqG+xWAo9D3EZOQmU9cXHx0v2u1oTTq2pRs2k9PR0Q/b6jRSB1MlDTy9XywXPnz+P8fHxRph8igAghKDFYvmxXLlZFQkAyAcwcuRI",
+			"rK+vNxQE1Bxsbm7GgQMHag2OxEiMlRJ/wIABUlCnmjHTz+vr63HkyJFGy30/APA8v1KuoS6JFADkA8nIyECHw2EYCCgAbt265eWY6UnCAwAuWrTIK3VObYav",
+			"w+GQMociRHw5AB6Xi4DpnpUqRJotZmRkSJxAjU6g1tf/wAMPGBrtq1bHkbPo3NxcfP/99/3kuRqZX1dXhxkZGZEmPgKA6NFPviIBwGw2j2QYpjtasjEtLU06",
+			"bYzusettdALfeustBAApszaSRPclUG5uLr7zzjtetQ3UKLB07OfOncN77rknGsSnHKvbbDaPkAAwbtw4E8MwdZ4vCNEAQUJCglfkqx5/va+pKK+Xa4Q5Jz9v",
+			"2JcwNpsNFy5ciH/7299UmbNK/n26m5iQkBAt4gseANSNGzdOquLFevSAIqNNwVAg4Hle8hOEoxdQa+D27du4dOnSgM9UW+QhECH69++PM2fOxF//+tfSQQ6+",
+			"0TpqI5UQEbdt2yaZilESXS4PAIrktOc9lsDzkVQEg3nHVq5cKeUZaon5U1IIERE//vhjXL9+Pebl5UmrS88VHx+P9913H65btw53794t6S6+Pgu1/aPiqr29",
+			"HVeuXKl7NzFcBdBkMj3vAQBPPCniIs/zGW63uwoRGdkeQUQbIUQqqDRx4kTYvn075OXl6a6U5Xs4A8AX5efq6uqgrq4O6uvrobGxEVpaWuD27dvQ1dUFiAhm",
+			"sxliY2NhwIABkJycDCkpKTBixAhITU31q3ZGI4G0lHOTj+XYsWOwatUqOHPmjOboISOy1xmGEVmWneRyuc7JywMwHjFwkhAiejYMomZGUTbIcRxu2rRJKj+j",
+			"VpkKtO0bjl7hu3LVeiYDubE7OjowPz9f2t7uAY+lmxAiMgxzUk5zr3JxJpPpOQ87cvWELU3/Hj9+PBYVFfnl9ekloG/Ej288gNL7auz3UO5s2oqKinD8+PGK",
+			"Y43i5WIYBk0m03NymkvcGADAZrMNIYS0AYDouXrMfw4A+Mgjj0gHM8sn1oiVbXSjmr0cqKWlpZJlEk4cgRG2v8f+b7PZbEPkNPfjAizL/jaaymCoFCxCCC5Z",
+			"ssQLCFRZDCfg06jmGyuIiHj8+HF8/PHHpTHIx9NDl8tj0v5GafXL9QAyZMiQkSzL3vHYjCL0kk0VQgjOnTsX33vvPezs7DQs9k/vSvclemdnJxYVFeG8efMU",
+			"q5f04CUCgMAwzG273Z7iWfkBtdcv7EKe39rTXCAQEGi4V0FBAZ46dSrgigxXjivpD0ocp7KyEgsKCqQDIXsR4X19/1vlNIYAcoAAAElISLC2tLScFkVxBH5h",
+			"o/SKcwXogQ80LIphGMjKyoI5c+bArFmzIDMzE2JiYhTNQy3mFjVPlcLY2tvbobKyEoqLi+HAgQNQUVEhVQGjv1F7uFUUmkgIIQzD1Nrt9olNTU1OGTCUFQEP",
+			"QgSz2TzT7XYXC4Lg9rzXawrtUxvcN6soOTkZMjMzIScnB7KysmD06NEwdOhQ3cepdHR0gMPhgJqaGigvL4eysjI4deoUOBwOv1jBMDJ1ImbzA4DAsizHcdys",
+			"rq6ujyhtg3EAuULo5nn+f91u90ZEdFGPYW9qNNiUOpN8VzjHcdIpp8nJyZCYmAjx8fEQFxcHVqtVOmbF5XKB0+mEtrY2aG5uhsbGRnA4HOBwOOD69et+QKNn",
+			"C1Gugr3zGBoXIYTnOO5ll8v1IqWp6rkFALawsJDhOK64N+kDajdvjNS6aTxhD5pxuuQ+x3HFhYWFjF4OzgAASUlJsXMcV323gAAUag8qBX6G2gyixL5LCO63",
+			"4cNxXHVKSoo9lNavBgRgsVhSGYapuRtB8F92uTybSzUWiyVVyeWrS/mmIGBZ9nQfCHr9yj8nI75h59+wAABxcXEDOI770AMCIdLBI32X6iAPwSPzP4yLixto",
+			"NPG9xEFhYSHD8/zPZUqWq6c9hv+ll0hXvSf/4ucehc8Qth/MOiCevL05LMtW9wGh5wjvUXCrrVbrHF/6RNT8puzFbrfH9uvXbyvDMDfl+869YR/hS0h0wYfw",
+			"N81m81a73R4rY/lRddaxsrDyVELIyyzLNvvY364+QIRFcLdc4fbsKrawLPsLmaIXlrwnBnADhroXExISEtva2r4hCMI3RVHMIoSwPu5RlAGhrwWeTyJ3e3t8",
+			"+id4nt9ttVp3tbS0XJMRPqz5JAZ3XKCuUp7n0wkhX3e73Q8gYiYApCKimR6lghoPRvwyNzoXsmNmugghVwDgjNls/gfDMCVOp/OszOXMGrWQSAQQzPr6nKdP",
+			"n86VlpYmu93uoQzDJLrd7gGBij38NzY6FxzHtTIM0wgA16ZOner45JNP3Ap7NIKRHDSSS5DxXOi7A9XXNOlZBP4Tomd4+3+UAJ1QYcrcbgAAAABJRU5ErkJg",
+			"gg==",
+		}),
 	}
 
 	local REGULAR_FONT = Enum.Font.Gotham
@@ -2574,6 +2677,28 @@ zenith
 	local currentPlaceId = tonumber(game.PlaceId) or 0
 
 	local sharedEnvironment = getSharedEnvironment()
+	local DEFAULT_SETTINGS = {
+		autoType = true,
+		wpm = Config.DefaultWPM,
+		definitions = true,
+		allResults = false,
+		autoDetect = true,
+		hideUsed = true,
+	}
+	local savedSettings = sharedEnvironment.ZenithVocabularySettings
+	local Settings = {}
+	for key, defaultValue in pairs(DEFAULT_SETTINGS) do
+		local value = type(savedSettings) == "table" and savedSettings[key] or nil
+		Settings[key] = type(value) == type(defaultValue) and value or defaultValue
+	end
+	Settings.wpm = math.clamp(
+		math.floor((tonumber(Settings.wpm) or Config.DefaultWPM) / Config.WPMIncrement + 0.5) * Config.WPMIncrement,
+		Config.MinimumWPM,
+		Config.MaximumWPM
+	)
+	sharedEnvironment.ZenithVocabularySettings = Settings
+	if type(shared) == "table" then shared.ZenithVocabularySettings = Settings end
+
 	-- Product lifecycles are isolated: re-running Vocabulary replaces only an
 	-- earlier Vocabulary instance and never tears down the standalone Chess tool.
 	local previousHelper = sharedEnvironment.ZenithVocabulary
@@ -2607,6 +2732,8 @@ zenith
 		prefixBuckets = {},
 		callbacks = {},
 		references = {},
+		settings = Settings,
+		settingsOpen = false,
 		selectedWord = nil,
 		currentQuery = "",
 		detectionSource = "automatic",
@@ -2646,6 +2773,7 @@ zenith
 		inputEpoch = 0,
 		isAutoTyping = false,
 		autoTypeGeneration = 0,
+		autoTypeTextBox = nil,
 		suppressGeneratedUntil = 0,
 		lastWordActivation = nil,
 		lastWordActivationAt = 0,
@@ -2683,6 +2811,7 @@ zenith
 	local function cancelAutomaticTyping(invalidateInput)
 		WordHelper.autoTypeGeneration = WordHelper.autoTypeGeneration + 1
 		WordHelper.isAutoTyping = false
+		WordHelper.autoTypeTextBox = nil
 		if invalidateInput then WordHelper.inputEpoch = WordHelper.inputEpoch + 1 end
 	end
 
@@ -2889,6 +3018,7 @@ zenith
 	local resolvedWordAssets = {
 		WordleLogo = resolveWordAsset("WordleLogo", "wordle-logo.png"),
 		SavedIcon = resolveWordAsset("SavedIcon", "saved-word.png"),
+		SettingsIcon = resolveWordAsset("SettingsIcon", "settings-icon.png"),
 	}
 
 	local previousGui = playerGui:FindFirstChild(Config.GuiName)
@@ -3028,8 +3158,8 @@ zenith
 	local previewLabel = makeText(header, {
 		Name = "MinimizedPreview",
 		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, -70, 0.5, 0),
-		Size = UDim2.new(1, -168, 0, 24),
+		Position = UDim2.new(1, -102, 0.5, 0),
+		Size = UDim2.new(1, -200, 0, 24),
 		Font = MEDIUM_FONT,
 		RichText = true,
 		Text = "",
@@ -3063,6 +3193,47 @@ zenith
 		})
 	end
 
+	local settingsButton = makeHeaderButton("", -70)
+	settingsButton.Name = "SettingsButton"
+	local settingsIcon = create("ImageLabel", {
+		Name = "SettingsIcon",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(20, 20),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Image = resolvedWordAssets.SettingsIcon,
+		ScaleType = Enum.ScaleType.Fit,
+		Visible = resolvedWordAssets.SettingsIcon ~= "",
+		ZIndex = 10,
+	}, settingsButton)
+	local settingsFallback = create("Frame", {
+		Name = "SettingsFallback",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(18, 16),
+		BackgroundTransparency = 1,
+		Visible = not settingsIcon.Visible,
+		ZIndex = 10,
+	}, settingsButton)
+	for index, knobX in ipairs({ 11, 5, 13 }) do
+		local y = 2 + (index - 1) * 6
+		create("Frame", {
+			Position = UDim2.fromOffset(1, y),
+			Size = UDim2.fromOffset(16, 1),
+			BackgroundColor3 = Config.Secondary,
+			BorderSizePixel = 0,
+			ZIndex = 10,
+		}, settingsFallback)
+		local knob = create("Frame", {
+			Position = UDim2.fromOffset(knobX, y - 2),
+			Size = UDim2.fromOffset(4, 4),
+			BackgroundColor3 = Config.White,
+			BorderSizePixel = 0,
+			ZIndex = 11,
+		}, settingsFallback)
+		create("UICorner", { CornerRadius = UDim.new(1, 0) }, knob)
+	end
 	local minimizeButton = makeHeaderButton("-", -38)
 	local closeButton = makeHeaderButton("X", -6)
 
@@ -3317,6 +3488,229 @@ zenith
 		ZIndex = 5,
 	})
 
+	-- Settings use a full-body overlay so touches cannot fall through to the search
+	-- box or result list on small screens.
+	local settingsOverlay = create("Frame", {
+		Name = "SettingsOverlay",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundColor3 = Config.Panel,
+		BackgroundTransparency = 0.04,
+		BorderSizePixel = 0,
+		Active = true,
+		Visible = false,
+		ZIndex = 20,
+	}, body)
+	local settingsPanel = create("Frame", {
+		Name = "SettingsPanel",
+		Position = UDim2.fromOffset(8, 8),
+		Size = UDim2.new(1, -16, 1, -16),
+		BackgroundColor3 = Config.PanelRaised,
+		BackgroundTransparency = 0.02,
+		BorderSizePixel = 0,
+		Active = true,
+		ZIndex = 21,
+	}, settingsOverlay)
+	addStroke(settingsPanel, Config.Line, 0.55, 1)
+	local settingsTitle = makeText(settingsPanel, {
+		Name = "Title",
+		Position = UDim2.fromOffset(11, 4),
+		Size = UDim2.new(1, -52, 0, 30),
+		Font = BOLD_FONT,
+		Text = "Settings",
+		TextColor3 = Config.White,
+		TextSize = 14,
+		ZIndex = 23,
+	})
+	local settingsCloseButton = makeButton(settingsPanel, {
+		Name = "CloseSettings",
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -5, 0, 4),
+		Size = UDim2.fromOffset(30, 28),
+		BackgroundColor3 = Config.Row,
+		BackgroundTransparency = 1,
+		Font = BOLD_FONT,
+		Text = "X",
+		TextColor3 = Config.Secondary,
+		TextSize = 14,
+		ZIndex = 24,
+	})
+	local settingsList = create("ScrollingFrame", {
+		Name = "SettingsList",
+		Position = UDim2.fromOffset(7, 38),
+		Size = UDim2.new(1, -14, 1, -80),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = Config.Secondary,
+		ScrollBarImageTransparency = 0.3,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+		ZIndex = 22,
+	}, settingsPanel)
+	create("UIListLayout", {
+		Padding = UDim.new(0, 5),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}, settingsList)
+	create("UIPadding", {
+		PaddingTop = UDim.new(0, 1),
+		PaddingBottom = UDim.new(0, 2),
+		PaddingRight = UDim.new(0, 4),
+	}, settingsList)
+
+	local settingToggles = {}
+	local function makeToggleSetting(order, key, title, subtitle)
+		local row = makeButton(settingsList, {
+			Name = key,
+			LayoutOrder = order,
+			Size = UDim2.new(1, -4, 0, 48),
+			BackgroundColor3 = Config.Row,
+			BackgroundTransparency = 0.14,
+			Text = "",
+			ZIndex = 23,
+		})
+		addStroke(row, Config.Line, 0.84, 1)
+		makeText(row, {
+			Name = "Label",
+			Position = UDim2.fromOffset(9, subtitle and 5 or 0),
+			Size = UDim2.new(1, -64, 0, subtitle and 20 or 48),
+			Font = MEDIUM_FONT,
+			Text = title,
+			TextColor3 = Config.White,
+			TextSize = 11,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			ZIndex = 24,
+		})
+		if subtitle then
+			makeText(row, {
+				Name = "Subtitle",
+				Position = UDim2.fromOffset(9, 25),
+				Size = UDim2.new(1, -64, 0, 16),
+				Text = subtitle,
+				TextColor3 = Config.Muted,
+				TextSize = 9,
+				TextTruncate = Enum.TextTruncate.AtEnd,
+				ZIndex = 24,
+			})
+		end
+		local track = create("Frame", {
+			Name = "Switch",
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, -9, 0.5, 0),
+			Size = UDim2.fromOffset(38, 20),
+			BackgroundColor3 = Config.Selected,
+			BorderSizePixel = 0,
+			ZIndex = 24,
+		}, row)
+		create("UICorner", { CornerRadius = UDim.new(1, 0) }, track)
+		local knob = create("Frame", {
+			Name = "Knob",
+			Position = UDim2.fromOffset(2, 2),
+			Size = UDim2.fromOffset(16, 16),
+			BackgroundColor3 = Config.White,
+			BorderSizePixel = 0,
+			ZIndex = 25,
+		}, track)
+		create("UICorner", { CornerRadius = UDim.new(1, 0) }, knob)
+		settingToggles[key] = { button = row, track = track, knob = knob }
+		return row
+	end
+
+	local autoTypeSetting = makeToggleSetting(1, "autoType", "Auto Type", "Type a suggestion on the first tap")
+	local wpmRow = create("Frame", {
+		Name = "WPM",
+		LayoutOrder = 2,
+		Size = UDim2.new(1, -4, 0, 54),
+		BackgroundColor3 = Config.Row,
+		BackgroundTransparency = 0.14,
+		BorderSizePixel = 0,
+		ZIndex = 23,
+	}, settingsList)
+	addStroke(wpmRow, Config.Line, 0.84, 1)
+	makeText(wpmRow, {
+		Name = "Label",
+		Position = UDim2.fromOffset(9, 4),
+		Size = UDim2.new(1, -18, 0, 18),
+		Font = MEDIUM_FONT,
+		Text = "WPM (Words per minute)",
+		TextColor3 = Config.White,
+		TextSize = 11,
+		ZIndex = 24,
+	})
+	local wpmMinus = makeButton(wpmRow, {
+		Name = "WPMMinus",
+		Position = UDim2.fromOffset(9, 26),
+		Size = UDim2.fromOffset(36, 22),
+		BackgroundColor3 = Config.Panel,
+		BackgroundTransparency = 0.1,
+		Font = BOLD_FONT,
+		Text = "-",
+		TextColor3 = Config.Secondary,
+		TextSize = 14,
+		ZIndex = 24,
+	})
+	local wpmValue = makeText(wpmRow, {
+		Name = "WPMValue",
+		Position = UDim2.fromOffset(51, 26),
+		Size = UDim2.new(1, -102, 0, 22),
+		BackgroundColor3 = Config.Panel,
+		BackgroundTransparency = 0.1,
+		Font = BOLD_FONT,
+		Text = tostring(Settings.wpm),
+		TextColor3 = Config.White,
+		TextSize = 11,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		ZIndex = 24,
+	})
+	local wpmPlus = makeButton(wpmRow, {
+		Name = "WPMPlus",
+		AnchorPoint = Vector2.new(1, 0),
+		Position = UDim2.new(1, -9, 0, 26),
+		Size = UDim2.fromOffset(36, 22),
+		BackgroundColor3 = Config.Panel,
+		BackgroundTransparency = 0.1,
+		Font = BOLD_FONT,
+		Text = "+",
+		TextColor3 = Config.Secondary,
+		TextSize = 14,
+		ZIndex = 24,
+	})
+	addStroke(wpmMinus, Config.Line, 0.82, 1)
+	addStroke(wpmValue, Config.Line, 0.82, 1)
+	addStroke(wpmPlus, Config.Line, 0.82, 1)
+
+	local definitionsSetting = makeToggleSetting(3, "definitions", "Enable Definitions", "Cambridge Definitions")
+	local allResultsSetting = makeToggleSetting(4, "allResults", "Enable All Results", "Might be laggy")
+	local autoDetectSetting = makeToggleSetting(5, "autoDetect", "Auto Detect Game Input", "Only watches local, active input")
+	local hideUsedSetting = makeToggleSetting(6, "hideUsed", "Hide Used Words", "Avoid repeated submissions")
+	local resetSettingsButton = makeButton(settingsPanel, {
+		Name = "ResetSettings",
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.new(0, 7, 1, -7),
+		Size = UDim2.new(1, -14, 0, 28),
+		BackgroundColor3 = Config.Row,
+		BackgroundTransparency = 0.12,
+		Font = MEDIUM_FONT,
+		Text = "Reset Settings",
+		TextColor3 = Config.Secondary,
+		TextSize = 10,
+		ZIndex = 23,
+	})
+	addStroke(resetSettingsButton, Config.Line, 0.78, 1)
+
+	local function updateSettingsControls()
+		for key, controls in pairs(settingToggles) do
+			local enabled = Settings[key] == true
+			controls.track.BackgroundColor3 = enabled and Config.Accent or Config.Selected
+			controls.knob.Position = UDim2.fromOffset(enabled and 20 or 2, 2)
+			controls.knob.BackgroundColor3 = enabled and Config.Panel or Config.Secondary
+		end
+		wpmValue.Text = tostring(Settings.wpm)
+		wpmMinus.TextColor3 = Settings.wpm <= Config.MinimumWPM and Config.Muted or Config.Secondary
+		wpmPlus.TextColor3 = Settings.wpm >= Config.MaximumWPM and Config.Muted or Config.Secondary
+	end
+	updateSettingsControls()
+
 	WordHelper.references.ScreenGui = screenGui
 	WordHelper.references.Window = window
 	WordHelper.references.WindowScale = windowScale
@@ -3324,13 +3718,24 @@ zenith
 	WordHelper.references.Body = body
 	WordHelper.references.SearchBox = searchBox
 	WordHelper.references.WordList = wordList
+	WordHelper.references.WordListHolder = listHolder
 	WordHelper.references.EmptyLabel = emptyLabel
 	WordHelper.references.StatusLabel = statusLabel
 	WordHelper.references.DetectionLabel = detectionLabel
+	WordHelper.references.DefinitionHolder = definitionHolder
 	WordHelper.references.DefinitionWord = definitionWord
 	WordHelper.references.DefinitionText = definitionText
 	WordHelper.references.MinimizeButton = minimizeButton
 	WordHelper.references.CloseButton = closeButton
+	WordHelper.references.SettingsButton = settingsButton
+	WordHelper.references.SettingsIcon = settingsIcon
+	WordHelper.references.SettingsFallback = settingsFallback
+	WordHelper.references.SettingsOverlay = settingsOverlay
+	WordHelper.references.SettingsPanel = settingsPanel
+	WordHelper.references.SettingsCloseButton = settingsCloseButton
+	WordHelper.references.WPMValue = wpmValue
+	WordHelper.references.WPMMinus = wpmMinus
+	WordHelper.references.WPMPlus = wpmPlus
 	WordHelper.references.BrandLabel = brandLabel
 	WordHelper.references.WordleLogo = wordleLogo
 	WordHelper.references.WordleLogoFallback = wordleLogoFallback
@@ -3524,6 +3929,7 @@ zenith
 	end
 
 	local function showDefinition(word)
+		if not Settings.definitions then return end
 		WordHelper.definitionVersion = WordHelper.definitionVersion + 1
 		local version = WordHelper.definitionVersion
 		definitionWord.Text = word
@@ -3562,10 +3968,11 @@ zenith
 		return true
 	end
 
-	-- A focused game TextBox is the safest universal completion path: update only
-	-- its current trailing fragment and leave focus/cursor in the game.
-	local function completeExternalTextBox(word)
-		if isRobloxMenuOpen() then return false end
+	-- A focused game TextBox is the safest universal target. Build a paced edit
+	-- plan instead of replacing the whole value instantly so the WPM setting also
+	-- applies to native game inputs.
+	local function prepareExternalTextBox(word)
+		if isRobloxMenuOpen() then return nil end
 		local textBox = nil
 		pcall(function() textBox = userInputService:GetFocusedTextBox() end)
 		if textBox == searchBox then textBox = nil end
@@ -3573,15 +3980,43 @@ zenith
 		if not textBox and WordHelper.detectionSource == "external" then
 			textBox = WordHelper.lastExternalTextBox
 		end
-		if not textBox or not textBox.Parent or not isGameTextBox(textBox) then return false end
-		local ok = pcall(function()
-			local text = tostring(textBox.Text or "")
-			local fragment = string.match(text, "([%a]+)$") or ""
-			local completed = string.sub(text, 1, #text - #fragment) .. word
-			textBox.Text = completed
-			textBox.CursorPosition = #completed + 1
-		end)
-		return ok
+		if not textBox or not textBox.Parent or not isGameTextBox(textBox) then return nil end
+
+		local ok, text = pcall(function() return tostring(textBox.Text or "") end)
+		if not ok then return nil end
+		local fragment = string.lower(string.match(text, "([%a]+)$") or "")
+		local baseText = string.sub(text, 1, #text - #fragment)
+		local common = 0
+		while common < #fragment and common < #word
+			and string.sub(fragment, common + 1, common + 1) == string.sub(word, common + 1, common + 1) do
+			common = common + 1
+		end
+		local actions = {}
+		for _ = #fragment, common + 1, -1 do table.insert(actions, "back") end
+		for index = common + 1, #word do table.insert(actions, string.sub(word, index, index)) end
+		local buffer, expectedText = fragment, text
+		local function sender(action)
+			local currentOk, currentText = pcall(function() return tostring(textBox.Text or "") end)
+			if not currentOk or currentText ~= expectedText then return false end
+			if action == "back" then
+				buffer = string.sub(buffer, 1, math.max(0, #buffer - 1))
+			else
+				buffer = string.sub(buffer .. action, -32)
+			end
+			local completed = baseText .. buffer
+			local wrote = pcall(function()
+				textBox.Text = completed
+				textBox.CursorPosition = #completed + 1
+			end)
+			if wrote then expectedText = completed end
+			return wrote
+		end
+		local function validator()
+			if not textBox.Parent or not isGameTextBox(textBox) then return false end
+			local focused = userInputService:GetFocusedTextBox()
+			return focused == nil or focused == textBox
+		end
+		return actions, sender, validator, textBox
 	end
 
 	local typeWordIntoGame
@@ -3598,12 +4033,16 @@ zenith
 		showDefinition(word)
 
 		local started, method = false, nil
-		if type(typeWordIntoGame) == "function" then
+		if Settings.autoType and type(typeWordIntoGame) == "function" then
 			started, method = typeWordIntoGame(word)
 		end
-		local completedImmediately = method == "TextBox" or method == "complete"
-		setStatus(started and ((completedImmediately and "Escrito: " or "Escribiendo: ") .. word)
-			or ("No pude escribir automáticamente: " .. word), started and Config.Secondary or Config.Muted)
+		local completedImmediately = method == "complete"
+		if not Settings.autoType then
+			setStatus("Seleccionado: " .. word, Config.Secondary)
+		else
+			setStatus(started and ((completedImmediately and "Escrito: " or "Escribiendo: ") .. word)
+				or ("No pude escribir automáticamente: " .. word), started and Config.Secondary or Config.Muted)
+		end
 
 		local callback = self.callbacks.WordSelected
 		-- Keep the historical third callback argument as "copied" (always false on
@@ -3617,7 +4056,7 @@ zenith
 		word = normalizeLetters(word)
 		if word == "" then return false end
 		local now = os.clock()
-		if self.lastWordActivation == word and now - self.lastWordActivationAt <= 0.42 then
+		if self.lastWordActivation == word and now - self.lastWordActivationAt <= Config.DoubleActivationSeconds then
 			self.lastWordActivation = nil
 			self.lastWordActivationAt = 0
 			local copied = clipboardWriter and pcall(clipboardWriter, word) or false
@@ -3699,10 +4138,8 @@ zenith
 		end)
 	end
 
-	local function refreshWords()
-		if WordHelper.destroyed then
-			return
-		end
+	local function refreshWords(expectedVersion)
+		if WordHelper.destroyed or (expectedVersion and expectedVersion ~= WordHelper.refreshVersion) then return end
 		clearRows()
 
 		local query = WordHelper.currentQuery
@@ -3722,7 +4159,7 @@ zenith
 		if containsMode then
 			-- "Contiene": word-bomb style games give a syllable that can be anywhere.
 			for _, word in ipairs(WordHelper.words) do
-				if not used[word] and string.find(word, query, 1, true) then
+				if (not Settings.hideUsed or not used[word]) and string.find(word, query, 1, true) then
 					table.insert(matches, word)
 				end
 			end
@@ -3734,7 +4171,7 @@ zenith
 				source = WordHelper.prefixBuckets[string.sub(query, 1, 2)] or {}
 			end
 			for _, word in ipairs(source) do
-				if not used[word] and string.sub(word, 1, #query) == query then
+				if (not Settings.hideUsed or not used[word]) and string.sub(word, 1, #query) == query then
 					table.insert(matches, word)
 				end
 			end
@@ -3777,11 +4214,17 @@ zenith
 		WordHelper.bestWord = best or matches[1]
 		updatePreview()
 
-		local resultLimit = isTouchDevice and Config.MobileMaximumResults or Config.MaximumResults
+		local cappedLimit = isTouchDevice and Config.MobileMaximumResults or Config.MaximumResults
+		local resultLimit = Settings.allResults and totalMatches or cappedLimit
 		WordHelper.resultLimit = resultLimit
 		local shown = math.min(totalMatches, resultLimit)
+		local batchSize = isTouchDevice and 20 or 40
 		for index = 1, shown do
 			createWordRow(matches[index], query, index)
+			if Settings.allResults and index % batchSize == 0 then
+				task.wait()
+				if WordHelper.destroyed or (expectedVersion and expectedVersion ~= WordHelper.refreshVersion) then return end
+			end
 		end
 
 		emptyLabel.Visible = shown == 0
@@ -3801,16 +4244,15 @@ zenith
 		local version = WordHelper.refreshVersion
 		task.delay(isTouchDevice and 0.075 or 0.045, function()
 			if not WordHelper.destroyed and version == WordHelper.refreshVersion then
-				refreshWords()
+				refreshWords(version)
 			end
 		end)
 	end
 
 	local synchronizingSearch = false
 	local function applyDetectedQuery(query, source, reflectInSearch)
-		if WordHelper.destroyed then
-			return
-		end
+		if WordHelper.destroyed then return end
+		if not Settings.autoDetect and source ~= "manual" then return end
 		query = normalizeLetters(query)
 		local queryChanged = query ~= WordHelper.currentQuery
 		WordHelper.currentQuery = query
@@ -3845,6 +4287,74 @@ zenith
 		end
 		if queryChanged then scheduleRefresh() end
 	end
+
+	local function updateDefinitionLayout()
+		definitionHolder.Visible = Settings.definitions
+		listHolder.Size = Settings.definitions
+			and UDim2.new(1, -20, 1, -192)
+			or UDim2.new(1, -20, 1, -126)
+		if not Settings.definitions then
+			WordHelper.definitionVersion = WordHelper.definitionVersion + 1
+		elseif WordHelper.selectedWord then
+			showDefinition(WordHelper.selectedWord)
+		end
+	end
+
+	local function applySettingChange(key)
+		updateSettingsControls()
+		if key == "autoType" and not Settings.autoType then
+			cancelAutomaticTyping(true)
+			setStatus("Auto Type desactivado", Config.Muted)
+		elseif key == "definitions" then
+			updateDefinitionLayout()
+		elseif key == "allResults" or key == "hideUsed" then
+			scheduleRefresh()
+		elseif key == "autoDetect" then
+			cancelAutomaticTyping(true)
+			if Settings.autoDetect then
+				applyDetectedQuery(WordHelper.currentQuery, WordHelper.detectionSource, false)
+			else
+				WordHelper.passiveBuffer = ""
+				WordHelper.lastVisualWord = ""
+				detectionLabel.Text = "Automatic detection disabled"
+			end
+		end
+	end
+
+	function WordHelper:SetSetting(key, value)
+		if self.destroyed or DEFAULT_SETTINGS[key] == nil then return false end
+		if key == "wpm" then return self:SetWPM(value) end
+		if type(DEFAULT_SETTINGS[key]) ~= "boolean" then return false end
+		Settings[key] = value == true
+		applySettingChange(key)
+		return true
+	end
+
+	function WordHelper:SetWPM(value)
+		if self.destroyed then return false end
+		value = tonumber(value)
+		if not value then return false end
+		Settings.wpm = math.clamp(
+			math.floor(value / Config.WPMIncrement + 0.5) * Config.WPMIncrement,
+			Config.MinimumWPM,
+			Config.MaximumWPM
+		)
+		updateSettingsControls()
+		return true
+	end
+
+	function WordHelper:SetSettingsOpen(open)
+		if self.destroyed then return end
+		open = open == true
+		if open and self.minimized then self:SetMinimized(false) end
+		self.settingsOpen = open
+		settingsOverlay.Visible = open
+		if searchBox:IsFocused() then searchBox:ReleaseFocus() end
+		self.manualCaptureUntil = 0
+	end
+
+	updateDefinitionLayout()
+	if not Settings.autoDetect then detectionLabel.Text = "Automatic detection disabled" end
 
 	local function queryForTypedBuffer(typed)
 		typed = normalizeLetters(typed)
@@ -3901,6 +4411,7 @@ zenith
 		self.visible = visible == true
 		screenGui.Enabled = self.visible
 		if not self.visible then
+			self:SetSettingsOpen(false)
 			self.manualCaptureUntil = 0
 			if searchBox:IsFocused() then searchBox:ReleaseFocus() end
 		end
@@ -3921,6 +4432,7 @@ zenith
 		minimizeButton.Text = self.minimized and "+" or "-"
 		productLabel.Visible = false
 		if self.minimized then
+			self:SetSettingsOpen(false)
 			if searchBox:IsFocused() then
 				searchBox:ReleaseFocus()
 			end
@@ -3949,7 +4461,8 @@ zenith
 	end
 
 	local function syncFromFocusedTextBox(textBox)
-		if WordHelper.destroyed or textBox ~= WordHelper.activeExternalTextBox then
+		if WordHelper.destroyed or textBox ~= WordHelper.activeExternalTextBox
+			or (WordHelper.isAutoTyping and textBox == WordHelper.autoTypeTextBox) then
 			return
 		end
 		local ok, text, cursorPosition = pcall(function()
@@ -3961,7 +4474,7 @@ zenith
 	end
 
 	local function bindFocusedTextBox(textBox)
-		if isRobloxMenuOpen() or WordHelper.isAutoTyping then return end
+		if not Settings.autoDetect or isRobloxMenuOpen() or WordHelper.isAutoTyping then return end
 		if textBox == searchBox then
 			disconnectFocusedTextBox()
 			return
@@ -4070,10 +4583,12 @@ zenith
 	end)
 	connect(searchBox.Focused, function()
 		disconnectFocusedTextBox()
-		WordHelper.manualCaptureUntil = os.clock() + 4
+		WordHelper.manualCaptureUntil = 0
 		tween(searchStroke, FAST_TWEEN, { Transparency = 0.38, Color = Config.White })
 	end)
 	connect(searchBox.FocusLost, function()
+		WordHelper.manualCaptureUntil = (WordHelper.minimized or not WordHelper.visible)
+			and 0 or (os.clock() + 0.18)
 		tween(searchStroke, FAST_TWEEN, { Transparency = 0.78, Color = Config.Line })
 	end)
 
@@ -4091,12 +4606,42 @@ zenith
 			})
 		end)
 	end
+	bindHeaderHover(settingsButton, false)
 	bindHeaderHover(minimizeButton, false)
 	bindHeaderHover(closeButton, true)
+	bindHeaderHover(settingsCloseButton, false)
 
+	connect(settingsButton.Activated, function()
+		WordHelper:SetSettingsOpen(not WordHelper.settingsOpen)
+	end)
+	connect(settingsCloseButton.Activated, function()
+		WordHelper:SetSettingsOpen(false)
+	end)
 	connect(minimizeButton.Activated, function()
 		WordHelper:SetMinimized(not WordHelper.minimized)
 	end)
+	for key, controls in pairs(settingToggles) do
+		local settingKey = key
+		connect(controls.button.Activated, function()
+			WordHelper:SetSetting(settingKey, not Settings[settingKey])
+		end)
+	end
+	connect(wpmMinus.Activated, function()
+		WordHelper:SetWPM(Settings.wpm - Config.WPMIncrement)
+	end)
+	connect(wpmPlus.Activated, function()
+		WordHelper:SetWPM(Settings.wpm + Config.WPMIncrement)
+	end)
+	connect(resetSettingsButton.Activated, function()
+		for key, value in pairs(DEFAULT_SETTINGS) do Settings[key] = value end
+		updateSettingsControls()
+		cancelAutomaticTyping(true)
+		updateDefinitionLayout()
+		detectionLabel.Text = "Detección automática activa"
+		scheduleRefresh()
+		setStatus("Settings restored", Config.Secondary)
+	end)
+
 	-- Option chips.
 	local MODE_LABELS = { prefix = "Empieza con", contains = "Contiene" }
 	local SORT_ORDER = { "common", "long", "short" }
@@ -4207,7 +4752,7 @@ zenith
 		end
 		local pointer = Vector2.new(input.Position.X, input.Position.Y)
 		-- Header controls must click without briefly starting a window drag.
-		if pointInside(minimizeButton, pointer) or pointInside(closeButton, pointer)
+		if pointInside(settingsButton, pointer) or pointInside(minimizeButton, pointer) or pointInside(closeButton, pointer)
 			or (previewLabel.Visible and pointInside(previewButton, pointer)) then
 			return
 		end
@@ -4284,7 +4829,7 @@ zenith
 	end
 
 	local function passiveType(action, resetSeconds)
-		if WordHelper.isAutoTyping or isRobloxMenuOpen() then return end
+		if not Settings.autoDetect or WordHelper.isAutoTyping or isRobloxMenuOpen() then return end
 		-- In the confirmed two-player game, consumed physical keys and world-space
 		-- keyboard buttons exist for both players. Never treat either as input unless
 		-- MatchStatus or a local outgoing typing call has proved that this is our turn.
@@ -4441,9 +4986,9 @@ zenith
 		pcall(function() connect(replicatedStorage.DescendantAdded, bindMatchStatus) end)
 	end
 
-	-- TextBoxFocused covers Roblox chat and normal game interfaces. The passive
-	-- gameProcessed fallback also catches custom interfaces that render text in a
-	-- label while consuming keyboard input instead of focusing a real TextBox.
+	-- TextBoxFocused reports both chat and game interfaces; isGameTextBox filters
+	-- Roblox chat before binding. The passive gameProcessed fallback also catches
+	-- custom interfaces that render text in a label instead of focusing a TextBox.
 	connect(userInputService.TextBoxFocused, function(textBox)
 		if WordHelper.isAutoTyping then
 			cancelAutomaticTyping(true)
@@ -4504,7 +5049,10 @@ zenith
 			WordHelper.manualCaptureUntil = 0
 			return
 		end
-		WordHelper.manualCaptureUntil = os.clock() + 1.25
+		-- Some game controllers release the box immediately before forwarding the
+		-- same consumed hardware key. Keep only a tiny keyboard-only bridge window;
+		-- ordinary taps/clicks must never recapture Zenith's search box.
+		WordHelper.manualCaptureUntil = os.clock() + 0.18
 	end)
 
 	local function exactRemoteHandledNear(action, inputAt)
@@ -4514,7 +5062,7 @@ zenith
 	end
 
 	connect(userInputService.InputBegan, function(input, gameProcessed)
-		if WordHelper.isAutoTyping or isRobloxMenuOpen() then return end
+		if WordHelper.isAutoTyping or WordHelper.settingsOpen or isRobloxMenuOpen() then return end
 		WordHelper.suppressGeneratedUntil = 0
 		if input.KeyCode == Enum.KeyCode.RightShift then
 			WordHelper:Toggle()
@@ -4535,9 +5083,16 @@ zenith
 		-- focused Zenith so that the same physical key still edits Zenith, not the
 		-- game-word detector.
 		if WordHelper.manualCaptureUntil > 0 and os.clock() <= WordHelper.manualCaptureUntil then
-			pcall(function() searchBox:CaptureFocus() end)
-			bridgeBlockedSearchInput(input)
-			return
+			local canBridgeReleasedSearch = gameProcessed == true
+				and input.UserInputType == Enum.UserInputType.Keyboard
+				and (LETTER_BY_KEYCODE[input.KeyCode] ~= nil or input.KeyCode == Enum.KeyCode.Backspace)
+			if canBridgeReleasedSearch then
+				pcall(function() searchBox:CaptureFocus() end)
+				bridgeBlockedSearchInput(input)
+				return
+			end
+			-- A pointer/touch outside the box explicitly ends the short lease.
+			WordHelper.manualCaptureUntil = 0
 		end
 
 		local letter = LETTER_BY_KEYCODE[input.KeyCode]
@@ -4975,7 +5530,7 @@ zenith
 				return
 			end
 			connect(remote.OnClientEvent, function(...)
-				if WordHelper.robloxMenuOpen or WordHelper.isAutoTyping
+				if not Settings.autoDetect or WordHelper.robloxMenuOpen or WordHelper.isAutoTyping
 					or os.clock() < WordHelper.suppressGeneratedUntil then return end
 				-- In the confirmed two-player game this echo also contains the enemy's
 				-- word. The local MatchStatus prompt and local outgoing call are the only
@@ -5061,12 +5616,16 @@ zenith
 			WordHelper.passiveBuffer = string.sub(WordHelper.passiveBuffer, 1, math.max(0, #WordHelper.passiveBuffer - 1))
 		end
 		WordHelper.lastPassiveInput = now
-		applyDetectedQuery(queryForTypedBuffer(WordHelper.passiveBuffer), "remote", true)
+		-- Generated letters update the authoritative suffix but keep the current
+		-- suggestion row stable long enough for a second tap to copy it.
+		if not WordHelper.isAutoTyping then
+			applyDetectedQuery(queryForTypedBuffer(WordHelper.passiveBuffer), "remote", true)
+		end
 		return true
 	end
 
 	local function onRemoteCall(remote, method, arguments)
-		if WordHelper.destroyed or WordHelper.robloxMenuOpen or WordHelper.isAutoTyping
+		if WordHelper.destroyed or not Settings.autoDetect or WordHelper.robloxMenuOpen or WordHelper.isAutoTyping
 			or os.clock() < WordHelper.suppressGeneratedUntil then return end
 		if handleKnownWordBombCall(remote, method, arguments) then return end
 		-- This place has a confirmed protocol. Its generic remotes and incoming
@@ -5302,15 +5861,19 @@ zenith
 		WordHelper.isAutoTyping = true
 		task.spawn(function()
 			local completed = true
-			for _, action in ipairs(actions) do
+			for index, action in ipairs(actions) do
 				if not autoTypeStillValid(generation, inputEpoch, validator) or not sender(action) then
 					completed = false
 					break
 				end
-				task.wait(0.035)
+				if index < #actions then
+					local secondsPerCharacter = math.clamp(60 / (Settings.wpm * 5), 0.02, 0.4)
+					task.wait(secondsPerCharacter)
+				end
 			end
 			if WordHelper.autoTypeGeneration == generation then
 				WordHelper.isAutoTyping = false
+				WordHelper.autoTypeTextBox = nil
 				if not WordHelper.destroyed and not isRobloxMenuOpen() then
 					setStatus(completed and ("Escrito: " .. word)
 						or ("No se pudo completar: " .. word), completed and Config.Secondary or Config.Muted)
@@ -5369,7 +5932,12 @@ zenith
 			end)
 		end
 
-		if completeExternalTextBox(word) then return true, "TextBox" end
+		local textActions, textSender, textValidator, textBox = prepareExternalTextBox(word)
+		if textActions then
+			if #textActions == 0 then return true, "complete" end
+			WordHelper.autoTypeTextBox = textBox
+			return beginAutoTyping(textActions, textSender, word, "TextBox", textValidator)
+		end
 
 		local initialFocus = userInputService:GetFocusedTextBox()
 		local query = normalizeLetters(WordHelper.currentQuery)
@@ -5413,6 +5981,10 @@ zenith
 			isRobloxMenuOpen()
 		end
 		if WordHelper.robloxMenuOpen or WordHelper.isAutoTyping then return end
+		if not Settings.autoDetect then
+			if WordHelper.activeExternalTextBox then disconnectFocusedTextBox() end
+			return
+		end
 		if currentPlaceId == LAST_LETTER_PLACE_ID then
 			visualPollAccumulator = visualPollAccumulator + deltaTime
 			if visualPollAccumulator >= Config.VisualPollSeconds then
