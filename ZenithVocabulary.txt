@@ -2191,6 +2191,7 @@ launchWordHelper = function(standardExpiresAt)
 	local tweenService = game:GetService("TweenService")
 	local runService = game:GetService("RunService")
 	local workspaceService = game:GetService("Workspace")
+	local replicatedStorage = game:GetService("ReplicatedStorage")
 
 	if not game:IsLoaded() then
 		game.Loaded:Wait()
@@ -2214,10 +2215,11 @@ launchWordHelper = function(standardExpiresAt)
 		UIScale = 1.2,
 		MaximumResults = 120,
 		VisualPollSeconds = 0.08,
+		WordBombPromptPollSeconds = 0.2,
 		Assets = {
 			-- Optional uploaded IDs for Studio. Executors use the embedded PNGs below.
 			WordleLogo = "",
-			ResetIcon = "",
+			SavedIcon = "",
 		},
 		-- ENABLE word list: the standard dictionary used by word games (no junk
 		-- entries like the old dwyl list). dwyl stays only as a last-resort mirror.
@@ -2389,46 +2391,25 @@ launchWordHelper = function(standardExpiresAt)
 			"cv97AYH3CAv9vEE/79CPWewbAINAgAGcXvRJ7IbJ+vt5gkGS5zh5AA/4v3Fmfb/Eq9//2QHawF5sAQNeN5Txx4mPYoDhBhl3rxN7aAGDZvwwsX8/ecAwyR/2",
 			"MPoonmAvw/ZLIvuFl4kCoBMEewk3/aRd0ceViz04f7/Cx/cCAPbi/cMAYNgQsdd3jLRY4f8CxHN5LnKu+LMAAAAASUVORK5CYII=",
 		}),
-		ResetIcon = table.concat({
-			"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",
+		SavedIcon = table.concat({
+			"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",
+			"mNQAAAAASUVORK5CYII=",
 		}),
 	}
 
@@ -2583,11 +2564,17 @@ zenith
 	local currentPlaceId = tonumber(game.PlaceId) or 0
 
 	local sharedEnvironment = getSharedEnvironment()
-	local previousHelper = sharedEnvironment.ZenithChess or sharedEnvironment.ZenithAssistant or sharedEnvironment.ZenithVocabulary or sharedEnvironment.ZenithWordHelper
+	-- Product lifecycles are isolated: re-running Vocabulary replaces only an
+	-- earlier Vocabulary instance and never tears down the standalone Chess tool.
+	local previousHelper = sharedEnvironment.ZenithVocabulary
 	if type(previousHelper) == "table" and type(previousHelper.Destroy) == "function" then
 		pcall(function()
 			previousHelper:Destroy()
 		end)
+	end
+	for _, obsoleteKey in ipairs({ "ZenithWordRemoteHookV2", "ZenithWordRemoteHookV1" }) do
+		local obsoleteHook = sharedEnvironment[obsoleteKey]
+		if type(obsoleteHook) == "table" then obsoleteHook.handler = nil end
 	end
 	local previousKeyMenu = sharedEnvironment.ZNTHMainMenu
 	if type(previousKeyMenu) == "table" and type(previousKeyMenu.Destroy) == "function" then
@@ -2597,6 +2584,7 @@ zenith
 	end
 
 	local WordHelper = {
+		product = "Vocabulary",
 		destroyed = false,
 		visible = true,
 		minimized = false,
@@ -2634,8 +2622,18 @@ zenith
 		trustedRemotes = setmetatable({}, { __mode = "k" }),
 		listenedRemotes = setmetatable({}, { __mode = "k" }),
 		lastRemoteTyping = 0,
+		lastLocalRemoteCall = 0,
 		lastVisualWord = "",
 		lastVisualUpdate = 0,
+		localTurn = nil,
+		turnPrompt = "",
+		turnOwner = nil,
+		turnSource = nil,
+		visiblePrompt = "",
+		visiblePromptAt = 0,
+		awaitingSubmission = false,
+		lastTurnEventAt = 0,
+		manualCaptureUntil = 0,
 		placeId = currentPlaceId,
 	}
 
@@ -2819,7 +2817,7 @@ zenith
 
 	local resolvedWordAssets = {
 		WordleLogo = resolveWordAsset("WordleLogo", "wordle-logo.png"),
-		ResetIcon = resolveWordAsset("ResetIcon", "reset-used.png"),
+		SavedIcon = resolveWordAsset("SavedIcon", "saved-word.png"),
 	}
 
 	local previousGui = playerGui:FindFirstChild(Config.GuiName)
@@ -3033,6 +3031,8 @@ zenith
 		Size = UDim2.new(1, -38, 1, 0),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
+		Active = true,
+		TextEditable = true,
 		ClearTextOnFocus = false,
 		Font = MEDIUM_FONT,
 		MultiLine = false,
@@ -3092,29 +3092,29 @@ zenith
 		PaddingLeft = UDim.new(0, 6),
 		PaddingRight = UDim.new(0, 19),
 	}, usedChip)
-	local resetIcon = create("ImageLabel", {
-		Name = "ResetUsedIcon",
+	local savedIcon = create("ImageLabel", {
+		Name = "SavedWordIcon",
 		AnchorPoint = Vector2.new(1, 0.5),
 		Position = UDim2.new(1, -4, 0.5, 0),
 		Size = UDim2.fromOffset(13, 13),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
-		Image = resolvedWordAssets.ResetIcon,
+		Image = resolvedWordAssets.SavedIcon,
 		ScaleType = Enum.ScaleType.Fit,
-		Visible = resolvedWordAssets.ResetIcon ~= "",
+		Visible = resolvedWordAssets.SavedIcon ~= "",
 		ZIndex = 7,
 	}, usedChip)
-	local resetIconFallback = makeText(usedChip, {
-		Name = "ResetUsedFallback",
+	local savedIconFallback = makeText(usedChip, {
+		Name = "SavedWordFallback",
 		AnchorPoint = Vector2.new(1, 0.5),
 		Position = UDim2.new(1, -4, 0.5, 0),
 		Size = UDim2.fromOffset(13, 13),
 		Font = BOLD_FONT,
-		Text = "R",
+		Text = "",
 		TextColor3 = Config.Secondary,
 		TextSize = 9,
 		TextXAlignment = Enum.TextXAlignment.Center,
-		Visible = not resetIcon.Visible,
+		Visible = not savedIcon.Visible,
 		ZIndex = 7,
 	})
 	local function updateUsedChip()
@@ -3261,8 +3261,8 @@ zenith
 	WordHelper.references.WordleLogo = wordleLogo
 	WordHelper.references.WordleLogoFallback = wordleLogoFallback
 	WordHelper.references.UsedChip = usedChip
-	WordHelper.references.ResetIcon = resetIcon
-	WordHelper.references.ResetIconFallback = resetIconFallback
+	WordHelper.references.SavedIcon = savedIcon
+	WordHelper.references.SavedIconFallback = savedIconFallback
 
 	local function setStatus(text, color)
 		statusLabel.Text = text
@@ -3693,11 +3693,25 @@ zenith
 				passive = "teclado",
 				remote = "teclado del juego",
 				visual = "interfaz del juego",
+				turn = "tu turno",
 			}
 			local sourceLabel = SOURCE_LABELS[source] or "detectado automáticamente"
 			detectionLabel.Text = "Texto: " .. query .. "  |  " .. sourceLabel
 		end
 		scheduleRefresh()
+	end
+
+	local function queryForTypedBuffer(typed)
+		typed = normalizeLetters(typed)
+		local prompt = WordHelper.turnPrompt
+		if WordHelper.localTurn ~= false and prompt ~= "" then
+			-- Keep the required letters visible before the local player finishes
+			-- typing them; afterwards narrow suggestions with the complete prefix.
+			if #typed < #prompt or string.sub(typed, 1, #prompt) ~= prompt then
+				return prompt
+			end
+		end
+		return typed
 	end
 
 	function WordHelper:SetWords(words)
@@ -3743,6 +3757,10 @@ zenith
 		end
 		self.visible = visible == true
 		screenGui.Enabled = self.visible
+		if not self.visible then
+			self.manualCaptureUntil = 0
+			if searchBox:IsFocused() then searchBox:ReleaseFocus() end
+		end
 	end
 
 	function WordHelper:Toggle()
@@ -3877,13 +3895,17 @@ zenith
 		if screenGui and screenGui.Parent then
 			screenGui:Destroy()
 		end
+		local replacement = sharedEnvironment.ZenithChess
+		if type(replacement) ~= "table" or replacement.destroyed then replacement = nil end
 		if sharedEnvironment.ZenithVocabulary == self then sharedEnvironment.ZenithVocabulary = nil end
-		if sharedEnvironment.ZenithAssistant == self then sharedEnvironment.ZenithAssistant = nil end
-		if sharedEnvironment.ZenithWordHelper == self then sharedEnvironment.ZenithWordHelper = nil end
+		if sharedEnvironment.ZenithAssistant == self then sharedEnvironment.ZenithAssistant = replacement end
+		if sharedEnvironment.ZenithWordHelper == self then sharedEnvironment.ZenithWordHelper = replacement end
 		if type(shared) == "table" then
+			local sharedReplacement = shared.ZenithChess
+			if type(sharedReplacement) ~= "table" or sharedReplacement.destroyed then sharedReplacement = replacement end
 			if shared.ZenithVocabulary == self then shared.ZenithVocabulary = nil end
-			if shared.ZenithAssistant == self then shared.ZenithAssistant = nil end
-			if shared.ZenithWordHelper == self then shared.ZenithWordHelper = nil end
+			if shared.ZenithAssistant == self then shared.ZenithAssistant = sharedReplacement end
+			if shared.ZenithWordHelper == self then shared.ZenithWordHelper = sharedReplacement end
 		end
 	end
 
@@ -3902,6 +3924,7 @@ zenith
 	end)
 	connect(searchBox.Focused, function()
 		disconnectFocusedTextBox()
+		WordHelper.manualCaptureUntil = os.clock() + 4
 		tween(searchStroke, FAST_TWEEN, { Transparency = 0.38, Color = Config.White })
 	end)
 	connect(searchBox.FocusLost, function()
@@ -4105,6 +4128,10 @@ zenith
 	end
 
 	local function passiveType(action, resetSeconds)
+		-- In the confirmed two-player game, consumed physical keys and world-space
+		-- keyboard buttons exist for both players. Never treat either as input unless
+		-- MatchStatus or a local outgoing typing call has proved that this is our turn.
+		if currentPlaceId == WORD_BOMB_PLACE_ID and WordHelper.localTurn ~= true then return end
 		local now = os.clock()
 		if now - WordHelper.lastPassiveInput > resetSeconds then
 			WordHelper.passiveBuffer = ""
@@ -4113,12 +4140,126 @@ zenith
 		if action == "back" then
 			WordHelper.passiveBuffer = string.sub(WordHelper.passiveBuffer, 1, math.max(0, #WordHelper.passiveBuffer - 1))
 		elseif action == "end" then
-			markUsed(WordHelper.passiveBuffer)
-			WordHelper.passiveBuffer = ""
+			if currentPlaceId == WORD_BOMB_PLACE_ID then
+				-- The server's confirm event is authoritative. Invalid words leave the
+				-- same turn active, so do not hide a word before confirmation.
+				WordHelper.awaitingSubmission = true
+				WordHelper.passiveBuffer = ""
+				applyDetectedQuery(WordHelper.turnPrompt, "turn", true)
+			else
+				markUsed(WordHelper.passiveBuffer)
+				WordHelper.passiveBuffer = ""
+				applyDetectedQuery("", "passive", true)
+			end
+			return
 		else
 			WordHelper.passiveBuffer = string.sub(WordHelper.passiveBuffer .. action, -32)
 		end
-		applyDetectedQuery(WordHelper.passiveBuffer, "passive", true)
+		applyDetectedQuery(queryForTypedBuffer(WordHelper.passiveBuffer), "passive", true)
+	end
+
+	-- The confirmed trace emits MatchStatus as:
+	--   type(prompt, typingRemote, startedAt, Player, turnConfig)
+	--   confirm(Player, word, ...) / wrongAnswer(Player, reason, ...)
+	-- The Player instance is authoritative and stops opponent words from ever
+	-- becoming Zenith's query.
+	local function processMatchStatus(...)
+		if currentPlaceId ~= WORD_BOMB_PLACE_ID then return end
+		local arguments = table.pack(...)
+		local eventType = type(arguments[1]) == "string" and string.lower(arguments[1]) or ""
+		local owner = nil
+		for index = 2, arguments.n do
+			local value = arguments[index]
+			if value == localPlayer then
+				owner = value
+				break
+			end
+			pcall(function()
+				if not owner and typeof(value) == "Instance" and value:IsA("Player") then owner = value end
+			end)
+		end
+		if not owner then
+			for index = 2, arguments.n do
+				local value = arguments[index]
+				if type(value) == "table" then
+					local ownerName = value.Player or value.PlayerName or value.Name
+					if (type(ownerName) == "string" and (ownerName == localPlayer.Name or ownerName == localPlayer.DisplayName))
+						or (value.UserId ~= nil and localPlayer.UserId ~= nil and value.UserId == localPlayer.UserId) then
+						owner = localPlayer
+						break
+					end
+				end
+			end
+		end
+
+		local function waitForLocalTurn()
+			WordHelper.localTurn = false
+			WordHelper.turnPrompt = ""
+			WordHelper.passiveBuffer = ""
+			WordHelper.awaitingSubmission = false
+			applyDetectedQuery("", "turn", true)
+			detectionLabel.Text = "Esperando tu turno"
+		end
+
+		if eventType == "type" then
+			WordHelper.lastTurnEventAt = os.clock()
+			local prompt = normalizeLetters(arguments[2])
+			local ownTurn = owner == localPlayer
+			WordHelper.turnOwner = owner
+			WordHelper.turnSource = "match"
+			WordHelper.awaitingSubmission = false
+			WordHelper.searchMode = "prefix"
+			modeChip.Text = "Empieza con"
+			if ownTurn then
+				WordHelper.localTurn = true
+				local recentVisual = os.clock() - WordHelper.visiblePromptAt <= 0.75 and WordHelper.visiblePrompt or ""
+				WordHelper.turnPrompt = prompt ~= "" and prompt or recentVisual
+				WordHelper.passiveBuffer = ""
+				WordHelper.lastPassiveInput = os.clock()
+				applyDetectedQuery(WordHelper.turnPrompt, "turn", true)
+			else
+				waitForLocalTurn()
+			end
+		elseif eventType == "confirm" and owner == localPlayer then
+			WordHelper.lastTurnEventAt = os.clock()
+			if type(arguments[3]) == "string" then markUsed(arguments[3]) end
+			WordHelper.turnSource = "match"
+			waitForLocalTurn()
+		elseif eventType == "wronganswer" and owner == localPlayer then
+			WordHelper.lastTurnEventAt = os.clock()
+			WordHelper.awaitingSubmission = false
+			local reason = type(arguments[3]) == "string" and string.lower(arguments[3]) or ""
+			if reason == "healthsubtracted" then
+				WordHelper.turnSource = "match"
+				waitForLocalTurn()
+			else
+				-- WordDoesNotExist (and equivalent retryable errors) does not pass
+				-- the turn. Preserve the required letters and offer another word.
+				WordHelper.localTurn = true
+				WordHelper.turnOwner = localPlayer
+				WordHelper.turnSource = "match"
+				WordHelper.passiveBuffer = ""
+				if WordHelper.turnPrompt == "" and os.clock() - WordHelper.visiblePromptAt <= 0.75 then
+					WordHelper.turnPrompt = WordHelper.visiblePrompt
+				end
+				applyDetectedQuery(WordHelper.turnPrompt, "turn", true)
+			end
+		end
+	end
+
+	WordHelper.ProcessMatchStatus = processMatchStatus
+	local boundMatchStatus = setmetatable({}, { __mode = "k" })
+	local function bindMatchStatus(remote)
+		if currentPlaceId ~= WORD_BOMB_PLACE_ID or not remote or boundMatchStatus[remote] then return end
+		local valid = false
+		pcall(function() valid = remote:IsA("RemoteEvent") and remote.Name == "MatchStatus" end)
+		if not valid then return end
+		boundMatchStatus[remote] = true
+		pcall(function() connect(remote.OnClientEvent, processMatchStatus) end)
+	end
+	if currentPlaceId == WORD_BOMB_PLACE_ID then
+		bindMatchStatus(replicatedStorage:FindFirstChild("MatchStatus", true))
+		pcall(function() connect(replicatedStorage.DescendantAdded, bindMatchStatus) end)
 	end
 
 	-- TextBoxFocused covers Roblox chat and normal game interfaces. The passive
@@ -4133,6 +4274,45 @@ zenith
 		end
 	end)
 
+	local function bridgeBlockedSearchInput(input)
+		local letter = LETTER_BY_KEYCODE[input.KeyCode]
+		local isBackspace = input.KeyCode == Enum.KeyCode.Backspace
+		if not letter and not isBackspace then return false end
+		WordHelper.manualCaptureUntil = os.clock() + 2.5
+		local before = searchBox.Text
+		local cursor = tonumber(searchBox.CursorPosition) or (#before + 1)
+		if cursor <= 0 then cursor = #before + 1 end
+		-- Roblox normally updates TextBox.Text itself. Some custom keyboard games
+		-- consume the key first; only synthesize the edit when Text stayed unchanged.
+		task.defer(function()
+			if WordHelper.destroyed or searchBox.Text ~= before
+				or (not searchBox:IsFocused() and os.clock() > WordHelper.manualCaptureUntil) then
+				return
+			end
+			local updated, nextCursor = before, cursor
+			if letter then
+				updated = string.sub(before, 1, cursor - 1) .. letter .. string.sub(before, cursor)
+				nextCursor = cursor + 1
+			elseif isBackspace and cursor > 1 then
+				updated = string.sub(before, 1, cursor - 2) .. string.sub(before, cursor)
+				nextCursor = cursor - 1
+			end
+			updated = string.sub(normalizeLetters(updated), 1, 32)
+			searchBox.Text = updated
+			pcall(function() searchBox.CursorPosition = math.min(#updated + 1, nextCursor) end)
+		end)
+		return true
+	end
+
+	connect(userInputService.TextBoxFocusReleased, function(textBox)
+		if textBox ~= searchBox then return end
+		if WordHelper.destroyed or WordHelper.minimized or not WordHelper.visible then
+			WordHelper.manualCaptureUntil = 0
+			return
+		end
+		WordHelper.manualCaptureUntil = os.clock() + 1.25
+	end)
+
 	connect(userInputService.InputBegan, function(input, gameProcessed)
 		if input.KeyCode == Enum.KeyCode.RightShift then
 			WordHelper:Toggle()
@@ -4141,7 +4321,20 @@ zenith
 
 		local focusedTextBox = userInputService:GetFocusedTextBox()
 		if focusedTextBox then
-			bindFocusedTextBox(focusedTextBox)
+			if focusedTextBox == searchBox then
+				bridgeBlockedSearchInput(input)
+			else
+				bindFocusedTextBox(focusedTextBox)
+			end
+			return
+		end
+		-- Some custom-keyboard controllers forcibly release the TextBox before this
+		-- observer runs. Keep a short, explicit manual-search lease after the user
+		-- focused Zenith so that the same physical key still edits Zenith, not the
+		-- game-word detector.
+		if WordHelper.manualCaptureUntil > 0 and os.clock() <= WordHelper.manualCaptureUntil then
+			pcall(function() searchBox:CaptureFocus() end)
+			bridgeBlockedSearchInput(input)
 			return
 		end
 
@@ -4155,6 +4348,9 @@ zenith
 		if not action then
 			return
 		end
+		if currentPlaceId == WORD_BOMB_PLACE_ID and WordHelper.localTurn ~= true then
+			return
+		end
 
 		-- Record activity even when the game's ContextAction does not mark the key
 		-- processed. This lets the read-only remote adapter validate the exact key,
@@ -4162,9 +4358,9 @@ zenith
 		local pressedAt = os.clock()
 		WordHelper.lastTypingActivity = pressedAt
 		WordHelper.lastTypedAction = action
-		if not gameProcessed then
-			return
-		end
+		local knownOwnTurn = WordHelper.localTurn == true
+			and (currentPlaceId == WORD_BOMB_PLACE_ID or currentPlaceId == LAST_LETTER_PLACE_ID)
+		if not gameProcessed and not knownOwnTurn then return end
 
 		-- Wait briefly: an exact game remote or visible-word update wins, preventing
 		-- one physical/on-screen key from being counted twice.
@@ -4241,6 +4437,7 @@ zenith
 		connect(object.Activated, function()
 			local action = buttonKeyLabel(object)
 			if not action then return end
+			if currentPlaceId == WORD_BOMB_PLACE_ID and WordHelper.localTurn ~= true then return end
 			local pressedAt = os.clock()
 			WordHelper.lastTypingActivity = pressedAt
 			WordHelper.lastTypedAction = action
@@ -4310,6 +4507,69 @@ zenith
 		text = string.gsub(tostring(text), "<.->", "")
 		text = string.lower(string.gsub(text, "^%s*(.-)%s*$", "%1"))
 		return string.match(text, "^[a-z]+$") and text or ""
+	end
+
+	local function readLargePromptLetters()
+		if currentPlaceId ~= WORD_BOMB_PLACE_ID then return nil end
+		local camera = workspaceService.CurrentCamera
+		local viewport = camera and camera.ViewportSize or Vector2.new(1280, 720)
+		local records = {}
+		local ok, descendants = pcall(function() return playerGui:GetDescendants() end)
+		if not ok then return nil end
+		for _, object in ipairs(descendants) do
+			local isOwnGui = false
+			pcall(function() isOwnGui = object:IsDescendantOf(screenGui) end)
+			if not isOwnGui and guiObjectVisible(object, playerGui) then
+				local text = visibleText(object)
+				if #text == 1 then
+					local position, size, textSize = Vector2.new(0, 0), Vector2.new(0, 0), 0
+					pcall(function()
+						position, size, textSize = object.AbsolutePosition, object.AbsoluteSize, object.TextSize
+					end)
+					local centerX, centerY = position.X + size.X * 0.5, position.Y + size.Y * 0.5
+					if centerX >= viewport.X * 0.14 and centerX <= viewport.X * 0.86
+						and centerY >= viewport.Y * 0.05 and centerY <= viewport.Y * 0.65
+						and (size.Y >= 28 or textSize >= 20) then
+						table.insert(records, {
+							text = text, x = centerX, y = centerY,
+							height = math.max(size.Y, textSize), area = math.max(1, size.X * size.Y),
+						})
+					end
+				end
+			end
+		end
+		local best, bestScore = nil, 0
+		for _, seed in ipairs(records) do
+			local row, score = {}, 0
+			for _, record in ipairs(records) do
+				if math.abs(record.y - seed.y) <= math.max(22, seed.height * 0.45) then
+					table.insert(row, record)
+					score = score + record.area
+				end
+			end
+			if #row >= 1 and #row <= 4 and score > bestScore then best, bestScore = row, score end
+		end
+		if not best then return nil end
+		table.sort(best, function(a, b) return a.x < b.x end)
+		local letters = table.create(#best)
+		for index, record in ipairs(best) do letters[index] = record.text end
+		return table.concat(letters)
+	end
+
+	local function pollWordBombPrompt()
+		if currentPlaceId ~= WORD_BOMB_PLACE_ID then return end
+		local prompt = readLargePromptLetters()
+		if not prompt or prompt == "" then return end
+		WordHelper.visiblePrompt = prompt
+		WordHelper.visiblePromptAt = os.clock()
+		-- A visible prompt alone is not proof of ownership: every client can see the
+		-- opponent's letters. It may only supplement an already verified local turn.
+		if WordHelper.localTurn == true and WordHelper.turnPrompt == "" then
+			WordHelper.turnPrompt = prompt
+			WordHelper.searchMode = "prefix"
+			modeChip.Text = "Empieza con"
+			applyDetectedQuery(prompt, "turn", true)
+		end
 	end
 
 	local function readLastLetterVisibleWord()
@@ -4387,6 +4647,8 @@ zenith
 
 	WordHelper.ReadVisibleGameWord = readLastLetterVisibleWord
 	WordHelper.PollVisibleGameWord = pollVisibleGameWord
+	WordHelper.ReadLargePromptLetters = readLargePromptLetters
+	WordHelper.PollWordBombPrompt = pollWordBombPrompt
 
 	-- ===== Remote typing detection (executor only: needs hookmetamethod) =====
 	-- Formats observed in real custom-keyboard games:
@@ -4496,10 +4758,11 @@ zenith
 				return
 			end
 			connect(remote.OnClientEvent, function(...)
-				if os.clock() - WordHelper.lastTypingActivity > Config.TypingActivitySeconds
-					and os.clock() - WordHelper.lastRemoteTyping > Config.TypingActivitySeconds then
-					return
-				end
+				-- In the confirmed two-player game this echo also contains the enemy's
+				-- word. The local MatchStatus prompt and local outgoing call are the only
+				-- accepted sources there.
+				if currentPlaceId == WORD_BOMB_PLACE_ID then return end
+				if os.clock() - WordHelper.lastTypingActivity > Config.TypingActivitySeconds then return end
 				local arguments = table.pack(...)
 				for index = 1, arguments.n - 1 do
 					local key, value = arguments[index], arguments[index + 1]
@@ -4536,14 +4799,31 @@ zenith
 
 		local now = os.clock()
 		trustRemote(remote)
+		WordHelper.localTurn = true -- a local outgoing typing call is authoritative
+		WordHelper.turnOwner = localPlayer
+		WordHelper.turnSource = "remote"
+		WordHelper.lastLocalRemoteCall = now
 		WordHelper.lastRemoteTyping = now
+		if WordHelper.turnPrompt == "" then
+			local visiblePrompt = readLargePromptLetters()
+			if visiblePrompt and visiblePrompt ~= "" then
+				WordHelper.visiblePrompt = visiblePrompt
+				WordHelper.visiblePromptAt = now
+			elseif now - WordHelper.visiblePromptAt <= 0.75 then
+				visiblePrompt = WordHelper.visiblePrompt
+			end
+			if visiblePrompt and visiblePrompt ~= "" then WordHelper.turnPrompt = visiblePrompt end
+		end
+		WordHelper.searchMode = "prefix"
+		modeChip.Text = "Empieza con"
 		if text == " " then
-			markUsed(WordHelper.passiveBuffer)
 			WordHelper.lastSubmitAt = now
+			WordHelper.awaitingSubmission = true
 			WordHelper.passiveBuffer = ""
-			applyDetectedQuery("", "remote", true)
+			applyDetectedQuery(WordHelper.turnPrompt, "turn", true)
 			return true
 		end
+		WordHelper.awaitingSubmission = false
 		if now - WordHelper.lastPassiveInput > 8 then WordHelper.passiveBuffer = "" end
 		if adding then
 			WordHelper.passiveBuffer = string.sub(WordHelper.passiveBuffer .. text, -32)
@@ -4551,13 +4831,17 @@ zenith
 			WordHelper.passiveBuffer = string.sub(WordHelper.passiveBuffer, 1, math.max(0, #WordHelper.passiveBuffer - 1))
 		end
 		WordHelper.lastPassiveInput = now
-		applyDetectedQuery(WordHelper.passiveBuffer, "remote", true)
+		applyDetectedQuery(queryForTypedBuffer(WordHelper.passiveBuffer), "remote", true)
 		return true
 	end
 
 	local function onRemoteCall(remote, method, arguments)
 		if WordHelper.destroyed then return end
 		if handleKnownWordBombCall(remote, method, arguments) then return end
+		-- This place has a confirmed protocol. Its generic remotes and incoming
+		-- echoes contain both players, so accepting any other channel can follow the
+		-- opponent. Unknown calls are deliberately ignored here.
+		if currentPlaceId == WORD_BOMB_PLACE_ID then return end
 		local strings, hasTrue, hasFalse, fromBuffer = collectRemoteValues(arguments)
 		if #strings == 0 then
 			return
@@ -4670,11 +4954,10 @@ zenith
 	-- invokes a remote or changes game controls.
 	WordHelper.ProcessRemoteCall = onRemoteCall
 
-	local remoteHook = sharedEnvironment.ZenithWordRemoteHookV2
+	local remoteHook = sharedEnvironment.ZenithWordRemoteHookV3
 	if type(remoteHook) ~= "table" then
 		local hookMetamethod = zenithFileFunction("hookmetamethod")
 		local getNamecallMethod = zenithFileFunction("getnamecallmethod")
-		local checkCaller = zenithFileFunction("checkcaller")
 		local newCClosure = zenithFileFunction("newcclosure") or function(callback)
 			return callback
 		end
@@ -4685,7 +4968,7 @@ zenith
 				local original
 				original = hookMetamethod(game, "__namecall", newCClosure(function(self, ...)
 					local handler = state.handler
-					if handler and not (checkCaller and checkCaller()) then
+					if handler then
 						local method = getNamecallMethod()
 						if method == "FireServer" or method == "InvokeServer" or method == "Fire" then
 							local arguments = table.pack(...)
@@ -4697,7 +4980,7 @@ zenith
 			end)
 			if installed then
 				remoteHook = state
-				sharedEnvironment.ZenithWordRemoteHookV2 = state
+				sharedEnvironment.ZenithWordRemoteHookV3 = state
 			end
 		end
 	end
@@ -4706,8 +4989,13 @@ zenith
 		WordHelper.remoteHook = remoteHook
 	end
 
-	local focusPollAccumulator = 0
+	local focusPollAccumulator, promptPollAccumulator = 0, 0
 	connect(runService.Heartbeat, function(deltaTime)
+		promptPollAccumulator = promptPollAccumulator + deltaTime
+		if promptPollAccumulator >= Config.WordBombPromptPollSeconds then
+			promptPollAccumulator = 0
+			pollWordBombPrompt()
+		end
 		focusPollAccumulator = focusPollAccumulator + deltaTime
 		if focusPollAccumulator < Config.VisualPollSeconds then return end
 		focusPollAccumulator = 0

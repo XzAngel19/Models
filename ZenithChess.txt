@@ -2207,7 +2207,7 @@ launchWordHelper = function(standardExpiresAt)
 	local playerGui = localPlayer:WaitForChild("PlayerGui")
 
 	local Config = {
-		GuiName = "ZNTHWordHelper",
+		GuiName = "ZNTHChessBase",
 		DisplayOrder = 101,
 		WindowWidth = 300,
 		WindowHeight = 360,
@@ -2392,7 +2392,9 @@ zenith
 	end
 
 	local sharedEnvironment = getSharedEnvironment()
-	local previousHelper = sharedEnvironment.ZenithChess or sharedEnvironment.ZenithAssistant or sharedEnvironment.ZenithVocabulary or sharedEnvironment.ZenithWordHelper
+	-- Product lifecycles are isolated: re-running Chess replaces only an earlier
+	-- Chess instance and never tears down the standalone Vocabulary tool.
+	local previousHelper = sharedEnvironment.ZenithChess
 	if type(previousHelper) == "table" and type(previousHelper.Destroy) == "function" then
 		pcall(function()
 			previousHelper:Destroy()
@@ -2407,6 +2409,7 @@ zenith
 
 	local supportedChessGame = Config.SupportedChessGames[game.PlaceId] or "Zenith Chess"
 	local WordHelper = {
+		product = "Chess",
 		destroyed = false,
 		visible = true,
 		minimized = false,
@@ -5049,13 +5052,17 @@ zenith
 		if screenGui and screenGui.Parent then screenGui:Destroy() end
 		if chessScreenGui and chessScreenGui.Parent then chessScreenGui:Destroy() end
 		if moveOverlayGui and moveOverlayGui.Parent then moveOverlayGui:Destroy() end
+		local replacement = sharedEnvironment.ZenithVocabulary
+		if type(replacement) ~= "table" or replacement.destroyed then replacement = nil end
 		if sharedEnvironment.ZenithChess == self then sharedEnvironment.ZenithChess = nil end
-		if sharedEnvironment.ZenithAssistant == self then sharedEnvironment.ZenithAssistant = nil end
-		if sharedEnvironment.ZenithWordHelper == self then sharedEnvironment.ZenithWordHelper = nil end
+		if sharedEnvironment.ZenithAssistant == self then sharedEnvironment.ZenithAssistant = replacement end
+		if sharedEnvironment.ZenithWordHelper == self then sharedEnvironment.ZenithWordHelper = replacement end
 		if type(shared) == "table" then
+			local sharedReplacement = shared.ZenithVocabulary
+			if type(sharedReplacement) ~= "table" or sharedReplacement.destroyed then sharedReplacement = replacement end
 			if shared.ZenithChess == self then shared.ZenithChess = nil end
-			if shared.ZenithAssistant == self then shared.ZenithAssistant = nil end
-			if shared.ZenithWordHelper == self then shared.ZenithWordHelper = nil end
+			if shared.ZenithAssistant == self then shared.ZenithAssistant = sharedReplacement end
+			if shared.ZenithWordHelper == self then shared.ZenithWordHelper = sharedReplacement end
 		end
 	end
 
