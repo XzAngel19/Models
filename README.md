@@ -12,7 +12,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/XzAngel19/Models/aren
 
 ## Zenith Vocabulary
 
-Compact automatic vocabulary helper with the single `Search words...` input.
+Compact automatic word-game helper with the single `Search words...` input. It watches normal text boxes, custom on-screen keyboards, the confirmed per-letter protocol in Place ID `74300432420573`, and the visible `CurrentWord` interface / validated packet input in Place ID `129866685202296`. Suggestions can be ranked by frequency or length, used words are hidden until reset, and all detection is read-only.
 
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/XzAngel19/Models/arena/cbc36148-models/ZenithVocabulary.txt", true))()
