@@ -2211,11 +2211,14 @@ launchWordHelper = function(standardExpiresAt)
 		WindowHeight = 420,
 		HeaderHeight = 40,
 		CollapsedHeight = 40,
-		-- Slightly enlarged on roomy screens, but still shrinks to fit phones.
+		-- Desktop can stay roomy; touch screens use a deliberately smaller window.
 		UIScale = 1.2,
-		MaximumResults = 120,
-		VisualPollSeconds = 0.08,
-		WordBombPromptPollSeconds = 0.2,
+		MobileUIScale = 0.9,
+		MinimumUIScale = 0.56,
+		MaximumResults = 60,
+		MobileMaximumResults = 30,
+		VisualPollSeconds = 0.1,
+		FocusPollSeconds = 0.2,
 		Assets = {
 			-- Optional uploaded IDs for Studio. Executors use the embedded PNGs below.
 			WordleLogo = "",
@@ -2252,6 +2255,8 @@ launchWordHelper = function(standardExpiresAt)
 		Danger = Color3.fromRGB(224, 83, 91),
 	}
 
+	local isTouchDevice = false
+	pcall(function() isTouchDevice = userInputService.TouchEnabled == true end)
 
 	-- Transparent assets are bundled so the standalone loader does not depend on
 	-- an uploaded Roblox asset ID. A text fallback remains available in Studio.
@@ -2622,7 +2627,13 @@ zenith
 		trustedRemotes = setmetatable({}, { __mode = "k" }),
 		listenedRemotes = setmetatable({}, { __mode = "k" }),
 		lastRemoteTyping = 0,
+		lastRemoteAction = nil,
+		lastRemoteActionAt = 0,
+		lastRemoteSignature = nil,
+		lastRemoteSignatureAt = 0,
+		exactRemoteHookActive = false,
 		lastLocalRemoteCall = 0,
+		lastNativeSearchEditAt = 0,
 		lastVisualWord = "",
 		lastVisualUpdate = 0,
 		localTurn = nil,
@@ -3255,6 +3266,8 @@ zenith
 	WordHelper.references.EmptyLabel = emptyLabel
 	WordHelper.references.StatusLabel = statusLabel
 	WordHelper.references.DetectionLabel = detectionLabel
+	WordHelper.references.DefinitionWord = definitionWord
+	WordHelper.references.DefinitionText = definitionText
 	WordHelper.references.MinimizeButton = minimizeButton
 	WordHelper.references.CloseButton = closeButton
 	WordHelper.references.BrandLabel = brandLabel
@@ -3274,7 +3287,13 @@ zenith
 		local seen = {}
 		local sorted = true
 		local previousWord = nil
+		local processed = 0
 		for rawWord in string.gmatch(tostring(content or ""), "[^\r\n]+") do
+			processed = processed + 1
+			if processed % 5000 == 0 then
+				if WordHelper.destroyed then return {} end
+				task.wait()
+			end
 			local word = normalize(rawWord)
 			if #word >= 2 and #word <= 32 and string.match(word, "^[a-z]+$") and not seen[word] then
 				seen[word] = true
@@ -3294,7 +3313,11 @@ zenith
 	local function buildBuckets(words)
 		local firstLetterBuckets = {}
 		local prefixBuckets = {}
-		for _, word in ipairs(words) do
+		for index, word in ipairs(words) do
+			if index % 5000 == 0 then
+				if WordHelper.destroyed then return {}, {} end
+				task.wait()
+			end
 			local first = string.sub(word, 1, 1)
 			local firstBucket = firstLetterBuckets[first]
 			if not firstBucket then
@@ -3320,7 +3343,11 @@ zenith
 		WordHelper.words = words
 		WordHelper.firstLetterBuckets, WordHelper.prefixBuckets = buildBuckets(words)
 		local wordSet = {}
-		for _, word in ipairs(words) do
+		for index, word in ipairs(words) do
+			if index % 5000 == 0 then
+				if WordHelper.destroyed then return end
+				task.wait()
+			end
 			wordSet[word] = true
 		end
 		WordHelper.wordSet = wordSet
@@ -3538,29 +3565,31 @@ zenith
 		})
 		addStroke(badge, Config.Line, 0.85, 1)
 		local stroke = addStroke(button, Config.Line, 0.88, 1)
-		local pressScale = create("UIScale", { Scale = 1 }, button)
+		local pressScale = not isTouchDevice and create("UIScale", { Scale = 1 }, button) or nil
 		local record = { button = button, stroke = stroke, word = word }
 		table.insert(WordHelper.rows, record)
 
-		connectRow(button.MouseButton1Down, function()
-			tween(pressScale, PRESS_TWEEN, { Scale = 0.985 })
-		end)
-		connectRow(button.MouseButton1Up, function()
-			tween(pressScale, PRESS_TWEEN, { Scale = 1 })
-		end)
-		connectRow(button.MouseEnter, function()
-			if WordHelper.selectedWord ~= word then
-				tween(button, FAST_TWEEN, { BackgroundColor3 = Config.Hover, BackgroundTransparency = 0.06 })
-				tween(stroke, FAST_TWEEN, { Transparency = 0.62 })
-			end
-		end)
-		connectRow(button.MouseLeave, function()
-			tween(pressScale, PRESS_TWEEN, { Scale = 1 })
-			if WordHelper.selectedWord ~= word then
-				tween(button, FAST_TWEEN, { BackgroundColor3 = Config.Row, BackgroundTransparency = 0.18 })
-				tween(stroke, FAST_TWEEN, { Transparency = 0.88 })
-			end
-		end)
+		if not isTouchDevice then
+			connectRow(button.MouseButton1Down, function()
+				tween(pressScale, PRESS_TWEEN, { Scale = 0.985 })
+			end)
+			connectRow(button.MouseButton1Up, function()
+				tween(pressScale, PRESS_TWEEN, { Scale = 1 })
+			end)
+			connectRow(button.MouseEnter, function()
+				if WordHelper.selectedWord ~= word then
+					tween(button, FAST_TWEEN, { BackgroundColor3 = Config.Hover, BackgroundTransparency = 0.06 })
+					tween(stroke, FAST_TWEEN, { Transparency = 0.62 })
+				end
+			end)
+			connectRow(button.MouseLeave, function()
+				tween(pressScale, PRESS_TWEEN, { Scale = 1 })
+				if WordHelper.selectedWord ~= word then
+					tween(button, FAST_TWEEN, { BackgroundColor3 = Config.Row, BackgroundTransparency = 0.18 })
+					tween(stroke, FAST_TWEEN, { Transparency = 0.88 })
+				end
+			end)
+		end
 		connectRow(button.Activated, function()
 			WordHelper:SelectWord(word)
 		end)
@@ -3644,7 +3673,9 @@ zenith
 		WordHelper.bestWord = best or matches[1]
 		updatePreview()
 
-		local shown = math.min(totalMatches, Config.MaximumResults)
+		local resultLimit = isTouchDevice and Config.MobileMaximumResults or Config.MaximumResults
+		WordHelper.resultLimit = resultLimit
+		local shown = math.min(totalMatches, resultLimit)
 		for index = 1, shown do
 			createWordRow(matches[index], query, index)
 		end
@@ -3664,7 +3695,7 @@ zenith
 	local function scheduleRefresh()
 		WordHelper.refreshVersion = WordHelper.refreshVersion + 1
 		local version = WordHelper.refreshVersion
-		task.delay(0.045, function()
+		task.delay(isTouchDevice and 0.075 or 0.045, function()
 			if not WordHelper.destroyed and version == WordHelper.refreshVersion then
 				refreshWords()
 			end
@@ -3677,12 +3708,22 @@ zenith
 			return
 		end
 		query = normalizeLetters(query)
+		local queryChanged = query ~= WordHelper.currentQuery
 		WordHelper.currentQuery = query
 		WordHelper.detectionSource = source or "automatic"
-		if reflectInSearch and searchBox.Text ~= query then
+		local searchFocused = false
+		pcall(function() searchFocused = searchBox:IsFocused() end)
+		if reflectInSearch and not searchFocused and searchBox.Text ~= query then
 			synchronizingSearch = true
 			searchBox.Text = query
 			synchronizingSearch = false
+		end
+		if queryChanged and WordHelper.selectedWord then
+			WordHelper.definitionVersion = WordHelper.definitionVersion + 1
+			WordHelper.selectedWord = nil
+			definitionWord.Text = "Definición"
+			definitionText.Text = "Toca una palabra para ver su significado."
+			definitionText.TextColor3 = Config.Muted
 		end
 		if query == "" then
 			detectionLabel.Text = "Detección automática activa"
@@ -3698,18 +3739,16 @@ zenith
 			local sourceLabel = SOURCE_LABELS[source] or "detectado automáticamente"
 			detectionLabel.Text = "Texto: " .. query .. "  |  " .. sourceLabel
 		end
-		scheduleRefresh()
+		if queryChanged then scheduleRefresh() end
 	end
 
 	local function queryForTypedBuffer(typed)
 		typed = normalizeLetters(typed)
 		local prompt = WordHelper.turnPrompt
-		if WordHelper.localTurn ~= false and prompt ~= "" then
-			-- Keep the required letters visible before the local player finishes
-			-- typing them; afterwards narrow suggestions with the complete prefix.
-			if #typed < #prompt or string.sub(typed, 1, #prompt) ~= prompt then
-				return prompt
-			end
+		if WordHelper.localTurn == true and prompt ~= "" then
+			-- The confirmed game pre-fills the required letters and transmits only
+			-- what the local player adds. Build "s" + "o" as "so" exactly once.
+			return string.sub(prompt .. typed, 1, 32)
 		end
 		return typed
 	end
@@ -3919,6 +3958,12 @@ zenith
 			searchBox.Text = cleaned
 			synchronizingSearch = false
 		end
+		local focused = false
+		pcall(function() focused = searchBox:IsFocused() end)
+		if focused then WordHelper.lastNativeSearchEditAt = os.clock() end
+		-- Reflected automatic text can dispatch this signal after the guard above
+		-- has reset. It is not manual input and must never seed the game buffer.
+		if not focused and cleaned == WordHelper.currentQuery then return end
 		WordHelper.passiveBuffer = cleaned
 		applyDetectedQuery(cleaned, "manual", false)
 	end)
@@ -4004,20 +4049,28 @@ zenith
 
 	local function targetScale()
 		local viewport = currentViewport()
+		local preferredScale = isTouchDevice and Config.MobileUIScale or Config.UIScale
 		return math.clamp(math.min(
 			(viewport.X - 12) / Config.WindowWidth,
 			(viewport.Y - 12) / Config.WindowHeight,
-			Config.UIScale
-		), 0.68, Config.UIScale)
+			preferredScale
+		), Config.MinimumUIScale, preferredScale)
 	end
 
 	local function clampWindowPosition(x, y)
 		local viewport = currentViewport()
 		local scale = windowScale.Scale
 		local width = Config.WindowWidth * scale
-		local height = (WordHelper.minimized and Config.CollapsedHeight or Config.WindowHeight) * scale
-		return math.clamp(x, 6, math.max(6, viewport.X - width - 6)),
-			math.clamp(y, 6, math.max(6, viewport.Y - height - 6))
+		local headerHeight = Config.HeaderHeight * scale
+		-- Deliberately allow most of the menu outside any edge. Keep only a small
+		-- draggable part of the header reachable so it can always be recovered.
+		local visibleX = math.min(width, math.max(48, 56 * scale))
+		local visibleHeaderY = math.min(headerHeight, math.max(22, 24 * scale))
+		local minimumX = -width + visibleX
+		local maximumX = viewport.X - visibleX
+		local minimumY = -headerHeight + visibleHeaderY
+		local maximumY = viewport.Y - visibleHeaderY
+		return math.clamp(x, minimumX, maximumX), math.clamp(y, minimumY, maximumY)
 	end
 
 	updateResponsivePlacement = function()
@@ -4278,14 +4331,17 @@ zenith
 		local letter = LETTER_BY_KEYCODE[input.KeyCode]
 		local isBackspace = input.KeyCode == Enum.KeyCode.Backspace
 		if not letter and not isBackspace then return false end
-		WordHelper.manualCaptureUntil = os.clock() + 2.5
+		local inputAt = os.clock()
+		WordHelper.manualCaptureUntil = inputAt + 2.5
 		local before = searchBox.Text
 		local cursor = tonumber(searchBox.CursorPosition) or (#before + 1)
 		if cursor <= 0 then cursor = #before + 1 end
-		-- Roblox normally updates TextBox.Text itself. Some custom keyboard games
-		-- consume the key first; only synthesize the edit when Text stayed unchanged.
-		task.defer(function()
-			if WordHelper.destroyed or searchBox.Text ~= before
+		local nativeAlreadyHandled = WordHelper.lastNativeSearchEditAt > 0
+			and inputAt - WordHelper.lastNativeSearchEditAt <= 0.04
+		-- Give Roblox's normal TextBox editor a frame first. Only synthesize when no
+		-- native edit occurred either immediately before or after InputBegan.
+		task.delay(0.035, function()
+			if WordHelper.destroyed or nativeAlreadyHandled or searchBox.Text ~= before
 				or (not searchBox:IsFocused() and os.clock() > WordHelper.manualCaptureUntil) then
 				return
 			end
@@ -4298,7 +4354,11 @@ zenith
 				nextCursor = cursor - 1
 			end
 			updated = string.sub(normalizeLetters(updated), 1, 32)
+			synchronizingSearch = true
 			searchBox.Text = updated
+			synchronizingSearch = false
+			WordHelper.passiveBuffer = updated
+			applyDetectedQuery(updated, "manual", false)
 			pcall(function() searchBox.CursorPosition = math.min(#updated + 1, nextCursor) end)
 		end)
 		return true
@@ -4312,6 +4372,12 @@ zenith
 		end
 		WordHelper.manualCaptureUntil = os.clock() + 1.25
 	end)
+
+	local function exactRemoteHandledNear(action, inputAt)
+		return currentPlaceId == WORD_BOMB_PLACE_ID
+			and WordHelper.lastRemoteAction == action
+			and math.abs(WordHelper.lastRemoteActionAt - inputAt) <= 0.55
+	end
 
 	connect(userInputService.InputBegan, function(input, gameProcessed)
 		if input.KeyCode == Enum.KeyCode.RightShift then
@@ -4361,12 +4427,18 @@ zenith
 		local knownOwnTurn = WordHelper.localTurn == true
 			and (currentPlaceId == WORD_BOMB_PLACE_ID or currentPlaceId == LAST_LETTER_PLACE_ID)
 		if not gameProcessed and not knownOwnTurn then return end
+		-- With the confirmed hook active, the outgoing call is the sole source of
+		-- truth. A second physical fallback would append the same letter twice.
+		if WordHelper.exactRemoteHookActive then return end
 
 		-- Wait briefly: an exact game remote or visible-word update wins, preventing
-		-- one physical/on-screen key from being counted twice.
-		task.delay(0.25, function()
-			if not WordHelper.destroyed
-				and WordHelper.lastRemoteTyping < pressedAt
+		-- one physical/on-screen key from being counted twice. The exact remote may
+		-- occur just before InputBegan on touch controllers, so compare both ways.
+		local fallbackDelay = currentPlaceId == WORD_BOMB_PLACE_ID and 0.5 or 0.25
+		task.delay(fallbackDelay, function()
+			local remoteWon = exactRemoteHandledNear(action, pressedAt)
+				or (currentPlaceId ~= WORD_BOMB_PLACE_ID and WordHelper.lastRemoteTyping >= pressedAt)
+			if not WordHelper.destroyed and not remoteWon
 				and WordHelper.lastVisualUpdate < pressedAt then
 				passiveType(action, Config.PassiveResetSeconds)
 			end
@@ -4441,11 +4513,13 @@ zenith
 			local pressedAt = os.clock()
 			WordHelper.lastTypingActivity = pressedAt
 			WordHelper.lastTypedAction = action
-			-- Exact remote/visual text wins, preventing duplicate letters. On-screen
-			-- keyboards are slower, so their fallback buffer survives longer pauses.
-			task.delay(0.25, function()
-				if not WordHelper.destroyed
-					and WordHelper.lastRemoteTyping < pressedAt
+			-- Exact remote/visual text wins, preventing duplicate letters even when
+			-- Activated is delivered just after the game's outgoing remote.
+			local fallbackDelay = currentPlaceId == WORD_BOMB_PLACE_ID and 0.5 or 0.25
+			task.delay(fallbackDelay, function()
+				local remoteWon = exactRemoteHandledNear(action, pressedAt)
+					or (currentPlaceId ~= WORD_BOMB_PLACE_ID and WordHelper.lastRemoteTyping >= pressedAt)
+				if not WordHelper.destroyed and not remoteWon
 					and WordHelper.lastVisualUpdate < pressedAt then
 					passiveType(action, 6)
 				end
@@ -4476,8 +4550,6 @@ zenith
 			connect(root.DescendantAdded, bindKeyboardButton)
 		end)
 	end
-	scanForKeyboards(playerGui)
-	scanForKeyboards(workspaceService)
 
 	-- Place 129866685202296 renders the live entry under InGame.Frame.CurrentWord.
 	-- Reading those visible labels is more reliable than guessing the contents of
@@ -4798,7 +4870,16 @@ zenith
 		if not (string.match(text, "^[a-z]$") or text == " ") then return false end
 
 		local now = os.clock()
+		local signature = sessionId .. "|" .. tostring(adding) .. "|" .. text
+		if WordHelper.lastRemoteSignature == signature and now - WordHelper.lastRemoteSignatureAt <= 0.03 then
+			return true
+		end
+		WordHelper.lastRemoteSignature = signature
+		WordHelper.lastRemoteSignatureAt = now
+		local remoteAction = text == " " and "end" or (adding and text or "back")
 		trustRemote(remote)
+		WordHelper.lastRemoteAction = remoteAction
+		WordHelper.lastRemoteActionAt = now
 		WordHelper.localTurn = true -- a local outgoing typing call is authoritative
 		WordHelper.turnOwner = localPlayer
 		WordHelper.turnSource = "remote"
@@ -4988,18 +5069,28 @@ zenith
 		remoteHook.handler = onRemoteCall
 		WordHelper.remoteHook = remoteHook
 	end
+	WordHelper.exactRemoteHookActive = currentPlaceId == WORD_BOMB_PLACE_ID and type(remoteHook) == "table"
 
-	local focusPollAccumulator, promptPollAccumulator = 0, 0
+	-- Avoid walking every Workspace descendant or binding every key button in the
+	-- confirmed game when its exact outgoing remote is available. This was both a
+	-- major mobile cost and a second source for the same touch letter.
+	if not WordHelper.exactRemoteHookActive then
+		scanForKeyboards(playerGui)
+		if currentPlaceId ~= WORD_BOMB_PLACE_ID then scanForKeyboards(workspaceService) end
+	end
+
+	local focusPollAccumulator, visualPollAccumulator = 0, 0
 	connect(runService.Heartbeat, function(deltaTime)
-		promptPollAccumulator = promptPollAccumulator + deltaTime
-		if promptPollAccumulator >= Config.WordBombPromptPollSeconds then
-			promptPollAccumulator = 0
-			pollWordBombPrompt()
+		if currentPlaceId == LAST_LETTER_PLACE_ID then
+			visualPollAccumulator = visualPollAccumulator + deltaTime
+			if visualPollAccumulator >= Config.VisualPollSeconds then
+				visualPollAccumulator = 0
+				pollVisibleGameWord()
+			end
 		end
 		focusPollAccumulator = focusPollAccumulator + deltaTime
-		if focusPollAccumulator < Config.VisualPollSeconds then return end
+		if focusPollAccumulator < Config.FocusPollSeconds then return end
 		focusPollAccumulator = 0
-		pollVisibleGameWord()
 		local focusedTextBox = userInputService:GetFocusedTextBox()
 		if focusedTextBox and focusedTextBox ~= searchBox then
 			bindFocusedTextBox(focusedTextBox)
@@ -5069,8 +5160,13 @@ zenith
 		local frequency = loadCachedOrDownload(Config.FrequencyFile, { Config.FrequencyUrl })
 		if frequency and not WordHelper.destroyed then
 			local rank = {}
-			local position = 0
+			local position, scanned = 0, 0
 			for word in string.gmatch(frequency, "[^\r\n]+") do
+				scanned = scanned + 1
+				if scanned % 5000 == 0 then
+					if WordHelper.destroyed then return end
+					task.wait()
+				end
 				word = normalize(word)
 				if string.match(word, "^[a-z]+$") and not rank[word] then
 					position = position + 1
@@ -5086,8 +5182,10 @@ zenith
 		end
 		if content then
 			local words = parseDictionary(content)
+			if WordHelper.destroyed then return end
 			if #words > 0 then
 				installCleanWords(words)
+				if WordHelper.destroyed then return end
 				WordHelper.dictionaryLabel = "ENABLE dictionary"
 			end
 		end
