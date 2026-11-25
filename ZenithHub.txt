@@ -1,7 +1,7 @@
--- ZENITH | Key System + Word Helper (single script).
--- Flow: if Zenith/KeySystem.log holds a key that has not expired yet, the Word Helper
+-- ZENITH | Key System + compact Words/Chess assistant (single script).
+-- Flow: if Zenith/KeySystem.log holds a key that has not expired yet, the assistant
 -- opens directly. Otherwise the Key System opens; after "Success!" it closes itself,
--- writes the log (entered + expiry time) and opens the Word Helper.
+-- writes the log (entered + expiry time) and opens Zenith.
 
 local launchKeySystem
 local launchWordHelper
@@ -2181,16 +2181,19 @@ launchKeySystem = function(onKeyAccepted)
 	return Menu
 end
 
--- ===================== WORD HELPER =====================
+-- ===================== ZENITH ASSISTANT =====================
 launchWordHelper = function(standardExpiresAt)
-	-- Compact, movable assistant that stays over the game without blur or CoreGui
-	-- changes. It watches whichever Roblox/game TextBox is currently being typed in
-	-- and turns the current word fragment into prefix suggestions automatically.
+	-- Compact, movable Zenith assistant. Outside chess it detects typed word
+	-- fragments; in supported chess games it reads the live board and asks
+	-- Stockfish Online only when it is the local player's turn. It never moves a
+	-- piece, blurs the game, or changes CoreGui.
 	local playersService = game:GetService("Players")
 	local userInputService = game:GetService("UserInputService")
 	local tweenService = game:GetService("TweenService")
 	local runService = game:GetService("RunService")
 	local workspaceService = game:GetService("Workspace")
+	local replicatedStorage = game:GetService("ReplicatedStorage")
+	local httpService = game:GetService("HttpService")
 
 	if not game:IsLoaded() then
 		game.Loaded:Wait()
@@ -2214,8 +2217,16 @@ launchWordHelper = function(standardExpiresAt)
 		DictionaryFile = "Zenith/words.txt",
 		DictionaryUrl = "https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt",
 		PassiveResetSeconds = 1.35,
+		StockfishEndpoint = "https://stockfish.online/api/s/v2.php",
+		StockfishDepth = 12,
+		ChessPollSeconds = 0.35,
+		SupportedChessGames = {
+			[130878180532794] = "RoChess",
+			[89083628291452] = "Chess Duels",
+			[93365009198479] = "Play Chess",
+		},
 
-		-- Compact form of the same neutral ZNTH palette used by the Key System.
+		-- Compact form of the same neutral Zenith palette used by the Key System.
 		Accent = Color3.fromRGB(207, 211, 217),
 		Panel = Color3.fromRGB(5, 5, 6),
 		PanelRaised = Color3.fromRGB(12, 13, 15),
@@ -2376,7 +2387,7 @@ zenith
 	end
 
 	local sharedEnvironment = getSharedEnvironment()
-	local previousHelper = sharedEnvironment.ZenithWordHelper
+	local previousHelper = sharedEnvironment.ZenithAssistant or sharedEnvironment.ZenithWordHelper
 	if type(previousHelper) == "table" and type(previousHelper.Destroy) == "function" then
 		pcall(function()
 			previousHelper:Destroy()
@@ -2389,10 +2400,12 @@ zenith
 		end)
 	end
 
+	local supportedChessGame = Config.SupportedChessGames[game.PlaceId]
 	local WordHelper = {
 		destroyed = false,
 		visible = true,
 		minimized = false,
+		mode = supportedChessGame and "Chess" or "Words",
 		connections = {},
 		rowConnections = {},
 		focusConnections = {},
@@ -2412,6 +2425,22 @@ zenith
 		dragging = false,
 		hasUserPosition = false,
 		dictionaryLabel = "Built-in dictionary",
+		chess = {
+			supported = supportedChessGame ~= nil,
+			gameName = supportedChessGame or "Unsupported game",
+			adapter = nil,
+			lastFen = nil,
+			lastRequestedFen = nil,
+			pendingSnapshot = nil,
+			requestGeneration = 0,
+			busy = false,
+			bestMove = nil,
+			ponder = nil,
+			evaluation = nil,
+			mate = nil,
+			lastError = nil,
+			retryAt = 0,
+		},
 	}
 
 	local function create(className, properties, parent)
@@ -2533,10 +2562,19 @@ zenith
 	local writeFile = zenithFileFunction("writefile")
 	local isFile = zenithFileFunction("isfile")
 	local makeFolder = zenithFileFunction("makefolder")
+	local executorRequest = zenithFileFunction("request")
+		or zenithFileFunction("http_request")
+		or zenithFileFunction("httprequest")
+	local getGarbageCollected = zenithFileFunction("getgc")
+	if not executorRequest and type(sharedEnvironment.syn) == "table" and type(sharedEnvironment.syn.request) == "function" then
+		executorRequest = sharedEnvironment.syn.request
+	end
 
-	local previousGui = playerGui:FindFirstChild(Config.GuiName)
-	if previousGui then
-		previousGui:Destroy()
+	for _, guiName in ipairs({ Config.GuiName, "ZenithAssistant" }) do
+		local previousGui = playerGui:FindFirstChild(guiName)
+		if previousGui then
+			previousGui:Destroy()
+		end
 	end
 	-- Remove presentation objects from an interrupted older 3D Word Helper build.
 	for _, staleName in ipairs({ "ZNTHWordSurface", "ZNTHLeftSurface", "ZNTHRightSurface" }) do
@@ -2598,13 +2636,13 @@ zenith
 	}, window)
 	addLine(header, UDim2.new(0, 0, 1, -1), UDim2.new(1, 0, 0, 1), 0.68, Config.Line, 6)
 
-	makeText(header, {
+	local titleLabel = makeText(header, {
 		Name = "Title",
 		Position = UDim2.fromOffset(12, 0),
-		Size = UDim2.new(1, -86, 1, 0),
+		Size = UDim2.new(1, -120, 1, 0),
 		Font = BOLD_FONT,
 		RichText = true,
-		Text = '<b>ZNTH</b> <font color="#B5B9BF">WORDS</font>',
+		Text = '<b>Zenith</b> <font color="#B5B9BF">WORDS</font>',
 		TextColor3 = Config.White,
 		TextSize = 15,
 		ZIndex = 7,
@@ -2625,6 +2663,8 @@ zenith
 		})
 	end
 
+	local modeButton = makeHeaderButton(WordHelper.mode == "Chess" and "W" or "♟", -70)
+	modeButton.TextSize = WordHelper.mode == "Chess" and 13 or 17
 	local minimizeButton = makeHeaderButton("−", -38)
 	local closeButton = makeHeaderButton("X", -6)
 
@@ -2637,6 +2677,15 @@ zenith
 		ZIndex = 2,
 	}, window)
 
+	local wordsView = create("Frame", {
+		Name = "WordsView",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Visible = WordHelper.mode == "Words",
+		ZIndex = 2,
+	}, body)
+
 	local searchHolder = create("Frame", {
 		Name = "SearchHolder",
 		Position = UDim2.fromOffset(10, 10),
@@ -2645,7 +2694,7 @@ zenith
 		BackgroundTransparency = 0.1,
 		BorderSizePixel = 0,
 		ZIndex = 3,
-	}, body)
+	}, wordsView)
 	local searchStroke = addStroke(searchHolder, Config.Line, 0.78, 1)
 
 	local autoDot = create("Frame", {
@@ -2678,7 +2727,7 @@ zenith
 		ZIndex = 6,
 	}, searchHolder)
 
-	local detectionLabel = makeText(body, {
+	local detectionLabel = makeText(wordsView, {
 		Name = "DetectionStatus",
 		Position = UDim2.fromOffset(11, 52),
 		Size = UDim2.new(1, -22, 0, 20),
@@ -2698,7 +2747,7 @@ zenith
 		BorderSizePixel = 0,
 		ClipsDescendants = true,
 		ZIndex = 3,
-	}, body)
+	}, wordsView)
 	addStroke(listHolder, Config.Line, 0.82, 1)
 
 	local wordList = create("ScrollingFrame", {
@@ -2739,7 +2788,7 @@ zenith
 		ZIndex = 6,
 	})
 
-	local statusLabel = makeText(body, {
+	local statusLabel = makeText(wordsView, {
 		Name = "Status",
 		Position = UDim2.new(0, 11, 1, -28),
 		Size = UDim2.new(1, -22, 0, 24),
@@ -2750,16 +2799,205 @@ zenith
 		ZIndex = 5,
 	})
 
+	local chessView = create("Frame", {
+		Name = "ChessView",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Visible = WordHelper.mode == "Chess",
+		ZIndex = 2,
+	}, body)
+
+	local chessGameCard = create("Frame", {
+		Name = "GameCard",
+		Position = UDim2.fromOffset(10, 10),
+		Size = UDim2.new(1, -20, 0, 48),
+		BackgroundColor3 = Config.Row,
+		BackgroundTransparency = 0.1,
+		BorderSizePixel = 0,
+		ZIndex = 3,
+	}, chessView)
+	addStroke(chessGameCard, Config.Line, 0.78, 1)
+	local chessGameLabel = makeText(chessGameCard, {
+		Name = "Game",
+		Position = UDim2.fromOffset(11, 5),
+		Size = UDim2.new(1, -22, 0, 20),
+		Font = BOLD_FONT,
+		Text = WordHelper.chess.gameName,
+		TextColor3 = Config.White,
+		TextSize = 13,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		ZIndex = 5,
+	})
+	local chessModeLabel = makeText(chessGameCard, {
+		Name = "Mode",
+		Position = UDim2.fromOffset(11, 24),
+		Size = UDim2.new(1, -22, 0, 17),
+		Text = WordHelper.chess.supported and "READ-ONLY • verificando partida" or "FEN MANUAL • juego no compatible",
+		TextColor3 = Config.Muted,
+		TextSize = 10,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		ZIndex = 5,
+	})
+
+	local bestMoveCard = create("Frame", {
+		Name = "BestMoveCard",
+		Position = UDim2.fromOffset(10, 66),
+		Size = UDim2.new(1, -20, 0, 102),
+		BackgroundColor3 = Config.Panel,
+		BackgroundTransparency = 0.24,
+		BorderSizePixel = 0,
+		ZIndex = 3,
+	}, chessView)
+	addStroke(bestMoveCard, Config.Line, 0.82, 1)
+	makeText(bestMoveCard, {
+		Position = UDim2.fromOffset(11, 7),
+		Size = UDim2.new(1, -22, 0, 16),
+		Font = BOLD_FONT,
+		Text = "MEJOR MOVIMIENTO",
+		TextColor3 = Config.Muted,
+		TextSize = 9,
+		ZIndex = 5,
+	})
+	local bestMoveLabel = makeText(bestMoveCard, {
+		Name = "BestMove",
+		Position = UDim2.fromOffset(11, 22),
+		Size = UDim2.new(0.58, -11, 0, 43),
+		Font = BOLD_FONT,
+		Text = "—",
+		TextColor3 = Config.White,
+		TextSize = 27,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		ZIndex = 5,
+	})
+	local chessEvalLabel = makeText(bestMoveCard, {
+		Name = "Evaluation",
+		Position = UDim2.new(0.58, 0, 0, 27),
+		Size = UDim2.new(0.42, -11, 0, 18),
+		Font = BOLD_FONT,
+		Text = "EVAL —",
+		TextColor3 = Config.Secondary,
+		TextSize = 11,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		ZIndex = 5,
+	})
+	local chessPonderLabel = makeText(bestMoveCard, {
+		Name = "Ponder",
+		Position = UDim2.new(0.58, 0, 0, 48),
+		Size = UDim2.new(0.42, -11, 0, 17),
+		Text = "RESPUESTA —",
+		TextColor3 = Config.Muted,
+		TextSize = 9,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		ZIndex = 5,
+	})
+	local chessLineLabel = makeText(bestMoveCard, {
+		Name = "Line",
+		Position = UDim2.fromOffset(11, 72),
+		Size = UDim2.new(1, -22, 0, 20),
+		Text = "Esperando una posición válida...",
+		TextColor3 = Config.Muted,
+		TextSize = 10,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		ZIndex = 5,
+	})
+
+	local chessStateLabel = makeText(chessView, {
+		Name = "State",
+		Position = UDim2.fromOffset(11, 176),
+		Size = UDim2.new(1, -22, 0, 42),
+		Font = MEDIUM_FONT,
+		Text = WordHelper.chess.supported and "Buscando tablero y contexto seguro..." or "Usa FEN manual para analizar esta posición.",
+		TextColor3 = Config.Secondary,
+		TextSize = 11,
+		TextWrapped = true,
+		ZIndex = 5,
+	})
+	local noAutoplayLabel = makeText(chessView, {
+		Name = "NoAutoplay",
+		Position = UDim2.fromOffset(11, 218),
+		Size = UDim2.new(1, -22, 0, 20),
+		Text = "SOLO LECTURA • nunca mueve piezas",
+		TextColor3 = Config.Muted,
+		TextSize = 9,
+		ZIndex = 5,
+	})
+
+	local manualFenHolder = create("Frame", {
+		Name = "ManualFenHolder",
+		Position = UDim2.fromOffset(10, 242),
+		Size = UDim2.new(1, -20, 0, 38),
+		BackgroundColor3 = Config.Row,
+		BackgroundTransparency = 0.1,
+		BorderSizePixel = 0,
+		ZIndex = 3,
+	}, chessView)
+	addStroke(manualFenHolder, Config.Line, 0.78, 1)
+	local manualFenBox = create("TextBox", {
+		Name = "ManualFen",
+		Position = UDim2.fromOffset(10, 0),
+		Size = UDim2.new(1, -82, 1, 0),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ClearTextOnFocus = false,
+		Font = REGULAR_FONT,
+		MultiLine = false,
+		PlaceholderColor3 = Config.Muted,
+		PlaceholderText = "FEN manual o post-partida...",
+		Text = "",
+		TextColor3 = Config.White,
+		TextSize = 11,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ZIndex = 5,
+	}, manualFenHolder)
+	local analyzeFenButton = makeButton(manualFenHolder, {
+		Name = "AnalyzeFen",
+		AnchorPoint = Vector2.new(1, 0.5),
+		Position = UDim2.new(1, -4, 0.5, 0),
+		Size = UDim2.fromOffset(64, 30),
+		BackgroundColor3 = Config.Selected,
+		BackgroundTransparency = 0.08,
+		Font = BOLD_FONT,
+		Text = "ANALIZAR",
+		TextColor3 = Config.White,
+		TextSize = 9,
+		ZIndex = 6,
+	})
+	local chessFooterLabel = makeText(chessView, {
+		Name = "Footer",
+		Position = UDim2.fromOffset(11, 286),
+		Size = UDim2.new(1, -22, 0, 22),
+		Text = "Stockfish Online • profundidad " .. tostring(Config.StockfishDepth),
+		TextColor3 = Config.Muted,
+		TextSize = 9,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		ZIndex = 5,
+	})
+
 	WordHelper.references.ScreenGui = screenGui
 	WordHelper.references.Window = window
 	WordHelper.references.WindowScale = windowScale
 	WordHelper.references.Header = header
 	WordHelper.references.Body = body
+	WordHelper.references.TitleLabel = titleLabel
+	WordHelper.references.WordsView = wordsView
+	WordHelper.references.ChessView = chessView
+	WordHelper.references.ModeButton = modeButton
 	WordHelper.references.SearchBox = searchBox
 	WordHelper.references.WordList = wordList
 	WordHelper.references.EmptyLabel = emptyLabel
 	WordHelper.references.StatusLabel = statusLabel
 	WordHelper.references.DetectionLabel = detectionLabel
+	WordHelper.references.ChessGameLabel = chessGameLabel
+	WordHelper.references.ChessModeLabel = chessModeLabel
+	WordHelper.references.BestMoveLabel = bestMoveLabel
+	WordHelper.references.ChessEvalLabel = chessEvalLabel
+	WordHelper.references.ChessPonderLabel = chessPonderLabel
+	WordHelper.references.ChessLineLabel = chessLineLabel
+	WordHelper.references.ChessStateLabel = chessStateLabel
+	WordHelper.references.ManualFenBox = manualFenBox
+	WordHelper.references.AnalyzeFenButton = analyzeFenButton
 	WordHelper.references.MinimizeButton = minimizeButton
 	WordHelper.references.CloseButton = closeButton
 
@@ -3060,11 +3298,1169 @@ zenith
 			if searchBox:IsFocused() then
 				searchBox:ReleaseFocus()
 			end
+			if manualFenBox:IsFocused() then
+				manualFenBox:ReleaseFocus()
+			end
 			body.Visible = false
 			tween(window, OPEN_TWEEN, { Size = UDim2.fromOffset(Config.WindowWidth, Config.CollapsedHeight) })
 		else
 			body.Visible = true
 			tween(window, OPEN_TWEEN, { Size = UDim2.fromOffset(Config.WindowWidth, Config.WindowHeight) })
+		end
+	end
+
+	function WordHelper:SetMode(mode)
+		if self.destroyed then
+			return
+		end
+		mode = mode == "Chess" and "Chess" or "Words"
+		self.mode = mode
+		local chessMode = mode == "Chess"
+		wordsView.Visible = not chessMode
+		chessView.Visible = chessMode
+		titleLabel.Text = chessMode
+			and '<b>Zenith</b> <font color="#B5B9BF">CHESS</font>'
+			or '<b>Zenith</b> <font color="#B5B9BF">WORDS</font>'
+		modeButton.Text = chessMode and "W" or "♟"
+		modeButton.TextSize = chessMode and 13 or 17
+	end
+
+	local function splitWords(value)
+		local result = {}
+		for token in string.gmatch(tostring(value or ""), "%S+") do
+			table.insert(result, token)
+		end
+		return result
+	end
+
+	local function normalizeSide(value)
+		if type(value) == "number" then
+			if value == 1 then
+				return "w"
+			elseif value == -1 or value == 2 then
+				return "b"
+			end
+		elseif type(value) == "boolean" then
+			return value and "w" or "b"
+		elseif type(value) == "string" then
+			local lowered = string.lower(value)
+			lowered = string.gsub(lowered, "[%s_%-]", "")
+			if lowered == "w" or lowered == "white" or lowered == "light" then
+				return "w"
+			elseif lowered == "b" or lowered == "black" or lowered == "dark" then
+				return "b"
+			end
+		end
+		return nil
+	end
+
+	local function normalizeFen(value)
+		if type(value) ~= "string" then
+			return nil, "FEN ausente"
+		end
+		value = string.gsub(value, "^%s+", "")
+		value = string.gsub(value, "%s+$", "")
+		local fields = splitWords(value)
+		if #fields < 2 then
+			return nil, "FEN incompleto"
+		end
+		local ranks = {}
+		for rank in string.gmatch(fields[1], "[^/]+") do
+			table.insert(ranks, rank)
+		end
+		if #ranks ~= 8 then
+			return nil, "el tablero FEN debe tener 8 filas"
+		end
+		local whiteKings, blackKings = 0, 0
+		for _, rank in ipairs(ranks) do
+			local squares = 0
+			for index = 1, #rank do
+				local symbol = string.sub(rank, index, index)
+				local empty = tonumber(symbol)
+				if empty then
+					if empty < 1 or empty > 8 then
+						return nil, "fila FEN inválida"
+					end
+					squares = squares + empty
+				elseif string.match(symbol, "[prnbqkPRNBQK]") then
+					squares = squares + 1
+					if symbol == "K" then
+						whiteKings = whiteKings + 1
+					elseif symbol == "k" then
+						blackKings = blackKings + 1
+					end
+				else
+					return nil, "pieza FEN inválida"
+				end
+			end
+			if squares ~= 8 then
+				return nil, "cada fila FEN debe tener 8 casillas"
+			end
+		end
+		if whiteKings ~= 1 or blackKings ~= 1 then
+			return nil, "el FEN debe incluir ambos reyes"
+		end
+		if fields[2] ~= "w" and fields[2] ~= "b" then
+			return nil, "turno FEN inválido"
+		end
+		local castling = fields[3] or "-"
+		if castling ~= "-" and (not string.match(castling, "^[KQkq]+$") or string.match(castling, "(.).*%1")) then
+			return nil, "enroque FEN inválido"
+		end
+		local enPassant = fields[4] or "-"
+		if enPassant ~= "-" and not string.match(enPassant, "^[a-h][36]$") then
+			return nil, "en passant FEN inválido"
+		end
+		local halfmove = tonumber(fields[5] or "0")
+		local fullmove = tonumber(fields[6] or "1")
+		if not halfmove or halfmove < 0 or halfmove % 1 ~= 0 or not fullmove or fullmove < 1 or fullmove % 1 ~= 0 then
+			return nil, "contadores FEN inválidos"
+		end
+		return table.concat({ fields[1], fields[2], castling, enPassant, tostring(halfmove), tostring(fullmove) }, " ")
+	end
+
+	local function fenTurn(fen)
+		return string.match(tostring(fen or ""), "^%S+%s+([wb])%s")
+	end
+
+	local function rawField(source, key)
+		if type(source) ~= "table" then
+			return nil
+		end
+		local ok, value = pcall(rawget, source, key)
+		return ok and value or nil
+	end
+
+	local function firstField(source, keys)
+		for _, key in ipairs(keys) do
+			local value = rawField(source, key)
+			if value ~= nil then
+				return value, key
+			end
+		end
+		return nil, nil
+	end
+
+	local function truthyFlag(source, keys)
+		local value = firstField(source, keys)
+		if type(value) == "boolean" then
+			return value
+		elseif type(value) == "number" then
+			return value ~= 0
+		end
+		return nil
+	end
+
+	local SAFE_CONTEXT_KEYS = {
+		"isBot", "IsBot", "versusBot", "vsBot", "againstBot", "botGame", "isComputer",
+		"isPractice", "practice", "training", "isTraining", "analysisMode",
+		"isPrivate", "IsPrivate", "private", "privateGame", "privateMatch", "sandbox",
+	}
+	local COMPETITIVE_CONTEXT_KEYS = {
+		"ranked", "Ranked", "isRanked", "IsRanked", "rated", "isRated", "competitive", "isCompetitive",
+	}
+	local CONTEXT_VALUE_KEYS = {
+		"mode", "Mode", "gameMode", "GameMode", "matchMode", "matchType", "gameType", "GameType", "opponentType",
+		"queue", "queueType", "roomType", "visibility",
+	}
+	local SAFE_CONTEXT_VALUES = {
+		bot = true, vsbot = true, playvsbot = true, computer = true, computeropponent = true, ai = true,
+		practice = true, training = true, private = true, privategame = true, privatematch = true,
+		analysis = true, postgame = true, review = true, sandbox = true, solo = true, puzzle = true,
+	}
+	local COMPETITIVE_CONTEXT_VALUES = {
+		ranked = true, rankedmatch = true, rated = true, competitive = true, public = true,
+		publicmatch = true, matchmaking = true, ladder = true,
+	}
+
+	local function scanContextTable(root)
+		if type(root) ~= "table" then
+			return nil, nil
+		end
+		local queue = { { value = root, depth = 0 } }
+		local visited = { [root] = true }
+		local safeReason = nil
+		local inspected = 0
+		while #queue > 0 and inspected < 80 do
+			local entry = table.remove(queue, 1)
+			local source = entry.value
+			inspected = inspected + 1
+			for _, key in ipairs(COMPETITIVE_CONTEXT_KEYS) do
+				if truthyFlag(source, { key }) == true then
+					return false, "partida competitiva"
+				end
+			end
+			for _, key in ipairs(CONTEXT_VALUE_KEYS) do
+				local value = rawField(source, key)
+				if type(value) == "string" then
+					local lowered = string.lower(value)
+					lowered = string.gsub(lowered, "[%s_%-]", "")
+					if COMPETITIVE_CONTEXT_VALUES[lowered] then
+						return false, "modo " .. lowered
+					elseif SAFE_CONTEXT_VALUES[lowered] then
+						safeReason = safeReason or ("modo " .. lowered)
+					end
+				end
+			end
+			for _, key in ipairs(SAFE_CONTEXT_KEYS) do
+				if truthyFlag(source, { key }) == true then
+					safeReason = safeReason or key
+				end
+			end
+			for _, key in ipairs({ "bot", "computer", "aiOpponent" }) do
+				local value = rawField(source, key)
+				if value == true or (type(value) == "number" and value ~= 0)
+					or (type(value) == "string" and value ~= "")
+				then
+					safeReason = safeReason or key
+				end
+			end
+			if entry.depth < 2 then
+				for _, key in ipairs({ "game", "Game", "gameInfo", "match", "Match", "matchInfo", "room", "roomInfo", "opponent", "settings", "options", "metadata", "config", "players" }) do
+					local nested = rawField(source, key)
+					if type(nested) == "table" and not visited[nested] then
+						visited[nested] = true
+						table.insert(queue, { value = nested, depth = entry.depth + 1 })
+					end
+				end
+			end
+		end
+		if safeReason then
+			return true, safeReason
+		end
+		return nil, nil
+	end
+
+	local function isEffectivelyVisible(object)
+		local current = object
+		while current and current ~= playerGui do
+			local isGuiObject, isLayerCollector = false, false
+			pcall(function()
+				isGuiObject = current:IsA("GuiObject")
+				isLayerCollector = current:IsA("LayerCollector")
+			end)
+			if isGuiObject and current.Visible == false then return false end
+			if isLayerCollector and current.Enabled == false then return false end
+			current = current.Parent
+		end
+		return true
+	end
+
+	local guiContextCache = { at = -math.huge, allowed = nil, reason = nil }
+	local function guiContext()
+		if os.clock() - guiContextCache.at < 1 then
+			return guiContextCache.allowed, guiContextCache.reason
+		end
+		local foundSafe = nil
+		local foundCompetitive = nil
+		local ok, descendants = pcall(function()
+			return playerGui:GetDescendants()
+		end)
+		if not ok then
+			return nil, nil
+		end
+		for index, object in ipairs(descendants) do
+			if index > 2500 then
+				break
+			end
+			local isText = false
+			pcall(function()
+				isText = object:IsA("TextLabel") or object:IsA("TextButton")
+			end)
+			if isText then
+				local visible, text = false, ""
+				pcall(function()
+					visible = isEffectivelyVisible(object)
+					text = string.lower(object.Text)
+				end)
+				if visible and text ~= "" then
+					if string.find(text, "ranked", 1, true) or string.find(text, "rated match", 1, true) then
+						foundCompetitive = "interfaz competitiva"
+					end
+					if string.find(text, "vs bot", 1, true)
+						or string.find(text, "bot (lvl", 1, true)
+						or string.find(text, "bot level", 1, true)
+						or string.find(text, "computer opponent", 1, true)
+						or string.find(text, "practice mode", 1, true)
+						or string.find(text, "training mode", 1, true)
+						or string.find(text, "private match", 1, true)
+					then
+						foundSafe = "contexto visible permitido"
+					end
+				end
+			end
+		end
+		guiContextCache.at = os.clock()
+		if foundCompetitive then
+			guiContextCache.allowed, guiContextCache.reason = false, foundCompetitive
+		elseif foundSafe then
+			guiContextCache.allowed, guiContextCache.reason = true, foundSafe
+		else
+			guiContextCache.allowed, guiContextCache.reason = nil, nil
+		end
+		return guiContextCache.allowed, guiContextCache.reason
+	end
+
+	local UNICODE_PIECES = {
+		["♙"] = "P", ["♘"] = "N", ["♗"] = "B", ["♖"] = "R", ["♕"] = "Q", ["♔"] = "K",
+		["♟"] = "p", ["♞"] = "n", ["♝"] = "b", ["♜"] = "r", ["♛"] = "q", ["♚"] = "k",
+	}
+	local PIECE_LETTERS = { pawn = "p", knight = "n", bishop = "b", rook = "r", queen = "q", king = "k" }
+
+	local function decodePiece(value)
+		if value == nil or value == false or value == 0 or value == "" or value == "." then
+			return nil, true
+		end
+		if type(value) == "string" then
+			if UNICODE_PIECES[value] then
+				return UNICODE_PIECES[value], true
+		end
+			if #value == 1 and string.match(value, "[prnbqkPRNBQK]") then
+				return value, true
+			end
+			local lowered = string.lower(value)
+			local compact = string.gsub(lowered, "[%s_%-%.]", "")
+			if compact == "empty" or compact == "none" or compact == "nil" or compact == "blank" then
+				return nil, true
+			end
+			local color = nil
+			if string.find(compact, "white", 1, true) == 1 or string.sub(compact, 1, 1) == "w" then
+				color = "w"
+			elseif string.find(compact, "black", 1, true) == 1 or string.sub(compact, 1, 1) == "b" then
+				color = "b"
+			elseif string.sub(compact, -5) == "white" then
+				color = "w"
+			elseif string.sub(compact, -5) == "black" then
+				color = "b"
+			end
+			for name, letter in pairs(PIECE_LETTERS) do
+				if string.find(compact, name, 1, true) then
+					if color then
+						return color == "w" and string.upper(letter) or letter, true
+					end
+					return nil, false
+				end
+			end
+			if #compact == 2 then
+				local first, second = string.sub(compact, 1, 1), string.sub(compact, 2, 2)
+				if (first == "w" or first == "b") and string.match(second, "[prnbqk]") then
+					return first == "w" and string.upper(second) or second, true
+				elseif (second == "w" or second == "b") and string.match(first, "[prnbqk]") then
+					return second == "w" and string.upper(first) or first, true
+				end
+			end
+			return nil, false
+		end
+		if typeof(value) == "Instance" then
+			local ok, name = pcall(function()
+				return value.Name
+			end)
+			if ok then return decodePiece(name) end
+			return nil, false
+		end
+		if type(value) == "table" then
+			local pieceValue = firstField(value, { "piece", "Piece", "pieceType", "PieceType", "type", "Type", "kind", "Kind", "name", "Name" })
+			local colorValue = firstField(value, { "color", "Color", "colour", "side", "Side", "team", "Team", "owner", "Owner" })
+			if pieceValue == nil then
+				return nil, false
+			end
+			local side = normalizeSide(colorValue)
+			if side then
+				local combined = (side == "w" and "white" or "black") .. tostring(pieceValue)
+				local combinedPiece, combinedKnown = decodePiece(combined)
+				if combinedKnown then return combinedPiece, true end
+			end
+			return decodePiece(pieceValue)
+		end
+		return nil, false
+	end
+
+	local function boardTableToFen(source)
+		if type(source) ~= "table" then
+			return nil
+		end
+		local board = firstField(source, { "board", "Board", "squares", "Squares", "position", "Position", "pieces", "Pieces" })
+		if type(board) ~= "table" then
+			return nil
+		end
+		-- Custom Roblox engines often expose either a flat 64-entry board or an
+		-- 8x8 array. Flatten the latter without assuming which side is at the top;
+		-- the orientation scoring below evaluates all four board directions.
+		local firstRow = rawget(board, 1) or rawget(board, 0)
+		if type(firstRow) == "table" then
+			local rowBase = rawget(board, 0) ~= nil and 0 or 1
+			local columnBase = rawget(firstRow, 0) ~= nil and 0 or 1
+			local flattened = {}
+			local complete = true
+			for row = 0, 7 do
+				local rowData = rawget(board, rowBase + row)
+				if type(rowData) ~= "table" then complete = false break end
+				for column = 0, 7 do
+					flattened[row * 8 + column + 1] = rawget(rowData, columnBase + column)
+				end
+			end
+			if complete then board = flattened end
+		end
+		local decoded = {}
+		local algebraic = false
+		for key, value in pairs(board) do
+			if type(key) == "string" and string.match(string.lower(key), "^[a-h][1-8]$") then
+				algebraic = true
+				local piece, known = decodePiece(value)
+				if not known then
+					return nil
+				end
+				if piece then
+					decoded[string.lower(key)] = piece
+				end
+			end
+		end
+
+		local candidates = {}
+		if algebraic then
+			local ranks = {}
+			for rank = 8, 1, -1 do
+				local row, empty = "", 0
+				for file = 1, 8 do
+					local square = string.char(96 + file) .. tostring(rank)
+					local piece = decoded[square]
+					if piece then
+						if empty > 0 then row, empty = row .. tostring(empty), 0 end
+						row = row .. piece
+					else
+						empty = empty + 1
+					end
+				end
+				if empty > 0 then row = row .. tostring(empty) end
+				table.insert(ranks, row)
+			end
+			table.insert(candidates, { board = table.concat(ranks, "/"), score = 100 })
+		else
+			local base = rawget(board, 0) ~= nil and 0 or 1
+			local pieces = {}
+			for offset = 0, 63 do
+				local value = rawget(board, base + offset)
+				local piece, known = decodePiece(value)
+				if not known then
+					return nil
+				end
+				pieces[offset + 1] = piece or false
+			end
+			local transforms = {
+				function(rank, file) return (rank - 1) * 8 + file end,
+				function(rank, file) return (8 - rank) * 8 + file end,
+				function(rank, file) return (rank - 1) * 8 + (9 - file) end,
+				function(rank, file) return (8 - rank) * 8 + (9 - file) end,
+			}
+			for _, transform in ipairs(transforms) do
+				local ranks, score = {}, 0
+				for rank = 1, 8 do
+					local row, empty = "", 0
+					for file = 1, 8 do
+						local piece = pieces[transform(rank, file)]
+						if piece then
+							if empty > 0 then row, empty = row .. tostring(empty), 0 end
+							row = row .. piece
+							if piece == "K" then score = score + (rank >= 7 and 8 or -4) end
+							if piece == "k" then score = score + (rank <= 2 and 8 or -4) end
+							if piece == "P" and rank >= 3 then score = score + 1 end
+							if piece == "p" and rank <= 6 then score = score + 1 end
+						else
+							empty = empty + 1
+						end
+					end
+					if empty > 0 then row = row .. tostring(empty) end
+					table.insert(ranks, row)
+				end
+				table.insert(candidates, { board = table.concat(ranks, "/"), score = score })
+			end
+		end
+		table.sort(candidates, function(a, b) return a.score > b.score end)
+		local best = candidates[1]
+		if not best then
+			return nil
+		end
+		local turn = normalizeSide(firstField(source, { "turn", "Turn", "currentTurn", "CurrentTurn", "sideToMove", "SideToMove", "activeColor", "ActiveColor", "activeSide" }))
+		if not turn then
+			return nil
+		end
+		local castling = firstField(source, { "castling", "Castling", "castlingRights", "CastlingRights", "castleRights" })
+		castling = type(castling) == "string" and castling or "-"
+		local enPassant = firstField(source, { "enPassant", "EnPassant", "enPassantSquare", "epSquare" })
+		enPassant = type(enPassant) == "string" and enPassant or "-"
+		local halfmove = tonumber(firstField(source, { "halfmove", "halfmoveClock", "halfMoveClock", "HalfmoveClock" })) or 0
+		local fullmove = tonumber(firstField(source, { "fullmove", "fullmoveNumber", "moveNumber", "MoveNumber" })) or 1
+		return normalizeFen(table.concat({ best.board, turn, castling, enPassant, tostring(halfmove), tostring(fullmove) }, " "))
+	end
+
+	local function classifyContext(...)
+		local privateServer = false
+		pcall(function()
+			privateServer = type(game.PrivateServerId) == "string" and game.PrivateServerId ~= ""
+		end)
+		if privateServer then
+			return true, "servidor privado"
+		end
+		local studio = false
+		pcall(function()
+			studio = runService:IsStudio()
+		end)
+		if studio then
+			return true, "Roblox Studio"
+		end
+
+		local safeReason = nil
+		for index = 1, select("#", ...) do
+			local allowed, reason = scanContextTable(select(index, ...))
+			if allowed == false then
+				return false, reason
+			elseif allowed == true then
+				safeReason = safeReason or reason
+			end
+		end
+		local guiAllowed, guiReason = guiContext()
+		if guiAllowed == false then
+			return false, guiReason
+		elseif guiAllowed == true then
+			safeReason = safeReason or guiReason
+		end
+		if safeReason then
+			return true, safeReason
+		end
+		return false, "contexto no confirmado"
+	end
+
+	local function snapshotFromTable(source, label)
+		if type(source) ~= "table" or rawField(source, "__zenithSnapshot") == true then
+			return nil
+		end
+		local fenValue = firstField(source, { "fen", "FEN", "Fen", "currentFen", "currentFEN", "CurrentFen", "CurrentFEN", "positionFen", "positionFEN" })
+		if type(fenValue) ~= "string" then
+			local getter = firstField(source, { "getFen", "getFEN", "GetFen", "GetFEN" })
+			if type(getter) == "function" then
+				local ok, value = pcall(getter, source)
+				if ok then fenValue = value end
+			end
+		end
+		local fen = normalizeFen(fenValue)
+		if not fen then
+			fen = boardTableToFen(source)
+		end
+		if not fen then
+			return nil
+		end
+
+		local ownTurnKeys = { "ownTurn", "OwnTurn", "isMyTurn", "IsMyTurn", "myTurn", "MyTurn", "yourTurn", "isYourTurn" }
+		local ownTurnValue = firstField(source, ownTurnKeys)
+		local ownTurn = truthyFlag(source, ownTurnKeys)
+		if ownTurn == nil and type(ownTurnValue) == "function" then
+			local ok, value = pcall(ownTurnValue, source)
+			if ok and type(value) == "boolean" then ownTurn = value end
+		end
+		if ownTurn == nil then
+			local turn = normalizeSide(firstField(source, { "turn", "Turn", "currentTurn", "CurrentTurn", "sideToMove", "SideToMove", "activeColor", "ActiveColor", "activeSide" })) or fenTurn(fen)
+			local ownSide = normalizeSide(firstField(source, { "myColor", "MyColor", "playerColor", "PlayerColor", "yourColor", "you", "mySide", "playerSide" }))
+			if ownSide and turn then
+				ownTurn = ownSide == turn
+			end
+		end
+		local ownSide = normalizeSide(firstField(source, { "myColor", "MyColor", "playerColor", "PlayerColor", "yourColor", "you", "mySide", "playerSide" }))
+		local overKeys = { "over", "Over", "gameOver", "GameOver", "isGameOver", "finished", "isFinished", "past", "review" }
+		local overValue = firstField(source, overKeys)
+		local over = truthyFlag(source, overKeys) == true
+		if not over and type(overValue) == "string" then
+			local value = string.lower(overValue)
+			over = value ~= "" and value ~= "false" and value ~= "active" and value ~= "playing" and value ~= "ongoing"
+		end
+		local statusValue = firstField(source, { "status", "Status", "gameStatus", "GameStatus", "result", "Result" })
+		if not over and type(statusValue) == "string" then
+			local value = string.lower(statusValue)
+			over = value == "checkmate" or value == "stalemate" or value == "draw" or value == "ended"
+				or value == "finished" or value == "resigned" or value == "timeout" or value == "aborted"
+		end
+		local allowed, reason = classifyContext(source)
+		if over then
+			allowed, reason = true, "análisis post-partida"
+		end
+		return {
+			fen = fen,
+			ownTurn = ownTurn,
+			ownSide = ownSide,
+			activeSide = fenTurn(fen),
+			over = over,
+			contextAllowed = allowed,
+			contextReason = reason,
+			source = label or "Estado del juego",
+		}
+	end
+
+	local function inspectNestedSnapshot(source, label)
+		local direct = snapshotFromTable(source, label)
+		if direct then return direct end
+		if type(source) ~= "table" then return nil end
+		for _, key in ipairs({ "session", "Session", "game", "Game", "currentGame", "CurrentGame", "match", "Match", "state", "State", "gameState", "GameState", "position", "Position", "data", "view" }) do
+			local nested = rawField(source, key)
+			if type(nested) == "table" then
+				local snapshot = snapshotFromTable(nested, label .. "." .. key)
+				if snapshot then
+					local allowed, reason = classifyContext(source, nested)
+					if snapshot.over then
+						snapshot.contextAllowed, snapshot.contextReason = true, "análisis post-partida"
+					elseif allowed ~= nil then
+						snapshot.contextAllowed, snapshot.contextReason = allowed, reason
+					end
+					return snapshot
+				end
+			end
+		end
+		return nil
+	end
+
+	local function describeTableSchema(source)
+		local fields = {}
+		if type(source) ~= "table" then return fields end
+		for key, value in pairs(source) do
+			if type(key) == "string" then
+				table.insert(fields, key .. ":" .. type(value))
+				if #fields >= 48 then break end
+			end
+		end
+		table.sort(fields)
+		return fields
+	end
+
+	local function instancePath(object)
+		local names = {}
+		local current = object
+		for _ = 1, 12 do
+			if not current then break end
+			table.insert(names, 1, tostring(current.Name))
+			current = current.Parent
+		end
+		return table.concat(names, ".")
+	end
+
+	local GenericAdapter = {
+		Name = "Play Chess scanner",
+		candidate = nil,
+		lastScan = -math.huge,
+		diagnostics = { scans = 0, tables = 0, instances = 0, fenCandidates = 0, schema = {}, source = nil },
+	}
+
+	local function snapshotRecencyScore(source, snapshot)
+		local score = 0
+		if truthyFlag(source, { "current", "isCurrent", "active", "isActive" }) == true then score = score + 1000000 end
+		if truthyFlag(source, { "past", "history", "archived" }) == true then score = score - 500000 end
+		for _, key in ipairs({ "ply", "moveIndex", "moveCount", "version", "revision", "updatedAt" }) do
+			local value = tonumber(rawField(source, key))
+			if value then score = score + math.min(math.max(value, 0), 1000000) end
+		end
+		local moves = firstField(source, { "moves", "Moves", "moveHistory", "history" })
+		if type(moves) == "table" then score = score + #moves * 10 end
+		local fields = splitWords(snapshot.fen)
+		local fullmove = tonumber(fields[6]) or 1
+		score = score + fullmove * 2 + (fields[2] == "b" and 1 or 0)
+		if snapshot.over then score = score - 100000 end
+		return score
+	end
+
+	function GenericAdapter:scanHeap()
+		if type(getGarbageCollected) ~= "function" then
+			return nil
+		end
+		local ok, objects = pcall(getGarbageCollected, true)
+		if not ok or type(objects) ~= "table" then
+			return nil
+		end
+		local inspected = 0
+		local bestObject, bestSnapshot, bestScore = nil, nil, -math.huge
+		for _, object in ipairs(objects) do
+			if type(object) == "table" then
+				inspected = inspected + 1
+				if inspected > 20000 then break end
+				self.diagnostics.tables = self.diagnostics.tables + 1
+				local snapshot = inspectNestedSnapshot(object, "memoria del cliente")
+				if snapshot then
+					self.diagnostics.fenCandidates = self.diagnostics.fenCandidates + 1
+					local score = snapshotRecencyScore(object, snapshot)
+					if object == self.candidate then score = score + 0.25 end
+					if score > bestScore then
+						bestObject, bestSnapshot, bestScore = object, snapshot, score
+					end
+				end
+			end
+		end
+		if bestSnapshot then
+			self.diagnostics.schema = describeTableSchema(bestObject)
+			self.diagnostics.source = bestSnapshot.source
+			self.candidate = bestObject
+		end
+		return bestSnapshot
+	end
+
+	function GenericAdapter:scanInstances()
+		local roots = { playerGui, replicatedStorage }
+		for _, root in ipairs(roots) do
+			local ok, descendants = pcall(function() return root:GetDescendants() end)
+			if ok then
+				for index, object in ipairs(descendants) do
+					if index > 3500 then break end
+					self.diagnostics.instances = self.diagnostics.instances + 1
+					local values = {}
+					pcall(function()
+						for _, key in ipairs({ "FEN", "Fen", "fen", "CurrentFEN", "CurrentFen" }) do
+							local value = object:GetAttribute(key)
+							if type(value) == "string" then table.insert(values, value) end
+						end
+						if object:IsA("StringValue") then table.insert(values, object.Value) end
+					end)
+					for _, value in ipairs(values) do
+						local fen = normalizeFen(value)
+						if fen then
+							self.diagnostics.fenCandidates = self.diagnostics.fenCandidates + 1
+							self.diagnostics.schema = { "instance:" .. tostring(object.ClassName) }
+							self.diagnostics.source = instancePath(object)
+							local allowed, reason = classifyContext()
+							return {
+								fen = fen,
+								activeSide = fenTurn(fen),
+								ownTurn = nil,
+								contextAllowed = allowed,
+								contextReason = reason,
+								source = "atributo FEN del juego",
+							}
+						end
+					end
+				end
+			end
+		end
+		return nil
+	end
+
+	function GenericAdapter:Read()
+		local cachedSnapshot = nil
+		if self.candidate then
+			cachedSnapshot = inspectNestedSnapshot(self.candidate, "memoria del cliente")
+			if not cachedSnapshot then self.candidate = nil end
+		end
+		if os.clock() - self.lastScan < 2 then return cachedSnapshot end
+		self.lastScan = os.clock()
+		self.diagnostics.scans = self.diagnostics.scans + 1
+		return self:scanHeap() or cachedSnapshot or self:scanInstances()
+	end
+
+	function GenericAdapter:Diagnostic()
+		return {
+			adapter = self.Name,
+			placeId = game.PlaceId,
+			scans = self.diagnostics.scans,
+			tablesInspected = self.diagnostics.tables,
+			instancesInspected = self.diagnostics.instances,
+			fenCandidates = self.diagnostics.fenCandidates,
+			schema = table.clone(self.diagnostics.schema),
+			source = self.diagnostics.source,
+			hasGetGc = type(getGarbageCollected) == "function",
+		}
+	end
+
+	local function requireModule(module)
+		if not module then return nil end
+		local ok, result = pcall(require, module)
+		return ok and result or nil
+	end
+
+	local function findDescendant(parent, name)
+		if not parent then return nil end
+		local direct = parent:FindFirstChild(name)
+		if direct then return direct end
+		local ok, result = pcall(function() return parent:FindFirstChild(name, true) end)
+		return ok and result or nil
+	end
+
+	local function createChessDuelsAdapter()
+		local chessFolder = replicatedStorage:FindFirstChild("Chess")
+		local engine = requireModule(findDescendant(chessFolder, "Engine"))
+		if type(engine) ~= "table" then return nil end
+		local remotes = replicatedStorage:FindFirstChild("ChessRemotes")
+		local update = remotes and remotes:FindFirstChild("Update")
+		local adapter = { Name = "Chess Duels client", Engine = engine, payload = nil }
+
+		local function acceptPayload(payload)
+			if type(payload) == "table"
+				and (rawField(payload, "kind") == nil or rawField(payload, "kind") == "game")
+				and rawField(payload, "state") ~= nil
+			then
+				adapter.payload = payload
+			end
+		end
+		if update then
+			local ok, signal = pcall(function() return update.OnClientEvent end)
+			if ok and signal then
+				local connected, connection = pcall(function()
+					return signal:Connect(acceptPayload)
+				end)
+				if connected and connection then table.insert(WordHelper.connections, connection) end
+			end
+		end
+
+		function adapter:findPayload()
+			if self.payload or type(getGarbageCollected) ~= "function" then return self.payload end
+			local ok, objects = pcall(getGarbageCollected, true)
+			if not ok or type(objects) ~= "table" then return nil end
+			for _, object in ipairs(objects) do
+				if type(object) == "table"
+					and type(rawField(object, "ply")) == "number"
+					and type(rawField(object, "you")) == "number"
+					and rawField(object, "state") ~= nil
+					and type(rawField(object, "moves")) == "table"
+					and rawField(object, "id") ~= nil
+				then
+					self.payload = object
+					return object
+				end
+			end
+			return nil
+		end
+
+		function adapter:Read()
+			local payload = self:findPayload()
+			if type(payload) ~= "table" then return nil end
+			local serialized = rawField(payload, "state")
+			local state = nil
+			local deserialize = firstField(self.Engine, { "deserialize", "Deserialize" })
+			if type(deserialize) == "function" then
+				local ok, value = pcall(deserialize, serialized)
+				if not ok then ok, value = pcall(deserialize, self.Engine, serialized) end
+				if ok and type(value) == "table" then state = value end
+			end
+			if not state and type(serialized) == "table" then state = serialized end
+			if type(state) ~= "table" then return nil end
+			local toFen = firstField(self.Engine, { "toFEN", "toFen", "ToFEN" })
+			local rawFen = nil
+			if type(toFen) == "function" then
+				local ok, value = pcall(toFen, state)
+				if not ok then ok, value = pcall(toFen, self.Engine, state) end
+				if ok then rawFen = value end
+			end
+			local fen = normalizeFen(rawFen) or boardTableToFen(state)
+			if not fen then return nil end
+			local turnValue = firstField(state, { "turn", "currentTurn", "sideToMove" })
+			local you = rawField(payload, "you")
+			local ownTurn = you ~= nil and you ~= 0 and turnValue ~= nil and turnValue == you
+			local ownSide = normalizeSide(you)
+			local over = rawField(payload, "over") ~= nil and rawField(payload, "over") ~= false
+			local past = rawField(payload, "past") == true
+			local allowed, reason = classifyContext(payload, state)
+			if over or past then allowed, reason = true, "análisis post-partida" end
+			return {
+				fen = fen,
+				ownTurn = ownTurn,
+				ownSide = ownSide,
+				activeSide = fenTurn(fen),
+				over = over or past,
+				contextAllowed = allowed,
+				contextReason = reason,
+				source = self.Name,
+			}
+		end
+		return adapter
+	end
+
+	local function createRoChessAdapter()
+		local clientFolder = replicatedStorage:FindFirstChild("ChessClient")
+		local appModule = findDescendant(clientFolder, "App")
+		local app = requireModule(appModule)
+		if type(app) ~= "table" then return nil end
+		local adapter = { Name = "RoChess client", App = app }
+		function adapter:Read()
+			local session = rawField(self.App, "session")
+			if type(session) ~= "table" then return nil end
+			local engine = rawField(session, "engine")
+			local getter = type(engine) == "table" and firstField(engine, { "getFen", "getFEN" }) or nil
+			if type(getter) ~= "function" then return nil end
+			local ok, rawFen = pcall(getter, engine)
+			local fen = ok and normalizeFen(rawFen) or nil
+			if not fen then return nil end
+			local ownTurn = nil
+			local isMyTurn = firstField(session, { "isMyTurn", "IsMyTurn" })
+			if type(isMyTurn) == "function" then
+				local turnOk, value = pcall(isMyTurn, session)
+				if turnOk and type(value) == "boolean" then ownTurn = value end
+			end
+			local ownSide = normalizeSide(firstField(session, { "myColor", "color", "side" }))
+			if ownTurn == nil and ownSide then ownTurn = ownSide == fenTurn(fen) end
+			local overValue = rawField(session, "over")
+			local over = overValue ~= nil and overValue ~= false
+			local ucis = rawField(session, "ucis")
+			local viewPly = rawField(session, "viewPly")
+			local reviewing = type(ucis) == "table" and type(viewPly) == "number" and viewPly ~= #ucis
+			local allowed, reason = classifyContext(session)
+			if over or reviewing then allowed, reason = true, "análisis post-partida" end
+			return {
+				fen = fen,
+				ownTurn = ownTurn,
+				ownSide = ownSide,
+				activeSide = fenTurn(fen),
+				over = over or reviewing,
+				contextAllowed = allowed,
+				contextReason = reason,
+				source = self.Name,
+			}
+		end
+		return adapter
+	end
+
+	local function formatUci(move)
+		if type(move) ~= "string" then return nil end
+		move = string.lower(move)
+		if not string.match(move, "^[a-h][1-8][a-h][1-8][qrbn]?$") then return nil end
+		local formatted = string.sub(move, 1, 2) .. " → " .. string.sub(move, 3, 4)
+		if #move == 5 then formatted = formatted .. " = " .. string.upper(string.sub(move, 5, 5)) end
+		return formatted
+	end
+
+	local function setChessState(text, color)
+		chessStateLabel.Text = text
+		chessStateLabel.TextColor3 = color or Config.Secondary
+	end
+
+	local function clearChessRecommendation(line)
+		bestMoveLabel.Text = "—"
+		chessEvalLabel.Text = "EVAL —"
+		chessPonderLabel.Text = "RESPUESTA —"
+		chessLineLabel.Text = line or "Esperando una posición válida..."
+		WordHelper.chess.bestMove = nil
+		WordHelper.chess.ponder = nil
+		WordHelper.chess.evaluation = nil
+		WordHelper.chess.mate = nil
+	end
+
+	local function performStockfishRequest(fen)
+		local encoded = httpService:UrlEncode(fen)
+		local url = Config.StockfishEndpoint .. "?fen=" .. encoded
+			.. "&depth=" .. tostring(Config.StockfishDepth) .. "&mode=bestmove"
+		local body = nil
+		if type(executorRequest) == "function" then
+			local response = executorRequest({
+				Url = url,
+				Method = "GET",
+				Headers = { Accept = "application/json" },
+				Timeout = 10,
+			})
+			if type(response) == "table" then
+				local statusCode = tonumber(response.StatusCode or response.Status or response.status_code)
+				if statusCode and (statusCode < 200 or statusCode >= 300) then
+					error("HTTP " .. tostring(statusCode), 0)
+				end
+				body = response.Body or response.body or response.ResponseBody
+			elseif type(response) == "string" then
+				body = response
+			end
+		else
+			body = game:HttpGet(url, true)
+		end
+		if type(body) ~= "string" or body == "" then error("respuesta vacía", 0) end
+		local decoded = httpService:JSONDecode(body)
+		if type(decoded) ~= "table" then error("JSON inválido", 0) end
+		if decoded.success ~= true then
+			error(tostring(decoded.error or decoded.message or "Stockfish rechazó la posición"), 0)
+		end
+		local bestRaw = tostring(decoded.bestmove or decoded.bestMove or "")
+		local best = string.match(bestRaw, "bestmove%s+([a-h][1-8][a-h][1-8][qrbn]?)")
+			or string.match(bestRaw, "^([a-h][1-8][a-h][1-8][qrbn]?)$")
+		local ponder = string.match(bestRaw, "ponder%s+([a-h][1-8][a-h][1-8][qrbn]?)")
+		if not best then error("Stockfish no devolvió un movimiento válido", 0) end
+		return {
+			best = best,
+			ponder = ponder,
+			evaluation = decoded.evaluation,
+			mate = decoded.mate,
+			continuation = type(decoded.continuation) == "string" and decoded.continuation or "",
+		}
+	end
+
+	local startStockfishRequest
+	startStockfishRequest = function(snapshot)
+		if WordHelper.destroyed or not snapshot then return end
+		if WordHelper.chess.busy then
+			WordHelper.chess.requestGeneration = WordHelper.chess.requestGeneration + 1
+			WordHelper.chess.pendingSnapshot = snapshot
+			return
+		end
+		WordHelper.chess.busy = true
+		WordHelper.chess.pendingSnapshot = nil
+		WordHelper.chess.requestGeneration = WordHelper.chess.requestGeneration + 1
+		local generation = WordHelper.chess.requestGeneration
+		WordHelper.chess.lastRequestedFen = snapshot.fen
+		WordHelper.chess.lastError = nil
+		setChessState(snapshot.manual and "Analizando FEN manual..." or "Stockfish está analizando tu turno...", Config.White)
+		chessLineLabel.Text = "Consultando Stockfish Online..."
+
+		task.spawn(function()
+			local ok, result = pcall(performStockfishRequest, snapshot.fen)
+			local current = not WordHelper.destroyed and generation == WordHelper.chess.requestGeneration
+			if current and ok then
+				WordHelper.chess.bestMove = result.best
+				WordHelper.chess.ponder = result.ponder
+				WordHelper.chess.evaluation = result.evaluation
+				WordHelper.chess.mate = result.mate
+				bestMoveLabel.Text = formatUci(result.best) or string.upper(result.best)
+				if result.mate ~= nil and tostring(result.mate) ~= "" and tostring(result.mate) ~= "null" then
+					chessEvalLabel.Text = "MATE " .. tostring(result.mate)
+				elseif result.evaluation ~= nil then
+					local evaluation = tonumber(result.evaluation)
+					chessEvalLabel.Text = evaluation and string.format("EVAL %+.2f", evaluation) or ("EVAL " .. tostring(result.evaluation))
+				else
+					chessEvalLabel.Text = "EVAL —"
+				end
+				chessPonderLabel.Text = result.ponder and ("RESPUESTA " .. (formatUci(result.ponder) or result.ponder)) or "RESPUESTA —"
+				local line = {}
+				for move in string.gmatch(result.continuation, "%S+") do
+					local formatted = formatUci(move)
+					if formatted then table.insert(line, formatted) end
+					if #line >= 4 then break end
+				end
+				chessLineLabel.Text = #line > 0 and table.concat(line, "  •  ") or "Análisis listo"
+				setChessState(snapshot.manual and "FEN manual analizado. No se realizó ninguna jugada."
+					or (snapshot.over and "Análisis post-partida listo." or "Tu turno • recomendación lista"), Config.Secondary)
+			elseif current then
+				WordHelper.chess.lastError = tostring(result)
+				WordHelper.chess.retryAt = os.clock() + 4
+				WordHelper.chess.lastRequestedFen = nil
+				clearChessRecommendation(snapshot.manual
+					and "Stockfish no está disponible; pulsa ANALIZAR para reintentar."
+					or "Stockfish no está disponible; se reintentará.")
+				setChessState("No se pudo consultar Stockfish Online.", Config.Danger)
+			end
+			WordHelper.chess.busy = false
+			local pending = WordHelper.chess.pendingSnapshot
+			WordHelper.chess.pendingSnapshot = nil
+			if pending and not WordHelper.destroyed then startStockfishRequest(pending) end
+		end)
+	end
+
+	local function blockLiveAnalysis(signature, stateText, lineText)
+		if WordHelper.chess.gateSignature ~= signature then
+			WordHelper.chess.gateSignature = signature
+			WordHelper.chess.requestGeneration = WordHelper.chess.requestGeneration + 1
+			WordHelper.chess.pendingSnapshot = nil
+			WordHelper.chess.lastRequestedFen = nil
+			clearChessRecommendation(lineText)
+		end
+		setChessState(stateText, Config.Secondary)
+	end
+
+	local function handleChessSnapshot(snapshot)
+		if type(snapshot) == "table" then snapshot.__zenithSnapshot = true end
+		local fen, fenError = normalizeFen(snapshot and snapshot.fen)
+		if not fen then
+			blockLiveAnalysis("invalid", "La posición detectada no contiene un FEN válido.", fenError)
+			return
+		end
+		snapshot.fen = fen
+		snapshot.activeSide = snapshot.activeSide or fenTurn(fen)
+		WordHelper.chess.lastFen = fen
+		WordHelper.chess.lastSnapshot = snapshot
+		chessModeLabel.Text = snapshot.over and "POST-PARTIDA • solo lectura"
+			or ((snapshot.source or "posición detectada") .. " • solo lectura")
+
+		if not snapshot.over and snapshot.contextAllowed ~= true then
+			if WordHelper.chess.manualDisplay then return end
+			blockLiveAnalysis(fen .. ":context", "Análisis en vivo bloqueado: " .. tostring(snapshot.contextReason or "contexto no confirmado") .. ".", "Usa FEN manual o análisis post-partida.")
+			return
+		end
+		if not snapshot.over and snapshot.ownTurn ~= true then
+			if WordHelper.chess.manualDisplay then return end
+			local text = snapshot.ownTurn == false and "Turno del oponente. Zenith espera sin analizar."
+				or "Posición detectada; falta confirmar tu color y turno."
+			blockLiveAnalysis(fen .. ":turn:" .. tostring(snapshot.ownTurn), text, "Sin recomendación fuera de tu turno.")
+			return
+		end
+		if not snapshot.over and snapshot.ownSide and snapshot.activeSide and snapshot.ownSide ~= snapshot.activeSide then
+			if WordHelper.chess.manualDisplay then return end
+			blockLiveAnalysis(fen .. ":side", "El lado activo no coincide con tu color.", "Sin recomendación fuera de tu turno.")
+			return
+		end
+
+		WordHelper.chess.manualDisplay = false
+		WordHelper.chess.gateSignature = fen .. ":allowed"
+		if WordHelper.chess.lastRequestedFen ~= fen and os.clock() >= WordHelper.chess.retryAt then
+			startStockfishRequest(snapshot)
+		elseif not WordHelper.chess.busy and WordHelper.chess.bestMove then
+			setChessState(snapshot.over and "Análisis post-partida listo." or "Tu turno • recomendación lista", Config.Secondary)
+		end
+	end
+
+	function WordHelper:AnalyzeFen(value)
+		local fen, reason = normalizeFen(value)
+		if not fen then
+			self.chess.manualDisplay = false
+			clearChessRecommendation(reason)
+			setChessState("FEN manual inválido.", Config.Danger)
+			return false, reason
+		end
+		self.chess.manualDisplay = true
+		self.chess.gateSignature = fen .. ":manual"
+		if self.chess.lastRequestedFen == fen and self.chess.bestMove then
+			setChessState("Esta posición ya está analizada. No se realizó ninguna jugada.", Config.Secondary)
+			return true
+		end
+		startStockfishRequest({
+			__zenithSnapshot = true,
+			fen = fen,
+			activeSide = fenTurn(fen),
+			over = true,
+			manual = true,
+			contextAllowed = true,
+			contextReason = "FEN manual",
+			source = "FEN manual",
+		})
+		return true
+	end
+
+	function WordHelper:GetChessDiagnostics()
+		local generic = GenericAdapter:Diagnostic()
+		generic.game = self.chess.gameName
+		generic.activeAdapter = self.chess.adapter and self.chess.adapter.Name or nil
+		generic.positionDetected = self.chess.lastFen ~= nil
+		generic.ownTurn = self.chess.lastSnapshot and self.chess.lastSnapshot.ownTurn or nil
+		generic.contextAllowed = self.chess.lastSnapshot and self.chess.lastSnapshot.contextAllowed or nil
+		generic.contextReason = self.chess.lastSnapshot and self.chess.lastSnapshot.contextReason or nil
+		generic.lastError = self.chess.lastError
+		return generic
+	end
+
+	local function initializeChessAdapter()
+		if WordHelper.chess.adapter or not WordHelper.chess.supported then return end
+		if game.PlaceId == 130878180532794 then
+			WordHelper.chess.adapter = createRoChessAdapter()
+		elseif game.PlaceId == 89083628291452 then
+			WordHelper.chess.adapter = createChessDuelsAdapter()
+		elseif game.PlaceId == 93365009198479 then
+			WordHelper.chess.adapter = GenericAdapter
+		end
+	end
+
+	local function pollChess()
+		if WordHelper.destroyed or not WordHelper.chess.supported then return end
+		if not WordHelper.chess.adapter and os.clock() >= (WordHelper.chess.nextAdapterAttempt or 0) then
+			WordHelper.chess.nextAdapterAttempt = os.clock() + 2
+			initializeChessAdapter()
+		end
+		local snapshot = nil
+		if WordHelper.chess.adapter then
+			local ok, result = pcall(function() return WordHelper.chess.adapter:Read() end)
+			if ok then snapshot = result end
+		end
+		if not snapshot and WordHelper.chess.adapter ~= GenericAdapter then
+			local ok, result = pcall(function() return GenericAdapter:Read() end)
+			if ok then snapshot = result end
+		end
+		if snapshot then
+			handleChessSnapshot(snapshot)
+		elseif not WordHelper.chess.lastFen then
+			chessModeLabel.Text = "READ-ONLY • esperando estado del juego"
+			setChessState("Buscando tablero, color, turno y modo de partida...", Config.Secondary)
 		end
 	end
 
@@ -3091,7 +4487,7 @@ zenith
 	end
 
 	local function bindFocusedTextBox(textBox)
-		if textBox == searchBox then
+		if textBox == searchBox or textBox == manualFenBox then
 			disconnectFocusedTextBox()
 			return
 		end
@@ -3141,7 +4537,12 @@ zenith
 		if searchBox:IsFocused() then
 			searchBox:ReleaseFocus()
 		end
+		if manualFenBox:IsFocused() then
+			manualFenBox:ReleaseFocus()
+		end
 		self.destroyed = true
+		self.chess.requestGeneration = self.chess.requestGeneration + 1
+		self.chess.pendingSnapshot = nil
 		disconnectFocusedTextBox()
 		disconnectRows()
 		for _, connection in ipairs(self.connections) do
@@ -3153,11 +4554,15 @@ zenith
 		if screenGui and screenGui.Parent then
 			screenGui:Destroy()
 		end
+		if sharedEnvironment.ZenithAssistant == self then
+			sharedEnvironment.ZenithAssistant = nil
+		end
 		if sharedEnvironment.ZenithWordHelper == self then
 			sharedEnvironment.ZenithWordHelper = nil
 		end
-		if type(shared) == "table" and shared.ZenithWordHelper == self then
-			shared.ZenithWordHelper = nil
+		if type(shared) == "table" then
+			if shared.ZenithAssistant == self then shared.ZenithAssistant = nil end
+			if shared.ZenithWordHelper == self then shared.ZenithWordHelper = nil end
 		end
 	end
 
@@ -3181,6 +4586,15 @@ zenith
 	connect(searchBox.FocusLost, function()
 		tween(searchStroke, FAST_TWEEN, { Transparency = 0.78, Color = Config.Line })
 	end)
+	connect(manualFenBox.Focused, function()
+		disconnectFocusedTextBox()
+	end)
+	connect(manualFenBox.FocusLost, function(enterPressed)
+		if enterPressed then WordHelper:AnalyzeFen(manualFenBox.Text) end
+	end)
+	connect(analyzeFenButton.Activated, function()
+		WordHelper:AnalyzeFen(manualFenBox.Text)
+	end)
 
 	local function bindHeaderHover(button, danger)
 		connect(button.MouseEnter, function()
@@ -3196,9 +4610,13 @@ zenith
 			})
 		end)
 	end
+	bindHeaderHover(modeButton, false)
 	bindHeaderHover(minimizeButton, false)
 	bindHeaderHover(closeButton, true)
 
+	connect(modeButton.Activated, function()
+		WordHelper:SetMode(WordHelper.mode == "Chess" and "Words" or "Chess")
+	end)
 	connect(minimizeButton.Activated, function()
 		WordHelper:SetMinimized(not WordHelper.minimized)
 	end)
@@ -3386,12 +4804,24 @@ zenith
 	connect(workspaceService:GetPropertyChangedSignal("CurrentCamera"), bindViewport)
 	bindViewport()
 
-	sharedEnvironment.ZenithWordHelper = WordHelper
+	sharedEnvironment.ZenithAssistant = WordHelper
+	sharedEnvironment.ZenithWordHelper = WordHelper -- compatibility alias
 	if type(shared) == "table" then
+		shared.ZenithAssistant = WordHelper
 		shared.ZenithWordHelper = WordHelper
 	end
 
 	WordHelper:SetWords(parseDictionary(FALLBACK_WORDS))
+	WordHelper:SetMode(WordHelper.mode)
+	if WordHelper.chess.supported then
+		task.spawn(function()
+			pollChess()
+			while not WordHelper.destroyed do
+				task.wait(Config.ChessPollSeconds)
+				pollChess()
+			end
+		end)
+	end
 
 	-- Upgrade to the full cached/downloaded English dictionary in the background.
 	task.spawn(function()
