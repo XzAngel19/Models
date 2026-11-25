@@ -11,7 +11,20 @@ local CHESS_PLACES = {
 	[93365009198479] = true, -- Play Chess
 }
 
-local productFile = CHESS_PLACES[game.PlaceId] and "ZenithChess.txt" or "ZenithVocabulary.txt"
+local VOCABULARY_PLACES = {
+	[74300432420573] = "Word Battle",
+	[129866685202296] = "Last Letter",
+}
+
+local productFile
+if CHESS_PLACES[game.PlaceId] then
+	productFile = "ZenithChess.txt"
+elseif VOCABULARY_PLACES[game.PlaceId] then
+	productFile = "ZenithVocabulary.txt"
+else
+	error("[Zenith] Juego no soportado (PlaceId " .. tostring(game.PlaceId) .. "). Vocabulary solo admite Word Battle y Last Letter.", 0)
+end
+
 local productUrl = "https://raw.githubusercontent.com/XzAngel19/Models/arena/cbc36148-models/" .. productFile
 local source = game:HttpGet(productUrl, true)
 local chunk, compileError = loadstring(source, "Zenith/" .. productFile)
