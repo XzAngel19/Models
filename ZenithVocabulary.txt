@@ -2226,12 +2226,12 @@ launchWordHelper = function(standardExpiresAt)
 		MinimumWPM = 30,
 		MaximumWPM = 600,
 		WPMIncrement = 30,
+		LegitWPMIncrement = 10,
 		DoubleActivationSeconds = 0.65,
 		VisualPollSeconds = 0.1,
 		FocusPollSeconds = 0.2,
 		Assets = {
 			-- Optional uploaded IDs for Studio. Executors use the embedded PNGs below.
-			WordleLogo = "",
 			SavedIcon = "",
 			SettingsIcon = "",
 		},
@@ -2272,141 +2272,6 @@ launchWordHelper = function(standardExpiresAt)
 	-- Transparent assets are bundled so the standalone loader does not depend on
 	-- an uploaded Roblox asset ID. A text fallback remains available in Studio.
 	local EMBEDDED_WORD_ASSETS = {
-		WordleLogo = table.concat({
-			"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",
-		}),
 		SavedIcon = table.concat({
 			"iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAFz0lEQVR42u2aXWgcVRTHz7l3PndTWwtSbTZpk03Tj6S+9aF9sesHqFQlBRcFBftFreiTWESk",
 			"rR8gvvigKFpoFQTBIj4o2kLBaUHyoCm0VNBs9yO7m6Yp8aua2ZmdufceH5rRUFIhTbLV9v4fZ+7cc+Z3zzn3zO4F0NLS0pqDiIj/n23jfDlTqVScMAzNq93n",
@@ -2682,8 +2547,12 @@ zenith
 	local DEFAULT_SETTINGS = {
 		autoType = true,
 		wpm = Config.DefaultWPM,
+		legitAutoType = false,
+		legitMinWPM = 160,
+		legitMaxWPM = 180,
 		definitions = true,
 		allResults = false,
+		derivations = false,
 		autoDetect = true,
 		hideUsed = true,
 	}
@@ -2698,6 +2567,16 @@ zenith
 		Config.MinimumWPM,
 		Config.MaximumWPM
 	)
+	Settings.legitMinWPM = math.clamp(
+		math.floor((tonumber(Settings.legitMinWPM) or 160) / Config.LegitWPMIncrement + 0.5) * Config.LegitWPMIncrement,
+		Config.MinimumWPM,
+		Config.MaximumWPM
+	)
+	Settings.legitMaxWPM = math.clamp(
+		math.floor((tonumber(Settings.legitMaxWPM) or 180) / Config.LegitWPMIncrement + 0.5) * Config.LegitWPMIncrement,
+		Settings.legitMinWPM,
+		Config.MaximumWPM
+	)
 	sharedEnvironment.ZenithVocabularySettings = Settings
 	if type(shared) == "table" then shared.ZenithVocabularySettings = Settings end
 
@@ -2709,7 +2588,10 @@ zenith
 			previousHelper:Destroy()
 		end)
 	end
-	for _, obsoleteKey in ipairs({ "ZenithWordRemoteHookV3", "ZenithWordRemoteHookV2", "ZenithWordRemoteHookV1" }) do
+	for _, obsoleteKey in ipairs({
+		"ZenithWordRemoteHookV3", "ZenithWordRemoteHookV2", "ZenithWordRemoteHookV1",
+		"ZenithLastLetterRemoteHookV1",
+	}) do
 		local obsoleteHook = sharedEnvironment[obsoleteKey]
 		if type(obsoleteHook) == "table" then obsoleteHook.handler = nil end
 	end
@@ -2717,7 +2599,7 @@ zenith
 	-- its shared environment across a teleport or an interrupted re-execution.
 	for hookKey, adapterName in pairs({
 		ZenithWordBattleRemoteHookV1 = "word-battle",
-		ZenithLastLetterRemoteHookV1 = "last-letter",
+		ZenithLastLetterRemoteHookV2 = "last-letter",
 	}) do
 		local isolatedHook = sharedEnvironment[hookKey]
 		if adapterName ~= activeGameAdapter and type(isolatedHook) == "table" then
@@ -2807,6 +2689,14 @@ zenith
 		lastWordActivationAt = 0,
 		lastVisualWord = "",
 		lastVisualUpdate = 0,
+		lastLetterState = "",
+		lastLetterStateAt = 0,
+		lastLetterPacketAt = 0,
+		lastLetterPacketSequence = 0,
+		lastLetterVisualCandidate = "",
+		lastLetterVisualCandidateCount = 0,
+		lastLetterKeyboardRoot = nil,
+		lastLetterCurrentWordRoot = nil,
 		localTurn = nil,
 		turnPrompt = "",
 		turnOwner = nil,
@@ -2818,6 +2708,22 @@ zenith
 		manualCaptureUntil = 0,
 		placeId = currentPlaceId,
 	}
+	-- Curated productive derivations. They are kept separate from the downloaded
+	-- base dictionary so the setting has a deterministic effect and never creates
+	-- nonsense forms by blindly suffixing every entry.
+	WordHelper.derivedVocabulary = {
+		"aloneness", "boundlessness", "carefreeness", "colorlessness", "dreamlessness",
+		"effortfulness", "everydayness", "futurelessness", "groundlessness", "heartfulness",
+		"hereness", "hopefulness", "kindheartedness", "lightheartedness", "nowness",
+		"otherness", "placelessness", "purposelessness", "rootlessness", "selfness",
+		"shapelessness", "speechlessness", "suchness", "thereness", "thingness",
+		"timelessness", "togetherness", "truthfulness", "whatness", "whyness",
+		"wordlessness", "worldlessness", "yesterdayness",
+	}
+	WordHelper.derivedWordSet = {}
+	for _, derivedWord in ipairs(WordHelper.derivedVocabulary) do
+		WordHelper.derivedWordSet[derivedWord] = true
+	end
 
 	local function create(className, properties, parent)
 		local object = Instance.new(className)
@@ -3045,7 +2951,6 @@ zenith
 	end
 
 	local resolvedWordAssets = {
-		WordleLogo = resolveWordAsset("WordleLogo", "wordle-logo.png"),
 		SavedIcon = resolveWordAsset("SavedIcon", "saved-word.png"),
 		SettingsIcon = resolveWordAsset("SettingsIcon", "settings-icon.png"),
 	}
@@ -3145,30 +3050,6 @@ zenith
 		ZIndex = 7,
 	})
 
-	local wordleLogo = create("ImageLabel", {
-		Name = "WordleLogo",
-		AnchorPoint = Vector2.new(0, 0.5),
-		Position = UDim2.new(0, 69, 0.5, 0),
-		Size = UDim2.fromOffset(24, 24),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		Image = resolvedWordAssets.WordleLogo,
-		ScaleType = Enum.ScaleType.Fit,
-		Visible = resolvedWordAssets.WordleLogo ~= "",
-		ZIndex = 7,
-	}, header)
-	WordHelper.references.WordleLogoFallback = makeText(header, {
-		Name = "WordleLogoFallback",
-		Position = UDim2.fromOffset(70, 0),
-		Size = UDim2.fromOffset(23, Config.HeaderHeight),
-		Font = BOLD_FONT,
-		Text = "W",
-		TextColor3 = Config.Secondary,
-		TextSize = 16,
-		TextXAlignment = Enum.TextXAlignment.Center,
-		Visible = not wordleLogo.Visible,
-		ZIndex = 7,
-	})
 	WordHelper.references.ProductLabel = makeText(header, {
 		Name = "ProductLabel",
 		Position = UDim2.fromOffset(99, 0),
@@ -3359,7 +3240,9 @@ zenith
 	usedChip.TextXAlignment = Enum.TextXAlignment.Left
 	create("UIPadding", {
 		PaddingLeft = UDim.new(0, 6),
-		PaddingRight = UDim.new(0, 19),
+		-- Reserve a clear gutter before the save glyph instead of letting the
+		-- changing Used count visually run into it.
+		PaddingRight = UDim.new(0, 30),
 	}, usedChip)
 	local savedIcon = create("ImageLabel", {
 		Name = "SavedWordIcon",
@@ -3705,10 +3588,79 @@ zenith
 	addStroke(wpmValue, Config.Line, 0.82, 1)
 	addStroke(wpmPlus, Config.Line, 0.82, 1)
 
-	makeToggleSetting(3, "definitions", "Enable Definitions", "Cambridge Definitions")
-	makeToggleSetting(4, "allResults", "Enable All Results", "Might be laggy")
-	makeToggleSetting(5, "autoDetect", "Auto Detect Game Input", "Only watches local, active input")
-	makeToggleSetting(6, "hideUsed", "Hide Used Words", "Avoid repeated submissions")
+	makeToggleSetting(3, "legitAutoType", "Legit Auto Type", "Random speed inside the Min-Max range")
+	local function makeLegitWPMSetting(order, name, title, valueKey)
+		local row = create("Frame", {
+			Name = name,
+			LayoutOrder = order,
+			Size = UDim2.new(1, -4, 0, 48),
+			BackgroundColor3 = Config.Row,
+			BackgroundTransparency = 0.14,
+			BorderSizePixel = 0,
+			ZIndex = 23,
+		}, settingsList)
+		addStroke(row, Config.Line, 0.84, 1)
+		makeText(row, {
+			Name = "Label",
+			Position = UDim2.fromOffset(9, 0),
+			Size = UDim2.new(0.54, -9, 1, 0),
+			Font = MEDIUM_FONT,
+			Text = title,
+			TextColor3 = Config.White,
+			TextSize = 11,
+			ZIndex = 24,
+		})
+		local minus = makeButton(row, {
+			Name = name .. "Minus",
+			Position = UDim2.new(0.54, 0, 0.5, -11),
+			Size = UDim2.fromOffset(25, 22),
+			BackgroundColor3 = Config.Panel,
+			BackgroundTransparency = 0.1,
+			Font = BOLD_FONT,
+			Text = "-",
+			TextColor3 = Config.Secondary,
+			TextSize = 13,
+			ZIndex = 24,
+		})
+		local value = makeText(row, {
+			Name = name .. "Value",
+			Position = UDim2.new(0.54, 29, 0.5, -11),
+			Size = UDim2.new(0.46, -67, 0, 22),
+			BackgroundColor3 = Config.Panel,
+			BackgroundTransparency = 0.1,
+			Font = BOLD_FONT,
+			Text = tostring(Settings[valueKey]),
+			TextColor3 = Config.White,
+			TextSize = 10,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			ZIndex = 24,
+		})
+		local plus = makeButton(row, {
+			Name = name .. "Plus",
+			AnchorPoint = Vector2.new(1, 0),
+			Position = UDim2.new(1, -7, 0.5, -11),
+			Size = UDim2.fromOffset(25, 22),
+			BackgroundColor3 = Config.Panel,
+			BackgroundTransparency = 0.1,
+			Font = BOLD_FONT,
+			Text = "+",
+			TextColor3 = Config.Secondary,
+			TextSize = 13,
+			ZIndex = 24,
+		})
+		addStroke(minus, Config.Line, 0.82, 1)
+		addStroke(value, Config.Line, 0.82, 1)
+		addStroke(plus, Config.Line, 0.82, 1)
+		return { row = row, minus = minus, value = value, plus = plus, key = valueKey }
+	end
+	local legitMinControls = makeLegitWPMSetting(4, "LegitMinWPM", "Minimum WPM", "legitMinWPM")
+	local legitMaxControls = makeLegitWPMSetting(5, "LegitMaxWPM", "Maximum WPM", "legitMaxWPM")
+
+	makeToggleSetting(6, "derivations", "Enable Derivations", "Adds uncommon forms such as yesterdayness and selfness")
+	makeToggleSetting(7, "definitions", "Enable Definitions", "Cambridge Definitions")
+	makeToggleSetting(8, "allResults", "Enable All Results", "Might be laggy")
+	makeToggleSetting(9, "autoDetect", "Auto Detect Game Input", "Only watches the active game's input")
+	makeToggleSetting(10, "hideUsed", "Hide Used Words", "Avoid repeated submissions")
 	local resetSettingsButton = makeButton(settingsPanel, {
 		Name = "ResetSettings",
 		AnchorPoint = Vector2.new(0, 1),
@@ -3734,6 +3686,12 @@ zenith
 		wpmValue.Text = tostring(Settings.wpm)
 		wpmMinus.TextColor3 = Settings.wpm <= Config.MinimumWPM and Config.Muted or Config.Secondary
 		wpmPlus.TextColor3 = Settings.wpm >= Config.MaximumWPM and Config.Muted or Config.Secondary
+		legitMinControls.value.Text = tostring(Settings.legitMinWPM)
+		legitMaxControls.value.Text = tostring(Settings.legitMaxWPM)
+		legitMinControls.minus.TextColor3 = Settings.legitMinWPM <= Config.MinimumWPM and Config.Muted or Config.Secondary
+		legitMinControls.plus.TextColor3 = Settings.legitMinWPM >= Config.MaximumWPM and Config.Muted or Config.Secondary
+		legitMaxControls.minus.TextColor3 = Settings.legitMaxWPM <= Config.MinimumWPM and Config.Muted or Config.Secondary
+		legitMaxControls.plus.TextColor3 = Settings.legitMaxWPM >= Config.MaximumWPM and Config.Muted or Config.Secondary
 	end
 	updateSettingsControls()
 
@@ -3762,7 +3720,8 @@ zenith
 	WordHelper.references.WPMValue = wpmValue
 	WordHelper.references.WPMMinus = wpmMinus
 	WordHelper.references.WPMPlus = wpmPlus
-	WordHelper.references.WordleLogo = wordleLogo
+	WordHelper.references.LegitMinWPM = legitMinControls
+	WordHelper.references.LegitMaxWPM = legitMaxControls
 	WordHelper.references.UsedChip = usedChip
 	WordHelper.references.SavedIcon = savedIcon
 
@@ -3829,10 +3788,25 @@ zenith
 	end
 
 	local function installCleanWords(words)
-		WordHelper.words = words
-		WordHelper.firstLetterBuckets, WordHelper.prefixBuckets = buildBuckets(words)
+		local merged, seen = {}, {}
+		for _, word in ipairs(words) do
+			if not seen[word] then
+				seen[word] = true
+				table.insert(merged, word)
+			end
+		end
+		for _, word in ipairs(WordHelper.derivedVocabulary) do
+			if not seen[word] then
+				seen[word] = true
+				table.insert(merged, word)
+			end
+		end
+		table.sort(merged)
+		WordHelper.baseWords = words
+		WordHelper.words = merged
+		WordHelper.firstLetterBuckets, WordHelper.prefixBuckets = buildBuckets(merged)
 		local wordSet = {}
-		for index, word in ipairs(words) do
+		for index, word in ipairs(merged) do
 			if index % 5000 == 0 then
 				if WordHelper.destroyed then return end
 				task.wait()
@@ -3840,16 +3814,9 @@ zenith
 			wordSet[word] = true
 		end
 		WordHelper.wordSet = wordSet
-		local added = false
 		for word in pairs(WordHelper.pendingUsedWords) do
-			if wordSet[word] and not WordHelper.usedWords[word] then
-				WordHelper.usedWords[word] = true
-				WordHelper.usedCount = WordHelper.usedCount + 1
-				WordHelper.pendingUsedWords[word] = nil
-				added = true
-			end
+			if wordSet[word] then WordHelper.pendingUsedWords[word] = nil end
 		end
-		if added then updateUsedChip() end
 	end
 
 	local function disconnectRows()
@@ -4182,7 +4149,8 @@ zenith
 		if containsMode then
 			-- "Contiene": word-battle style games give a syllable that can be anywhere.
 			for _, word in ipairs(WordHelper.words) do
-				if (not Settings.hideUsed or not used[word]) and string.find(word, query, 1, true) then
+				if (Settings.derivations or not WordHelper.derivedWordSet[word])
+					and (not Settings.hideUsed or not used[word]) and string.find(word, query, 1, true) then
 					table.insert(matches, word)
 				end
 			end
@@ -4194,7 +4162,8 @@ zenith
 				source = WordHelper.prefixBuckets[string.sub(query, 1, 2)] or {}
 			end
 			for _, word in ipairs(source) do
-				if (not Settings.hideUsed or not used[word]) and string.sub(word, 1, #query) == query then
+				if (Settings.derivations or not WordHelper.derivedWordSet[word])
+					and (not Settings.hideUsed or not used[word]) and string.sub(word, 1, #query) == query then
 					table.insert(matches, word)
 				end
 			end
@@ -4330,7 +4299,7 @@ zenith
 			setStatus("Auto Type desactivado", Config.Muted)
 		elseif key == "definitions" then
 			updateDefinitionLayout()
-		elseif key == "allResults" or key == "hideUsed" then
+		elseif key == "allResults" or key == "hideUsed" or key == "derivations" then
 			scheduleRefresh()
 		elseif key == "autoDetect" then
 			cancelAutomaticTyping(true)
@@ -4339,6 +4308,10 @@ zenith
 			else
 				WordHelper.passiveBuffer = ""
 				WordHelper.lastVisualWord = ""
+				WordHelper.lastLetterState = ""
+				WordHelper.lastLetterVisualCandidate = ""
+				WordHelper.lastLetterVisualCandidateCount = 0
+				WordHelper.lastLetterPacketAt = 0
 				detectionLabel.Text = "Automatic detection disabled"
 			end
 		end
@@ -4347,6 +4320,7 @@ zenith
 	function WordHelper:SetSetting(key, value)
 		if self.destroyed or DEFAULT_SETTINGS[key] == nil then return false end
 		if key == "wpm" then return self:SetWPM(value) end
+		if key == "legitMinWPM" or key == "legitMaxWPM" then return self:SetLegitWPM(key, value) end
 		if type(DEFAULT_SETTINGS[key]) ~= "boolean" then return false end
 		Settings[key] = value == true
 		applySettingChange(key)
@@ -4362,6 +4336,25 @@ zenith
 			Config.MinimumWPM,
 			Config.MaximumWPM
 		)
+		updateSettingsControls()
+		return true
+	end
+
+	function WordHelper:SetLegitWPM(key, value)
+		if self.destroyed or (key ~= "legitMinWPM" and key ~= "legitMaxWPM") then return false end
+		value = tonumber(value)
+		if not value then return false end
+		value = math.clamp(
+			math.floor(value / Config.LegitWPMIncrement + 0.5) * Config.LegitWPMIncrement,
+			Config.MinimumWPM,
+			Config.MaximumWPM
+		)
+		Settings[key] = value
+		if key == "legitMinWPM" and Settings.legitMaxWPM < value then
+			Settings.legitMaxWPM = value
+		elseif key == "legitMaxWPM" and Settings.legitMinWPM > value then
+			Settings.legitMinWPM = value
+		end
 		updateSettingsControls()
 		return true
 	end
@@ -4499,6 +4492,12 @@ zenith
 
 	local function bindFocusedTextBox(textBox)
 		if not Settings.autoDetect or isRobloxMenuOpen() or WordHelper.isAutoTyping then return end
+		-- Last Letter is driven by Overbar.Frame.Keyboard and CurrentWord, never by
+		-- Roblox chat or an arbitrary focused menu TextBox.
+		if currentPlaceId == LAST_LETTER_PLACE_ID and textBox ~= searchBox then
+			disconnectFocusedTextBox()
+			return
+		end
 		if textBox == searchBox then
 			disconnectFocusedTextBox()
 			return
@@ -4655,6 +4654,18 @@ zenith
 	end)
 	connect(wpmPlus.Activated, function()
 		WordHelper:SetWPM(Settings.wpm + Config.WPMIncrement)
+	end)
+	connect(legitMinControls.minus.Activated, function()
+		WordHelper:SetLegitWPM("legitMinWPM", Settings.legitMinWPM - Config.LegitWPMIncrement)
+	end)
+	connect(legitMinControls.plus.Activated, function()
+		WordHelper:SetLegitWPM("legitMinWPM", Settings.legitMinWPM + Config.LegitWPMIncrement)
+	end)
+	connect(legitMaxControls.minus.Activated, function()
+		WordHelper:SetLegitWPM("legitMaxWPM", Settings.legitMaxWPM - Config.LegitWPMIncrement)
+	end)
+	connect(legitMaxControls.plus.Activated, function()
+		WordHelper:SetLegitWPM("legitMaxWPM", Settings.legitMaxWPM + Config.LegitWPMIncrement)
 	end)
 	connect(resetSettingsButton.Activated, function()
 		for key, value in pairs(DEFAULT_SETTINGS) do Settings[key] = value end
@@ -4837,18 +4848,20 @@ zenith
 
 	-- Shared buffer for input that never reaches a real TextBox.
 	-- action: a single letter, "back" (delete one) or "end" (space/enter = new word).
-	-- A submitted dictionary word is remembered so it is hidden next time
+	-- Every submitted match word is remembered so it is hidden if suggested later
 	-- (most word games forbid repeating a word).
 	markUsed = function(word)
 		word = normalizeLetters(word)
 		if #word < 2 or WordHelper.usedWords[word] then return end
-		if not (WordHelper.wordSet and WordHelper.wordSet[word]) then
-			-- Keep early submissions until the full dictionary replaces the fallback.
-			WordHelper.pendingUsedWords[word] = true
-			return
-		end
-		WordHelper.pendingUsedWords[word] = nil
+		-- Match history is authoritative even when the downloaded dictionary does
+		-- not contain a valid game word. Remember it now; if a later dictionary
+		-- load adds it, Hide Used already excludes it without double-counting.
 		WordHelper.usedWords[word] = true
+		if not (WordHelper.wordSet and WordHelper.wordSet[word]) then
+			WordHelper.pendingUsedWords[word] = true
+		else
+			WordHelper.pendingUsedWords[word] = nil
+		end
 		WordHelper.usedCount = WordHelper.usedCount + 1
 		updateUsedChip()
 	end
@@ -4893,6 +4906,19 @@ zenith
 		return true
 	end
 
+	WordHelper.RememberLastLetterWord = function(word)
+		word = normalizeLetters(word)
+		if currentPlaceId ~= LAST_LETTER_PLACE_ID or #word < 2 then return false end
+		markUsed(word)
+		local history = WordHelper.matchWordHistory["last-letter"]
+		if not history then
+			history = {}
+			WordHelper.matchWordHistory["last-letter"] = history
+		end
+		history[word] = true
+		return true
+	end
+
 	local function passiveType(action, resetSeconds)
 		if not Settings.autoDetect or WordHelper.isAutoTyping or isRobloxMenuOpen() then return end
 		-- In the confirmed two-player game, consumed physical keys and world-space
@@ -4915,7 +4941,11 @@ zenith
 				WordHelper.passiveBuffer = ""
 				applyDetectedQuery(WordHelper.turnPrompt, "turn", true)
 			else
-				markUsed(WordHelper.passiveBuffer)
+				if currentPlaceId == LAST_LETTER_PLACE_ID then
+					WordHelper.RememberLastLetterWord(WordHelper.passiveBuffer)
+				else
+					markUsed(WordHelper.passiveBuffer)
+				end
 				WordHelper.passiveBuffer = ""
 				applyDetectedQuery("", "passive", true)
 			end
@@ -5052,9 +5082,9 @@ zenith
 			end
 		elseif eventType == "wronganswer" then
 			WordHelper.lastTurnEventAt = os.clock()
-			-- Remember complete attempted dictionary words for either participant as
-			-- well. Invalid fragments do not enter usedWords, but a server-reported
-			-- AlreadyUsed word is immediately excluded from future suggestions.
+			-- Remember complete attempts for either participant as well. Even a word
+			-- absent from the local dictionary stays in history, so a later dictionary
+			-- refresh cannot offer that same server-seen attempt again.
 			rememberMatchWord(owner, WordHelper.matchCurrentWords[matchParticipantKey(owner)])
 			if owner ~= localPlayer then return end
 			cancelAutomaticTyping(true)
@@ -5160,10 +5190,9 @@ zenith
 			typingGuiEvent = WordHelper.wordBattleTypingGui ~= nil
 				and textBox:IsDescendantOf(WordHelper.wordBattleTypingGui)
 		end)
-		local verifiedGameKeyboard = (currentPlaceId == WORD_BATTLE_PLACE_ID
+		local verifiedGameKeyboard = currentPlaceId == WORD_BATTLE_PLACE_ID
 			and WordHelper.localTurn == true and WordHelper.autoTypeMethod == "game-keyboard"
-			and typingGuiEvent) or (currentPlaceId == LAST_LETTER_PLACE_ID
-			and WordHelper.autoTypeMethod == "last-letter-keyboard" and isGameTextBox(textBox))
+			and typingGuiEvent
 		if WordHelper.isAutoTyping and not verifiedGameKeyboard then
 			cancelAutomaticTyping(true)
 		elseif not WordHelper.isAutoTyping then
@@ -5177,10 +5206,9 @@ zenith
 			typingGuiEvent = WordHelper.wordBattleTypingGui ~= nil
 				and textBox:IsDescendantOf(WordHelper.wordBattleTypingGui)
 		end)
-		local verifiedGameKeyboard = (currentPlaceId == WORD_BATTLE_PLACE_ID
+		local verifiedGameKeyboard = currentPlaceId == WORD_BATTLE_PLACE_ID
 			and WordHelper.localTurn == true and WordHelper.autoTypeMethod == "game-keyboard"
-			and typingGuiEvent) or (currentPlaceId == LAST_LETTER_PLACE_ID
-			and WordHelper.autoTypeMethod == "last-letter-keyboard" and isGameTextBox(textBox))
+			and typingGuiEvent
 		if WordHelper.isAutoTyping and not verifiedGameKeyboard then cancelAutomaticTyping(true) end
 		if textBox == WordHelper.activeExternalTextBox then
 			disconnectFocusedTextBox()
@@ -5324,7 +5352,7 @@ zenith
 	-- Custom on-screen keyboards: games that draw their own A-Z buttons instead of
 	-- using a TextBox. Each key press is read from the button label when clicked.
 	local BACK_WORDS = { "back", "del", "borrar", "⌫", "←", "<-" }
-	local ENTER_WORDS = { "enter", "submit", "send", "enviar", "ok", "go", "✓", "✔", "space", "espacio" }
+	local ENTER_WORDS = { "enter", "done", "submit", "send", "enviar", "ok", "go", "✓", "✔", "space", "espacio" }
 
 	local function buttonKeyLabel(button)
 		local text = ""
@@ -5373,6 +5401,18 @@ zenith
 	local function bindKeyboardButton(object)
 		if WordHelper.keyboardButtons[object] or object:IsDescendantOf(screenGui) then
 			return
+		end
+		if currentPlaceId == LAST_LETTER_PLACE_ID then
+			local exactKeyboard = WordHelper.lastLetterKeyboardRoot
+			local insideExactKeyboard = false
+			pcall(function()
+				insideExactKeyboard = exactKeyboard ~= nil and object:IsDescendantOf(exactKeyboard)
+			end)
+			if not insideExactKeyboard then return end
+		elseif currentPlaceId == WORD_BATTLE_PLACE_ID and WordHelper.wordBattleTypingGui then
+			local insideTypingGui = false
+			pcall(function() insideTypingGui = object:IsDescendantOf(WordHelper.wordBattleTypingGui) end)
+			if not insideTypingGui then return end
 		end
 		local isButton = false
 		pcall(function()
@@ -5522,77 +5562,150 @@ zenith
 		end
 	end
 
+	WordHelper.FindLastLetterGuiRoots = function()
+		if currentPlaceId ~= LAST_LETTER_PLACE_ID then return nil, nil end
+		-- These are the two hierarchies required by the game's own modules. Do not
+		-- fall back to similarly named descendants from menus, results, or chat.
+		local overbar = playerGui:FindFirstChild("Overbar")
+		local overbarFrame = overbar and overbar:FindFirstChild("Frame")
+		local keyboard = overbarFrame and overbarFrame:FindFirstChild("Keyboard")
+		local inGame = playerGui:FindFirstChild("InGame")
+		local inGameFrame = inGame and inGame:FindFirstChild("Frame")
+		local currentWord = inGameFrame and inGameFrame:FindFirstChild("CurrentWord")
+		WordHelper.lastLetterKeyboardRoot = keyboard
+		WordHelper.lastLetterCurrentWordRoot = currentWord
+		return keyboard, currentWord
+	end
+
 	local function readLastLetterVisibleWord()
 		if currentPlaceId ~= LAST_LETTER_PLACE_ID then return nil end
-		local inGame = playerGui:FindFirstChild("InGame")
-		local root = inGame and inGame:FindFirstChild("CurrentWord", true)
-		if not root then root = playerGui:FindFirstChild("CurrentWord", true) end
+		local _, root = WordHelper.FindLastLetterGuiRoots()
 		if not root or not guiObjectVisible(root, playerGui) then return nil end
+		local rootText = visibleText(root)
+		if #rootText >= 1 and #rootText <= 32 then return rootText end
 
+		-- InGame.AddLetter clones one direct Case per logical character. Preserve
+		-- child/insertion order; sorting LayoutOrder or animated X positions caused
+		-- transient reversed words while RotateLetters was moving cases.
 		local letters, wholeWords = {}, {}
-		local candidates = { root }
-		local ok, descendants = pcall(function() return root:GetDescendants() end)
-		if ok then
-			for _, object in ipairs(descendants) do table.insert(candidates, object) end
-		end
-		for _, object in ipairs(candidates) do
-			if guiObjectVisible(object, root) then
-				local text = visibleText(object)
+		local children = {}
+		pcall(function() children = root:GetChildren() end)
+		for childIndex, child in ipairs(children) do
+			if guiObjectVisible(child, root) then
+				local text = visibleText(child)
+				if text == "" then
+					local descendants = {}
+					pcall(function() descendants = child:GetDescendants() end)
+					for _, object in ipairs(descendants) do
+						local candidate = guiObjectVisible(object, child) and visibleText(object) or ""
+						if #candidate == 1 then
+							text = candidate
+							break
+						elseif #candidate >= 2 and #candidate <= 32 then
+							table.insert(wholeWords, candidate)
+						end
+					end
+				end
 				if #text == 1 then
-					local layoutOrder, position = 0, Vector2.new(0, 0)
-					pcall(function()
-						layoutOrder = object.LayoutOrder
-						position = object.AbsolutePosition
-					end)
-					table.insert(letters, { text = text, order = layoutOrder, position = position })
+					table.insert(letters, { text = text, index = childIndex })
 				elseif #text >= 2 and #text <= 32 then
-					local name = string.lower(tostring(object.Name or ""))
-					local score = (string.find(name, "word", 1, true) and 4 or 0)
-						+ (string.find(name, "text", 1, true) and 2 or 0)
-						+ (object == root and 8 or 0)
-					table.insert(wholeWords, { text = text, score = score })
+					table.insert(wholeWords, text)
 				end
 			end
 		end
 		if #letters > 0 then
-			table.sort(letters, function(a, b)
-				if a.order ~= b.order then return a.order < b.order end
-				if math.abs(a.position.Y - b.position.Y) > 3 then return a.position.Y < b.position.Y end
-				return a.position.X < b.position.X
-			end)
+			table.sort(letters, function(a, b) return a.index < b.index end)
 			local output = table.create(#letters)
 			for index, record in ipairs(letters) do output[index] = record.text end
 			return table.concat(output)
 		end
-		table.sort(wholeWords, function(a, b)
-			if a.score ~= b.score then return a.score > b.score end
-			return #a.text > #b.text
-		end)
-		return wholeWords[1] and wholeWords[1].text or ""
+		if #wholeWords > 0 then
+			table.sort(wholeWords, function(a, b) return #a > #b end)
+			return wholeWords[1]
+		end
+		return ""
+	end
+
+	WordHelper.ApplyLastLetterState = function(candidate, source, operation)
+		if currentPlaceId ~= LAST_LETTER_PLACE_ID then return false end
+		candidate = normalizeLetters(candidate)
+		local now = os.clock()
+		local current = normalizeLetters(WordHelper.lastLetterState)
+		local fromPacket = source == "remote"
+
+		if fromPacket then
+			WordHelper.lastLetterPacketAt = now
+			WordHelper.lastRemoteTyping = now
+		else
+			-- The namecall hook queues before the game's callback can repaint. Let the
+			-- ordered packet drain first so one locally rendered key is never appended
+			-- a second time when its deferred observer runs.
+			if WordHelper.remoteHook and (WordHelper.remoteHook.pendingCount or 0) > 0 then return false end
+			if candidate == WordHelper.lastLetterVisualCandidate then
+				WordHelper.lastLetterVisualCandidateCount = WordHelper.lastLetterVisualCandidateCount + 1
+			else
+				WordHelper.lastLetterVisualCandidate = candidate
+				WordHelper.lastLetterVisualCandidateCount = 1
+			end
+			if candidate == current then
+				WordHelper.lastVisualWord = candidate
+				WordHelper.lastVisualUpdate = now
+				return true
+			end
+
+			local extension = current == "" or string.sub(candidate, 1, #current) == current
+			local contraction = candidate ~= "" and string.sub(current, 1, #candidate) == candidate
+			local recentBackspace = WordHelper.lastTypedAction == "back"
+				and now - WordHelper.lastTypingActivity <= 1
+			-- An ordered packet state is newer than tweening UI. A visual frame may
+			-- confirm it, but cannot overwrite it with a stale prefix/reversal.
+			if now - WordHelper.lastLetterPacketAt <= 0.75 and candidate ~= current then
+				return false
+			end
+			-- Prefix growth is monotonic and can stay fluid. Shrinks need a proven
+			-- backspace; resets/reorders must survive two consecutive polls.
+			if not extension and not (contraction and recentBackspace)
+				and WordHelper.lastLetterVisualCandidateCount < 2 then
+				return false
+			end
+		end
+
+		if candidate ~= current then
+			local extension = current == "" or string.sub(candidate, 1, #current) == current
+			local contraction = candidate ~= "" and string.sub(current, 1, #candidate) == candidate
+			local recentBackspace = operation == "back" or (WordHelper.lastTypedAction == "back"
+				and now - WordHelper.lastTypingActivity <= 1)
+			-- A completed word disappears when the next first letter/empty round is
+			-- rendered. This records words from either player, while ordinary edits do
+			-- not inflate Used.
+			if #current >= 2 and not extension and not (contraction and recentBackspace) then
+				WordHelper.RememberLastLetterWord(current)
+			end
+			WordHelper.lastLetterState = candidate
+			WordHelper.lastLetterStateAt = now
+			WordHelper.passiveBuffer = candidate
+			WordHelper.lastPassiveInput = now
+			if not WordHelper.isAutoTyping then
+				applyDetectedQuery(candidate, fromPacket and "remote" or "visual", true)
+			end
+		end
+		if not fromPacket then
+			WordHelper.lastVisualWord = candidate
+			WordHelper.lastVisualUpdate = now
+		end
+		return true
 	end
 
 	local function pollVisibleGameWord()
 		local word = readLastLetterVisibleWord()
 		if word == nil then
-			if currentPlaceId == LAST_LETTER_PLACE_ID and WordHelper.lastVisualWord ~= ""
+			if currentPlaceId == LAST_LETTER_PLACE_ID and WordHelper.lastLetterState ~= ""
 				and os.clock() - WordHelper.lastVisualUpdate > 0.5 then
-				WordHelper.lastVisualWord = ""
-				WordHelper.passiveBuffer = ""
-				applyDetectedQuery("", "visual", true)
+				WordHelper.ApplyLastLetterState("", "visual", "reset")
 			end
 			return
 		end
-		if word == WordHelper.lastVisualWord then return end
-		local now, previous = os.clock(), WordHelper.lastVisualWord
-		WordHelper.lastVisualWord = word
-		WordHelper.lastVisualUpdate = now
-		if previous ~= "" and WordHelper.lastTypedAction == "end"
-			and now - WordHelper.lastTypingActivity <= 1 then
-			markUsed(previous)
-		end
-		WordHelper.passiveBuffer = word
-		WordHelper.lastPassiveInput = now
-		applyDetectedQuery(word, "visual", true)
+		WordHelper.ApplyLastLetterState(word, "visual", "display")
 	end
 
 	WordHelper.ReadVisibleGameWord = readLastLetterVisibleWord
@@ -5604,72 +5717,105 @@ zenith
 
 	-- ===== Isolated game-remote observation (executor only) =====
 	-- Word Battle accepts exactly (session UUID, boolean, character) on its dynamic
-	-- match remote. Last Letter accepts only the exact Packet.RemoteEvent path, and
-	-- decoded packet text must corroborate the user's most recent local key.
-	local function bufferStrings(value)
-		local output, seen = {}, {}
+	-- match remote. Last Letter observes only the exact Packet.RemoteEvent path.
+	-- Decode only Last Letter's four observed, declared packet shapes. This is an
+	-- observer, not a serializer: typing still goes through InputService/buttons.
+	-- A buffer can batch several frames (for example 0x0A followed by 0x09), so
+	-- walk it in order instead of treating the first byte as the whole call.
+	WordHelper.DecodeLastLetterPacket = function(value)
+		local records = {}
+		if typeof(value) ~= "buffer" then return records end
 		local ok, raw = pcall(buffer.tostring, value)
-		if not ok or type(raw) ~= "string" then return output end
-		local size = #raw
-		local function addCandidate(startIndex, length)
-			if length < 1 or length > 32 or startIndex < 1 or startIndex + length - 1 > size then return end
-			local text = string.sub(raw, startIndex, startIndex + length - 1)
-			if string.match(text, "^[%a ]+$") and not seen[text] then
-				seen[text] = true
-				table.insert(output, text)
-			end
-		end
-		-- Packet libraries seen in the supplied traces use U8 for String and U16
-		-- for StringLong. Scan both little- and big-endian U16 without assuming the
-		-- packet's leading numeric ID.
-		for index = 1, size do
-			local first = string.byte(raw, index)
-			addCandidate(index + 1, first)
-			if index < size then
-				local second = string.byte(raw, index + 1)
-				addCandidate(index + 2, first + second * 256)
-				addCandidate(index + 2, first * 256 + second)
-			end
-		end
-		return output
-	end
-
-	local function collectRemoteValues(arguments)
-		local strings, hasTrue, hasFalse, fromBuffer = {}, false, false, false
-		local function visit(value, depth)
-			local kind = typeof(value)
-			if kind == "string" then
-				table.insert(strings, value)
-			elseif kind == "boolean" then
-				if value then
-					hasTrue = true
+		if not ok or type(raw) ~= "string" then return records end
+		local index, size = 1, #raw
+		while index <= size do
+			local packetId = string.byte(raw, index)
+			if packetId == 0x09 and index + 5 <= size
+				and string.byte(raw, index + 1) == 0x01
+				and string.byte(raw, index + 2) == 0x33
+				and (string.byte(raw, index + 3) == 0x00 or string.byte(raw, index + 3) == 0x01)
+				and string.byte(raw, index + 4) == 0x0B then
+				local length = string.byte(raw, index + 5)
+				local last = index + 5 + length
+				local text = last <= size and string.sub(raw, index + 6, last) or ""
+				if length >= 1 and length <= 32 and string.match(text, "^[A-Za-z]+$") then
+					table.insert(records, {
+						kind = "update",
+						adding = string.byte(raw, index + 3) == 0x01,
+						text = string.lower(text),
+					})
+					index = last + 1
 				else
-					hasFalse = true
+					index = index + 1
 				end
-			elseif kind == "buffer" then
-				fromBuffer = true
-				for _, text in ipairs(bufferStrings(value)) do
-					table.insert(strings, text)
+			elseif packetId == 0x0E and index + 3 <= size and string.byte(raw, index + 1) >= 0x80 then
+				local length = string.byte(raw, index + 2) + string.byte(raw, index + 3) * 256
+				local last = index + 3 + length
+				local text = last <= size and string.sub(raw, index + 4, last) or ""
+				if length >= 2 and length <= 32 and string.match(text, "^[A-Za-z]+$") then
+					table.insert(records, { kind = "submit", text = string.lower(text) })
+					index = last + 1
+				else
+					index = index + 1
 				end
-			elseif kind == "table" and depth < 2 then
-				for _, nested in pairs(value) do
-					visit(nested, depth + 1)
+			elseif packetId == 0x0F and index + 2 <= size and string.byte(raw, index + 1) >= 0x80 then
+				local length = string.byte(raw, index + 2)
+				local last = index + 2 + length
+				local text = last <= size and string.sub(raw, index + 3, last) or ""
+				if length == 1 and string.match(text, "^[A-Za-z]$") then
+					table.insert(records, { kind = "first", text = string.lower(text) })
+					index = last + 1
+				else
+					index = index + 1
+				end
+			else
+				index = index + 1
+			end
+		end
+		return records
+	end
+
+	WordHelper.ProcessLastLetterPacket = function(arguments, callSequence)
+		if currentPlaceId ~= LAST_LETTER_PLACE_ID or type(arguments) ~= "table" then return false end
+		if callSequence then
+			if callSequence <= WordHelper.lastLetterPacketSequence then return false end
+			WordHelper.lastLetterPacketSequence = callSequence
+		end
+		local handled = false
+		for argumentIndex = 1, arguments.n or #arguments do
+			for _, record in ipairs(WordHelper.DecodeLastLetterPacket(arguments[argumentIndex])) do
+				handled = true
+				if record.kind == "update" then
+					if record.adding then
+						local current = normalizeLetters(WordHelper.lastLetterState)
+						local expected
+						if current == "" then
+							local visible = normalizeLetters(readLastLetterVisibleWord() or "")
+							expected = #visible >= 2 and string.sub(visible, -1) == record.text
+								and visible or (visible .. record.text)
+						else
+							expected = current .. record.text
+						end
+						expected = string.sub(expected, -32)
+						WordHelper.lastTypedAction = record.text
+						WordHelper.lastTypingActivity = os.clock()
+						WordHelper.ApplyLastLetterState(expected, "remote", "add")
+					else
+						WordHelper.lastTypedAction = "back"
+						WordHelper.lastTypingActivity = os.clock()
+						WordHelper.ApplyLastLetterState(record.text, "remote", "back")
+					end
+				elseif record.kind == "first" then
+					WordHelper.ApplyLastLetterState(record.text, "remote", "first")
+				elseif record.kind == "submit" then
+					WordHelper.RememberLastLetterWord(record.text)
+					WordHelper.lastTypedAction = "end"
+					WordHelper.lastTypingActivity = os.clock()
+					WordHelper.lastSubmitAt = WordHelper.lastTypingActivity
 				end
 			end
 		end
-		for index = 1, arguments.n do
-			visit(arguments[index], 0)
-		end
-		return strings, hasTrue, hasFalse, fromBuffer
-	end
-
-	local function remoteSetText(text)
-		local fragment = string.match(string.lower(text), "([a-z]+)$") or ""
-		local now = os.clock()
-		WordHelper.passiveBuffer = fragment
-		WordHelper.lastPassiveInput = now
-		WordHelper.lastRemoteTyping = now
-		applyDetectedQuery(fragment, "remote", true)
+		return handled
 	end
 
 	local function instancePath(instance)
@@ -5806,7 +5952,7 @@ zenith
 		return true
 	end
 
-	local function onRemoteCall(remote, method, arguments)
+	local function onRemoteCall(remote, method, arguments, callSequence)
 		if WordHelper.destroyed or not Settings.autoDetect or WordHelper.robloxMenuOpen then return end
 
 		if activeGameAdapter == "word-battle" then
@@ -5817,31 +5963,12 @@ zenith
 		end
 		if activeGameAdapter ~= "last-letter" then return end
 
-		-- Last Letter owns only ReplicatedStorage.Modules.Packet.RemoteEvent. The
-		-- packet channel carries unrelated systems too, so decoded text is accepted
-		-- only when it exactly corroborates the local key that was just pressed.
+		-- Last Letter owns only ReplicatedStorage.Modules.Packet.RemoteEvent. Decode
+		-- its observed ordered frames for state, but never fabricate a packet.
 		if method ~= "FireServer"
 			or instancePath(remote) ~= "ReplicatedStorage.Modules.Packet.RemoteEvent" then return end
 		WordHelper.lastLetterPacketRemote = remote
-		if WordHelper.isAutoTyping or os.clock() < WordHelper.suppressGeneratedUntil then return end
-		local strings = collectRemoteValues(arguments)
-		if #strings == 0 then return end
-		local now = os.clock()
-		local recentTyping = now - WordHelper.lastTypingActivity <= Config.TypingActivitySeconds
-		local lastAction = WordHelper.lastTypedAction
-		for _, raw in ipairs(strings) do
-			local text = string.lower(raw)
-			if recentTyping and string.match(text, "^[a-z]$") and lastAction == text then
-				WordHelper.lastRemoteTyping = now
-				passiveType(text, 6)
-				return
-			elseif recentTyping and #text >= 2 and #text <= 32 and string.match(text, "^[a-z]+$")
-				and lastAction ~= "back" and lastAction ~= "end" and string.sub(text, -1) == lastAction then
-				WordHelper.lastRemoteTyping = now
-				remoteSetText(text)
-				return
-			end
-		end
+		WordHelper.ProcessLastLetterPacket(arguments, callSequence)
 	end
 
 	-- Exposed for deterministic adapters/tests; it only observes arguments and never
@@ -5850,7 +5977,7 @@ zenith
 
 	do
 		local remoteHookKey = activeGameAdapter == "word-battle" and "ZenithWordBattleRemoteHookV1"
-			or (activeGameAdapter == "last-letter" and "ZenithLastLetterRemoteHookV1" or nil)
+			or (activeGameAdapter == "last-letter" and "ZenithLastLetterRemoteHookV2" or nil)
 		local remoteHook = remoteHookKey and sharedEnvironment[remoteHookKey] or nil
 		if remoteHookKey and type(remoteHook) ~= "table" then
 			-- Keep installation in a child function. Delta compiles executor chunks
@@ -5868,12 +5995,32 @@ zenith
 				local installed = pcall(function()
 					local original
 					original = hookMetamethod(game, "__namecall", newCClosure(function(self, ...)
-						local handler = state.handler
-						if handler then
+						if state.handler then
 							local method = getNamecallMethod()
 							if method == "FireServer" or method == "InvokeServer" or method == "Fire" then
-								local arguments = table.pack(...)
-								task.defer(pcall, handler, self, method, arguments)
+								state.sequence = (state.sequence or 0) + 1
+								state.pendingCount = (state.pendingCount or 0) + 1
+								state.queue = state.queue or {}
+								table.insert(state.queue, {
+									remote = self,
+									method = method,
+									arguments = table.pack(...),
+									sequence = state.sequence,
+								})
+								if not state.draining then
+									state.draining = true
+									task.defer(function()
+										while #state.queue > 0 do
+											local call = table.remove(state.queue, 1)
+											local handler = state.handler
+											if handler then
+												pcall(handler, call.remote, call.method, call.arguments, call.sequence)
+											end
+											state.pendingCount = math.max(0, (state.pendingCount or 1) - 1)
+										end
+										state.draining = false
+									end)
+								end
 							end
 						end
 						return original(self, ...)
@@ -5886,19 +6033,22 @@ zenith
 		end
 		if type(remoteHook) == "table" then
 			remoteHook.adapter = activeGameAdapter
+			if activeGameAdapter == "last-letter" then
+				remoteHook.queue = {}
+				remoteHook.pendingCount = 0
+				remoteHook.draining = false
+			end
 			remoteHook.handler = onRemoteCall
 			WordHelper.remoteHook = remoteHook
 		end
-		WordHelper.exactRemoteHookActive = currentPlaceId == WORD_BATTLE_PLACE_ID and type(remoteHook) == "table"
+		WordHelper.exactRemoteHookActive = (currentPlaceId == WORD_BATTLE_PLACE_ID
+			or currentPlaceId == LAST_LETTER_PLACE_ID) and type(remoteHook) == "table"
 	end
 
-	-- The live game keeps its own input controls under PlayerGui.TypingSystemGui.
-	-- Scan only that small exact subtree even when the remote hook is available:
-	-- it gives a mid-turn launch a safe way to drive the real game keyboard rather
-	-- than assigning TextBox.Text (which never invokes the server protocol).
+	-- Bind only the authoritative keyboard hierarchy for each supported game.
+	-- This prevents chat, shop buttons, and stale result screens from becoming
+	-- typing sources merely because they contain a one-letter GuiButton.
 	if currentPlaceId == WORD_BATTLE_PLACE_ID then
-		-- UI discovery must never prevent the main window from loading if the game
-		-- replaces TypingSystemGui during an update.
 		pcall(function()
 			local function bindWordBattleTypingGui(object)
 				if not object or object.Name ~= "TypingSystemGui" then return end
@@ -5908,13 +6058,25 @@ zenith
 			bindWordBattleTypingGui(playerGui:FindFirstChild("TypingSystemGui", true))
 			connect(playerGui.DescendantAdded, bindWordBattleTypingGui)
 		end)
-	end
-
-	-- Avoid walking every Workspace descendant or binding every unrelated button
-	-- in the confirmed game. Other places retain the universal fallback scan.
-	if not WordHelper.exactRemoteHookActive then
+	elseif currentPlaceId == LAST_LETTER_PLACE_ID then
+		pcall(function()
+			local function bindLastLetterKeyboard()
+				local keyboard = WordHelper.FindLastLetterGuiRoots()
+				if keyboard then scanForKeyboards(keyboard, true) end
+			end
+			bindLastLetterKeyboard()
+			connect(playerGui.DescendantAdded, function(object)
+				if object.Name == "Keyboard" or object.Name == "CurrentWord"
+					or object.Name == "Overbar" or object.Name == "InGame" then
+					task.defer(bindLastLetterKeyboard)
+				end
+			end)
+		end)
+	else
+		-- Unsupported places retain the non-invasive universal TextBox/keyboard
+		-- fallback, but never gain either supported game's remote adapter.
 		scanForKeyboards(playerGui)
-		if currentPlaceId ~= WORD_BATTLE_PLACE_ID then scanForKeyboards(workspaceService) end
+		scanForKeyboards(workspaceService)
 	end
 
 	-- Keep late-stage helpers on the runtime table instead of adding locals to the
@@ -5940,6 +6102,57 @@ zenith
 				and guiObjectVisible(button, playerGui)
 		end)
 		return usable
+	end
+
+	WordHelper.LastLetterKeyboardActive = function()
+		if currentPlaceId ~= LAST_LETTER_PLACE_ID then return false end
+		local previousKeyboard = WordHelper.lastLetterKeyboardRoot
+		local keyboard = WordHelper.FindLastLetterGuiRoots()
+		if not keyboard or not guiObjectVisible(keyboard, playerGui) then return false end
+		if keyboard ~= previousKeyboard or not WordHelper.keyboardByAction.a
+			or not WordHelper.keyboardByAction.a.Parent then
+			scanForKeyboards(keyboard, true)
+		end
+		local visibleLetters = 0
+		for letter in string.gmatch("abcdefghijklmnopqrstuvwxyz", ".") do
+			local button = WordHelper.keyboardByAction[letter]
+			local inside = false
+			pcall(function() inside = button and button:IsDescendantOf(keyboard) end)
+			if inside and WordHelper.MappedButtonUsable(button) then visibleLetters = visibleLetters + 1 end
+		end
+		return visibleLetters >= 8
+	end
+
+	WordHelper.SendLastLetterAction = function(action)
+		if not WordHelper.LastLetterKeyboardActive() then return false end
+		local button = WordHelper.keyboardByAction[action]
+		local inside = false
+		pcall(function()
+			inside = button and button:IsDescendantOf(WordHelper.lastLetterKeyboardRoot)
+		end)
+		if not inside or not WordHelper.MappedButtonUsable(button) then return false end
+		WordHelper.lastTypingActivity = os.clock()
+		WordHelper.suppressGeneratedUntil = os.clock() + 0.12
+		WordHelper.lastTypedAction = action
+		if fireSignal then
+			if action == "back" or action == "end" then
+				if pcall(fireSignal, button.MouseButton1Click) then return true end
+			else
+				local pressed = pcall(fireSignal, button.MouseButton1Down)
+				pcall(fireSignal, button.MouseButton1Up)
+				if pressed then return true end
+			end
+		end
+		if virtualInputManager then
+			local ok = pcall(function()
+				local position, size = button.AbsolutePosition, button.AbsoluteSize
+				local x, y = position.X + size.X * 0.5, position.Y + size.Y * 0.5
+				virtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+				virtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+			end)
+			if ok then return true end
+		end
+		return false
 	end
 
 	WordHelper.WordBattleTypingUiActive = function()
@@ -6071,6 +6284,11 @@ zenith
 		WordHelper.autoTypeGeneration = WordHelper.autoTypeGeneration + 1
 		local generation = WordHelper.autoTypeGeneration
 		local inputEpoch = WordHelper.inputEpoch
+		local typingWPM = Settings.wpm
+		if Settings.legitAutoType then
+			typingWPM = math.random(Settings.legitMinWPM, Settings.legitMaxWPM)
+		end
+		WordHelper.activeTypingWPM = typingWPM
 		WordHelper.isAutoTyping = true
 		WordHelper.autoTypeMethod = method
 		task.spawn(function()
@@ -6081,7 +6299,7 @@ zenith
 					break
 				end
 				if index < #actions then
-					local secondsPerCharacter = math.clamp(60 / (Settings.wpm * 5), 0.02, 0.4)
+					local secondsPerCharacter = math.clamp(60 / (typingWPM * 5), 0.02, 0.4)
 					task.wait(secondsPerCharacter)
 				end
 			end
@@ -6198,15 +6416,13 @@ zenith
 		end
 
 		if currentPlaceId == LAST_LETTER_PLACE_ID then
-			-- Packet.RemoteEvent uses an opaque game-owned buffer. Never fabricate or
-			-- reuse Word Battle arguments and never assign TextBox.Text; drive Last
-			-- Letter's own keyboard so its Packet module serializes the correct payload.
-			local current = normalizeLetters(readLastLetterVisibleWord() or "")
-			if current == "" then
-				local focused = userInputService:GetFocusedTextBox()
-				if not isGameTextBox(focused) then return false end
-				pcall(function() current = normalizeLetters(focused.Text) end)
-			end
+			-- Packet.RemoteEvent remains observation-only. Every generated character
+			-- presses Overbar.Frame.Keyboard so the game's loaded InputService and
+			-- Packet serializer retain ownership of validation, framing, and batching.
+			if not WordHelper.LastLetterKeyboardActive() then return false end
+			local visible = normalizeLetters(readLastLetterVisibleWord() or "")
+			local current = Settings.autoDetect and normalizeLetters(WordHelper.lastLetterState) or visible
+			if current == "" then current = visible end
 			if current == "" then current = normalizeLetters(WordHelper.currentQuery) end
 			if current == "" or string.sub(word, 1, #current) ~= current then return false end
 			local actions = {}
@@ -6214,30 +6430,25 @@ zenith
 				table.insert(actions, string.sub(word, index, index))
 			end
 			if #actions == 0 then return true, "complete" end
-			local canSend = virtualInputManager ~= nil or virtualUser ~= nil
-				or (executorKeyPress ~= nil and executorKeyRelease ~= nil)
-			if not canSend and fireSignal then
-				canSend = true
-				for _, action in ipairs(actions) do
-					if not WordHelper.MappedButtonUsable(WordHelper.keyboardByAction[action]) then
-						canSend = false
-						break
-					end
-				end
+			if not fireSignal and not virtualInputManager then return false end
+			for _, action in ipairs(actions) do
+				local button = WordHelper.keyboardByAction[action]
+				local inside = false
+				pcall(function()
+					inside = button and button:IsDescendantOf(WordHelper.lastLetterKeyboardRoot)
+				end)
+				if not inside or not WordHelper.MappedButtonUsable(button) then return false end
 			end
-			if not canSend then return false end
 			local shadowWord = current
 			return WordHelper.BeginAutoTyping(actions, function(action)
-				local sent = WordHelper.SendUniversalAction(action)
+				local sent = WordHelper.SendLastLetterAction(action)
 				if sent then
 					shadowWord = string.sub(shadowWord .. action, -32)
 					WordHelper.passiveBuffer = shadowWord
 				end
 				return sent
 			end, word, "last-letter-keyboard", function()
-				if readLastLetterVisibleWord() ~= nil then return true end
-				local focused = userInputService:GetFocusedTextBox()
-				return focused ~= nil and focused ~= searchBox and isGameTextBox(focused)
+				return WordHelper.LastLetterKeyboardActive()
 			end)
 		end
 
