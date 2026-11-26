@@ -3234,20 +3234,35 @@ zenith
 		return chip
 	end
 
-	local modeChip = makeChip(1, 0.34, "Empieza con")
-	local sortChip = makeChip(2, 0.3, "Comunes")
-	local usedChip = makeChip(3, 0.36, "Usadas: 0")
-	usedChip.TextXAlignment = Enum.TextXAlignment.Left
-	create("UIPadding", {
-		PaddingLeft = UDim.new(0, 6),
-		-- Reserve a clear gutter before the save glyph instead of letting the
-		-- changing Used count visually run into it.
-		PaddingRight = UDim.new(0, 30),
-	}, usedChip)
+	local modeChip = makeChip(1, 0.32, "Empieza con")
+	local sortChip = makeChip(2, 0.28, "Comunes")
+	local usedChip = makeChip(3, 0.4, "Usadas: 0")
+	-- Keep the button's text value for integrations, but draw the count in its
+	-- own bounded label. UIPadding changes the coordinate space of children and
+	-- was pulling the save icon left into the count instead of making a gutter.
+	usedChip.TextTransparency = 1
+	local usedCountLabel = makeText(usedChip, {
+		Name = "UsedCountLabel",
+		Position = UDim2.fromOffset(7, 0),
+		Size = UDim2.new(1, -38, 1, 0),
+		Font = MEDIUM_FONT,
+		Text = "Usadas: 0",
+		TextColor3 = Config.Secondary,
+		TextSize = 10,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ZIndex = 7,
+	})
+	connect(usedChip.MouseEnter, function()
+		tween(usedCountLabel, FAST_TWEEN, { TextColor3 = Config.White })
+	end)
+	connect(usedChip.MouseLeave, function()
+		tween(usedCountLabel, FAST_TWEEN, { TextColor3 = Config.Secondary })
+	end)
 	local savedIcon = create("ImageLabel", {
 		Name = "SavedWordIcon",
 		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, -4, 0.5, 0),
+		Position = UDim2.new(1, -7, 0.5, 0),
 		Size = UDim2.fromOffset(13, 13),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
@@ -3259,7 +3274,7 @@ zenith
 	WordHelper.references.SavedIconFallback = makeText(usedChip, {
 		Name = "SavedWordFallback",
 		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, -4, 0.5, 0),
+		Position = UDim2.new(1, -7, 0.5, 0),
 		Size = UDim2.fromOffset(13, 13),
 		Font = BOLD_FONT,
 		Text = "",
@@ -3270,7 +3285,9 @@ zenith
 		ZIndex = 7,
 	})
 	local function updateUsedChip()
-		usedChip.Text = string.format("Usadas: %d", WordHelper.usedCount)
+		local text = string.format("Usadas: %d", WordHelper.usedCount)
+		usedChip.Text = text
+		usedCountLabel.Text = text
 	end
 
 	local detectionLabel = makeText(body, {
@@ -3723,6 +3740,7 @@ zenith
 	WordHelper.references.LegitMinWPM = legitMinControls
 	WordHelper.references.LegitMaxWPM = legitMaxControls
 	WordHelper.references.UsedChip = usedChip
+	WordHelper.references.UsedCountLabel = usedCountLabel
 	WordHelper.references.SavedIcon = savedIcon
 
 	local function setStatus(text, color)
