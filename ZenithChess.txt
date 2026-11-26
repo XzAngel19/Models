@@ -1,0 +1,5453 @@
+-- ZENITH CHESS | Key System + automatic Chess assistant (standalone script).
+-- Flow: if Zenith/KeySystem.log holds a key that has not expired yet, the assistant
+-- opens directly. Otherwise the Key System opens; after "Success!" it closes itself,
+-- writes the log (entered + expiry time) and opens Zenith.
+
+local launchKeySystem
+local launchWordHelper
+
+-- Key log. Stored in the executor workspace as Zenith/KeySystem.log (append-only,
+-- one line per accepted key). The newest "expires=" value is the active one.
+local ZenithKeyLog = {
+	Folder = "Zenith",
+	File = "Zenith/KeySystem.log",
+	DurationSeconds = 12 * 60 * 60,
+	SessionAttribute = "ZenithStandardExpiresAt",
+}
+
+local function zenithFileFunction(name)
+	local environment = getfenv and getfenv() or _G
+	local value = environment[name]
+	if type(value) ~= "function" and type(getgenv) == "function" then
+		local ok, genv = pcall(getgenv)
+		if ok and type(genv) == "table" then
+			value = genv[name]
+		end
+	end
+	return type(value) == "function" and value or nil
+end
+
+function ZenithKeyLog.FormatDate(timestamp)
+	local ok, text = pcall(os.date, "%Y-%m-%d %H:%M:%S", timestamp)
+	if ok and type(text) == "string" then
+		return text
+	end
+	return tostring(timestamp)
+end
+
+function ZenithKeyLog.ReadExpiry()
+	local readFile = zenithFileFunction("readfile")
+	local isFile = zenithFileFunction("isfile")
+	local latest = nil
+
+	if readFile then
+		local ok, content = pcall(function()
+			if isFile and not isFile(ZenithKeyLog.File) then
+				return nil
+			end
+			return readFile(ZenithKeyLog.File)
+		end)
+		if ok and type(content) == "string" then
+			for value in string.gmatch(content, "expires=(%d+)") do
+				latest = tonumber(value)
+			end
+		end
+	end
+
+	-- Studio / executors without file access: remember the key for this session only.
+	if not latest then
+		local player = game:GetService("Players").LocalPlayer
+		local attribute = player and player:GetAttribute(ZenithKeyLog.SessionAttribute)
+		if type(attribute) == "number" then
+			latest = attribute
+		end
+	end
+	return latest
+end
+
+function ZenithKeyLog.Record()
+	local now = os.time()
+	local expiresAt = now + ZenithKeyLog.DurationSeconds
+	local line = string.format(
+		"[%s] KEY ACCEPTED | entered=%d (%s) | expires=%d (%s)\n",
+		ZenithKeyLog.FormatDate(now),
+		now,
+		ZenithKeyLog.FormatDate(now),
+		expiresAt,
+		ZenithKeyLog.FormatDate(expiresAt)
+	)
+
+	local writeFile = zenithFileFunction("writefile")
+	local appendFile = zenithFileFunction("appendfile")
+	local readFile = zenithFileFunction("readfile")
+	local isFile = zenithFileFunction("isfile")
+	local makeFolder = zenithFileFunction("makefolder")
+
+	if writeFile then
+		pcall(function()
+			if makeFolder then
+				pcall(makeFolder, ZenithKeyLog.Folder)
+			end
+			local exists = isFile and isFile(ZenithKeyLog.File)
+			if exists and appendFile then
+				appendFile(ZenithKeyLog.File, line)
+			elseif exists and readFile then
+				writeFile(ZenithKeyLog.File, readFile(ZenithKeyLog.File) .. line)
+			else
+				writeFile(ZenithKeyLog.File, "-- Zenith Key System log. Each line: when the key was entered and when a new key is required.\n" .. line)
+			end
+		end)
+	end
+
+	pcall(function()
+		game:GetService("Players").LocalPlayer:SetAttribute(ZenithKeyLog.SessionAttribute, expiresAt)
+	end)
+	return expiresAt
+end
+
+function ZenithKeyLog.FormatRemaining(seconds)
+	seconds = math.max(0, math.floor(seconds))
+	if seconds <= 0 then
+		return "Expired"
+	end
+	local hours = math.floor(seconds / 3600)
+	local minutes = math.floor((seconds % 3600) / 60)
+	return string.format("%02d:%02d:%02d - Remaining", hours, minutes, seconds % 60)
+end
+
+-- ===================== KEY SYSTEM =====================
+launchKeySystem = function(onKeyAccepted)
+	-- ZNTH Key System | Pixel-faithful, client-sided Roblox menu.
+	-- Paste this entire file into a LocalScript, or execute it as one loadstring chunk.
+	-- The attached PNG artwork is embedded for executor runtimes; Studio receives matching
+	-- code-drawn fallbacks until an uploaded rbxassetid is entered in Config.Assets.
+
+	-- Services.
+	local playersService = game:GetService("Players")
+	local userInputService = game:GetService("UserInputService")
+	local tweenService = game:GetService("TweenService")
+	local marketplaceService = game:GetService("MarketplaceService")
+	local contentProvider = game:GetService("ContentProvider")
+	local runService = game:GetService("RunService")
+	local workspaceService = game:GetService("Workspace")
+	local lightingService = game:GetService("Lighting")
+	local starterGui = game:GetService("StarterGui")
+	local coreGuiService = game:GetService("CoreGui")
+
+	if not game:IsLoaded() then
+		game.Loaded:Wait()
+	end
+
+	local localPlayer = playersService.LocalPlayer
+	while not localPlayer do
+		playersService:GetPropertyChangedSignal("LocalPlayer"):Wait()
+		localPlayer = playersService.LocalPlayer
+	end
+
+	local playerGui = localPlayer:WaitForChild("PlayerGui")
+
+	-- Configuration. Asset values accept a numeric ID or a complete rbxassetid URI.
+	local Config = {
+		GuiName = "ZNTHMainMenu",
+		ReferenceWidth = 1223,
+		ReferenceHeight = 813,
+		DisplayOrder = 100,
+
+		-- Neutral monochrome palette derived from the supplied mobile reference.
+		Accent = Color3.fromRGB(207, 211, 217),
+		Panel = Color3.fromRGB(5, 5, 6),
+		PanelRaised = Color3.fromRGB(12, 13, 15),
+		White = Color3.fromRGB(242, 243, 245),
+		Secondary = Color3.fromRGB(181, 185, 191),
+		Muted = Color3.fromRGB(108, 112, 119),
+		Line = Color3.fromRGB(198, 202, 208),
+
+		StandardDurationSeconds = 12 * 60 * 60,
+		NewsDate = "16/03/2019",
+		DefaultDescription = "Current experience detected automatically. Enter any key to continue and explore everything it has to offer.",
+
+		-- World-space presentation: both menu bases are real camera-relative planes.
+		BlurSize = 18,
+		SurfaceDepth = 8,
+		SurfaceWidthCompression = 0.86,
+		SurfaceInwardYaw = 17,
+		SurfaceDefaultPitch = -3,
+		SurfaceMaxYaw = 26,
+		SurfaceMaxPitch = 15,
+
+		Assets = {
+			-- Studio can use uploaded IDs; compatible executors decode the embedded PNGs.
+			DivisionLogo = "",
+			HomeIcon = "",
+			AnnouncementsIcon = "",
+		},
+	}
+
+	local REGULAR_FONT = Enum.Font.Gotham
+	local MEDIUM_FONT = Enum.Font.GothamMedium
+	local BOLD_FONT = Enum.Font.GothamBold
+	local FAST_TWEEN = TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local OPEN_TWEEN = TweenInfo.new(0.42, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+	local PRESS_TWEEN = TweenInfo.new(0.09, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+	-- PNG files supplied with this project, encoded into the single executable file.
+	-- They are decoded only when an executor exposes writefile + getcustomasset.
+	local EMBEDDED_ASSETS = {
+		DivisionLogo = table.concat({
+			"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",
+			"RU5ErkJggg==",
+		}),
+		HomeIcon = table.concat({
+			"iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAACT0lEQVR4nO3aUU7EMAwA0RRx/ysvX3yAYLXbxLHjmXcBUns2UlHHkCRJkiRJkiRJkqSWHo/H",
+			"I/sMmT6yD5Dpe/nkCLAB/F46NQJkAP8tmxjBlX2And5Z8HVdiNlgboB3f92U2wARwN1lEiJoH8DsErtH0DqAVcvrHEHbAFYvrWsELQOIWlbHCNoFEL2kbhG0",
+			"edfNWEyH/xW0uAGyfpUdboPjA8heQvbfn3V0AFWGX+UcdxwbQLWhVzvPq44MoOqwq57rmeMCqD7k6uf77ZjXmNMGO8YZr4lH3AAnLn+MM85dPoAThvhM9fOX",
+			"DqD68F5V+TnKBlB5aHdUfZ6SAVQd1qyKz1UugIpDWqna85V5Tak2mB0qvCaWuAGIyx+jxnOnB1BhCJmynz81gOyHryJzDmkBuPyfsuaREoDL/1vGXLYH4PKf",
+			"2z2frQG4/NfsnNOW91AXf1/0/wrCbwCXPyd6fqEBuPw1IucYFoDLXytqniEBuPwYEXNdHoDLj7V6vksDcPl7rJzzklcMF59n9jVx+gZw+blm5z8VgMuvYWYP",
+			"twNw+bXc3ce2T5IM5n07PhlL/yJIuQwAzgDgDADOAOAMAM4A4AwAzgDgDADOAOAMAM4A4AwAzgDgDADOAOAMAM4A4AwA7jP7AFEiPqjs+GGrNwCcAcAZAJwB",
+			"wBkAnAHAGQCcAcAZAJwBwBkAnAHAGQCcAcAZAJwBwBkAnAHAGQCcAcAZAJwBwBkAnAHAGQCcAcAZAJwBwBkAnAHAGQCcAcAZAJwBSJIkSZIkSZIkSV19ATgW",
+			"U5/bSEKPAAAAAElFTkSuQmCC",
+		}),
+		AnnouncementsIcon = table.concat({
+			"iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAABbElEQVR4nO3cwQnDMBAAQSuk/5aVDkIIGEnemQZszHKP4/B1AQAAAADPN1Y9eM45Vz37TmOM",
+			"Zd/0H6/VL8BaAogTQJwA4gQQJ4A4AcQJIE4AcQKIE0CcAOIEECeAOAHECSBOAHECiBNAnADiHIUe4M5DUxMgTgBxAogTQJwA4gQQJ4A4AcQJIE4AcQKIE0Cc",
+			"AOIEECeAOAHEvVe/wK9O+/vWNzsdw5gAcQKIE0CcAOIEECeAOAHECSDumEXQTsuTJzEB4gQQJ4A4AcQJIE4AcQKIE0DcMYsgF0H3MAHiBBAngDgBxAkgTgBx",
+			"AogTQNwxi6CdlidPYgLECSBOAHECiBNAnADiBBAngLhjFkEugu5hAsQJIE4AcQKIE0CcAOIEECeAuGMWQTstT57EBIgTQJwA4gQQJ4A4AcQJIE4AcQKIE0Cc",
+			"AOIEECeAOAHECSBOAHECiBNAnADiBBAngDgBxAkgTgBxAgAAAACAgg9plCDZ163H6AAAAABJRU5ErkJggg==",
+		}),
+	}
+
+	-- Resolve the environment without making Studio depend on executor-only globals.
+	local function getSharedEnvironment()
+		local environment = _G
+		local ok, executorEnvironment = pcall(function()
+			if type(getgenv) == "function" then
+				return getgenv()
+			end
+			return nil
+		end)
+
+		if ok and type(executorEnvironment) == "table" then
+			environment = executorEnvironment
+		end
+
+		return environment
+	end
+
+	local sharedEnvironment = getSharedEnvironment()
+	local previousMenu = sharedEnvironment.ZNTHMainMenu
+	if type(previousMenu) == "table" and type(previousMenu.Destroy) == "function" then
+		pcall(function()
+			previousMenu:Destroy()
+		end)
+	end
+
+	local previousGui = playerGui:FindFirstChild(Config.GuiName)
+	if previousGui then
+		previousGui:Destroy()
+	end
+
+	-- Pure Luau base64 decoder, used for the bundled transparent PNGs.
+	local BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	local BASE64_LOOKUP = {}
+	for index = 1, #BASE64_ALPHABET do
+		BASE64_LOOKUP[string.sub(BASE64_ALPHABET, index, index)] = index - 1
+	end
+
+	local function decodeBase64(data)
+		local output = table.create(math.floor(#data * 0.75))
+		local outputLength = 0
+		local accumulator = 0
+		local groupLength = 0
+
+		local function appendByte(value)
+			outputLength = outputLength + 1
+			output[outputLength] = string.char(value)
+		end
+
+		-- Decode one four-character group at a time. Keeping the accumulator small
+		-- avoids floating-point overflow on the embedded 15 KB division logo.
+		for index = 1, #data do
+			local character = string.sub(data, index, index)
+			local value = BASE64_LOOKUP[character]
+			if value then
+				accumulator = accumulator * 64 + value
+				groupLength = groupLength + 1
+				if groupLength == 4 then
+					appendByte(math.floor(accumulator / 65536) % 256)
+					appendByte(math.floor(accumulator / 256) % 256)
+					appendByte(accumulator % 256)
+					accumulator = 0
+					groupLength = 0
+				end
+			end
+		end
+
+		-- Padding characters are skipped above, leaving two or three useful values.
+		if groupLength == 2 then
+			appendByte(math.floor(accumulator / 16) % 256)
+		elseif groupLength == 3 then
+			appendByte(math.floor(accumulator / 1024) % 256)
+			appendByte(math.floor(accumulator / 4) % 256)
+		end
+
+		return table.concat(output, "", 1, outputLength)
+	end
+
+	local function normalizeAsset(value)
+		if value == nil then
+			return ""
+		end
+
+		local text = tostring(value)
+		if text == "" or text == "0" then
+			return ""
+		end
+		if string.find(text, "://", 1, true) then
+			return text
+		end
+		if string.match(text, "^%d+$") then
+			return "rbxassetid://" .. text
+		end
+		return text
+	end
+
+	local function getExecutorFunction(name)
+		local value = sharedEnvironment[name]
+		if type(value) == "function" then
+			return value
+		end
+		return nil
+	end
+
+	local writeFile = getExecutorFunction("writefile")
+	local makeFolder = getExecutorFunction("makefolder")
+	local getCustomAsset = getExecutorFunction("getcustomasset") or getExecutorFunction("getsynasset")
+
+	local function resolveEmbeddedAsset(key, fileName)
+		local configured = normalizeAsset(Config.Assets[key])
+		if configured ~= "" then
+			return configured
+		end
+
+		if not writeFile or not getCustomAsset then
+			return ""
+		end
+
+		local folder = "ZNTHMainMenuAssets"
+		local path = folder .. "/" .. fileName
+		local ok = pcall(function()
+			-- Some executors omit isfolder and throw when makefolder sees an existing
+			-- directory, so folder creation is intentionally its own ignored pcall.
+			if makeFolder then
+				pcall(makeFolder, folder)
+			end
+			-- Rewriting guarantees a stale file from an older script can never win.
+			writeFile(path, decodeBase64(EMBEDDED_ASSETS[key]))
+		end)
+
+		if not ok then
+			return ""
+		end
+
+		local assetOk, asset = pcall(getCustomAsset, path)
+		if assetOk and type(asset) == "string" then
+			return asset
+		end
+		return ""
+	end
+
+	local resolvedAssets = {
+		DivisionLogo = resolveEmbeddedAsset("DivisionLogo", "zenith-logo-monochrome.png"),
+		HomeIcon = resolveEmbeddedAsset("HomeIcon", "icon-home.png"),
+		AnnouncementsIcon = resolveEmbeddedAsset("AnnouncementsIcon", "icon-doc.png"),
+	}
+
+	local KEY_LINK_TEXT = "Zenith.com"
+	local clipboardWriter = getExecutorFunction("setclipboard") or getExecutorFunction("toclipboard")
+
+	local Menu = {
+		open = false,
+		destroyed = false,
+		keyAccepted = false,
+		selectedNavigation = "Home",
+		connections = {},
+		navigation = {},
+		views = {},
+		hotkeys = {},
+		callbacks = {},
+		references = {},
+		positions = {},
+		coreGuiStates = {},
+		coreGuiCaptured = false,
+		topbarWasEnabled = true,
+		robloxGui = nil,
+		robloxGuiWasEnabled = true,
+		scale = 1,
+		openAmount = 0,
+		targetOpenAmount = 0,
+		orientationYaw = 0,
+		targetOrientationYaw = 0,
+		orientationPitch = Config.SurfaceDefaultPitch,
+		targetOrientationPitch = Config.SurfaceDefaultPitch,
+		orientationDragging = false,
+	}
+
+	-- UI utility functions.
+	local function create(className, properties, parent)
+		local object = Instance.new(className)
+		for property, value in pairs(properties or {}) do
+			object[property] = value
+		end
+		if parent then
+			object.Parent = parent
+		end
+		return object
+	end
+
+	local function connect(signal, callback)
+		local connection = signal:Connect(callback)
+		table.insert(Menu.connections, connection)
+		return connection
+	end
+
+	local function tween(object, info, goals)
+		if Menu.destroyed or not object or not object.Parent then
+			return nil
+		end
+		local animation = tweenService:Create(object, info, goals)
+		animation:Play()
+		return animation
+	end
+
+	local function addStroke(parent, color, transparency, thickness)
+		return create("UIStroke", {
+			ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+			Color = color or Config.Line,
+			Transparency = transparency == nil and 0.48 or transparency,
+			Thickness = thickness or 1,
+			LineJoinMode = Enum.LineJoinMode.Miter,
+		}, parent)
+	end
+
+	local function addLine(parent, position, size, transparency, color, zIndex)
+		return create("Frame", {
+			Name = "Divider",
+			Position = position,
+			Size = size,
+			BackgroundColor3 = color or Config.Line,
+			BackgroundTransparency = transparency == nil and 0.52 or transparency,
+			BorderSizePixel = 0,
+			ZIndex = zIndex or 4,
+		}, parent)
+	end
+
+	local function makeText(parent, properties)
+		local defaults = {
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Font = REGULAR_FONT,
+			Text = "",
+			TextColor3 = Config.White,
+			TextSize = 14,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Center,
+			ZIndex = 5,
+		}
+
+		for property, value in pairs(properties or {}) do
+			defaults[property] = value
+		end
+		return create("TextLabel", defaults, parent)
+	end
+
+	local function makeButton(parent, properties)
+		local defaults = {
+			AutoButtonColor = false,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Text = "",
+			ZIndex = 8,
+		}
+		for property, value in pairs(properties or {}) do
+			defaults[property] = value
+		end
+		return create("TextButton", defaults, parent)
+	end
+
+	local function bindPressScale(button, target)
+		local scaleObject = create("UIScale", { Scale = 1 }, target or button)
+		connect(button.MouseButton1Down, function()
+			tween(scaleObject, PRESS_TWEEN, { Scale = 0.975 })
+		end)
+		connect(button.MouseButton1Up, function()
+			tween(scaleObject, PRESS_TWEEN, { Scale = 1 })
+		end)
+		connect(button.MouseLeave, function()
+			tween(scaleObject, PRESS_TWEEN, { Scale = 1 })
+		end)
+		return scaleObject
+	end
+
+	local function makePanelBar(parent, name, y, height, text)
+		local bar = create("Frame", {
+			Name = name,
+			Position = UDim2.fromOffset(0, y),
+			Size = UDim2.fromOffset(335, height),
+			BackgroundColor3 = Config.Panel,
+			BackgroundTransparency = 0.12,
+			BorderSizePixel = 0,
+			ZIndex = 2,
+		}, parent)
+		local stroke = addStroke(bar, Config.Line, 0.48, 1)
+
+		local label = makeText(bar, {
+			Name = "Label",
+			Size = UDim2.fromScale(1, 1),
+			Font = REGULAR_FONT,
+			Text = text,
+			TextColor3 = Config.White,
+			TextSize = 27,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			ZIndex = 4,
+		})
+
+		local button = makeButton(bar, {
+			Name = name .. "Button",
+			Size = UDim2.fromScale(1, 1),
+		})
+		bindPressScale(button, label)
+
+		connect(button.MouseEnter, function()
+			tween(bar, FAST_TWEEN, {
+				BackgroundColor3 = Color3.fromRGB(24, 25, 28),
+				BackgroundTransparency = 0.03,
+			})
+			tween(stroke, FAST_TWEEN, { Transparency = 0.18, Color = Config.Accent })
+		end)
+		connect(button.MouseLeave, function()
+			tween(bar, FAST_TWEEN, {
+				BackgroundColor3 = Config.Panel,
+				BackgroundTransparency = 0.12,
+			})
+			tween(stroke, FAST_TWEEN, { Transparency = 0.48, Color = Config.Line })
+		end)
+
+		return bar, button, label
+	end
+
+	local function registerTint(list, object, property)
+		table.insert(list, { object = object, property = property })
+		return object
+	end
+
+	-- Small code-drawn icon fallbacks preserve the layout in Studio before PNG upload.
+	local function buildHomeFallback(parent, tintList)
+		local holder = create("Frame", {
+			Name = "HomeVectorFallback",
+			Position = UDim2.fromOffset(10, 8),
+			Size = UDim2.fromOffset(27, 26),
+			BackgroundTransparency = 1,
+			ZIndex = 6,
+		}, parent)
+
+		registerTint(tintList, create("Frame", {
+			Position = UDim2.fromOffset(3, 8),
+			Size = UDim2.fromOffset(17, 5),
+			Rotation = -39,
+			BackgroundColor3 = Config.Panel,
+			BorderSizePixel = 0,
+			ZIndex = 7,
+		}, holder), "BackgroundColor3")
+		registerTint(tintList, create("Frame", {
+			Position = UDim2.fromOffset(11, 8),
+			Size = UDim2.fromOffset(17, 5),
+			Rotation = 39,
+			BackgroundColor3 = Config.Panel,
+			BorderSizePixel = 0,
+			ZIndex = 7,
+		}, holder), "BackgroundColor3")
+		registerTint(tintList, create("Frame", {
+			Position = UDim2.fromOffset(5, 12),
+			Size = UDim2.fromOffset(18, 12),
+			BackgroundColor3 = Config.Panel,
+			BorderSizePixel = 0,
+			ZIndex = 6,
+		}, holder), "BackgroundColor3")
+		return holder
+	end
+
+	local function buildAnnouncementsFallback(parent, tintList)
+		local holder = create("Frame", {
+			Name = "AnnouncementsVectorFallback",
+			Position = UDim2.fromOffset(11, 7),
+			Size = UDim2.fromOffset(22, 28),
+			BackgroundTransparency = 1,
+			ZIndex = 6,
+		}, parent)
+
+		local page = create("Frame", {
+			Position = UDim2.fromOffset(2, 1),
+			Size = UDim2.fromOffset(18, 25),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 6,
+		}, holder)
+		local pageStroke = addStroke(page, Config.White, 0, 2)
+		registerTint(tintList, pageStroke, "Color")
+
+		registerTint(tintList, create("Frame", {
+			Position = UDim2.fromOffset(12, 1),
+			Size = UDim2.fromOffset(2, 8),
+			Rotation = -45,
+			BackgroundColor3 = Config.White,
+			BorderSizePixel = 0,
+			ZIndex = 7,
+		}, page), "BackgroundColor3")
+
+		for _, y in ipairs({ 11, 15, 19 }) do
+			registerTint(tintList, create("Frame", {
+				Position = UDim2.fromOffset(4, y),
+				Size = UDim2.fromOffset(10, 2),
+				BackgroundColor3 = Config.White,
+				BorderSizePixel = 0,
+				ZIndex = 7,
+			}, page), "BackgroundColor3")
+		end
+		return holder
+	end
+
+	local function makeNavigationIcon(parent, name, x, width, asset, fallbackBuilder)
+		local button = makeButton(parent, {
+			Name = name .. "Navigation",
+			Position = UDim2.fromOffset(x, 0),
+			Size = UDim2.fromOffset(width, 43),
+			BackgroundColor3 = Config.Panel,
+			BackgroundTransparency = 0.32,
+			ZIndex = 5,
+		})
+
+		local image = create("ImageLabel", {
+			Name = name .. "PNG",
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(name == "Home" and 25 or 24, name == "Announcements" and 27 or 24),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Image = asset,
+			ImageColor3 = Config.White,
+			ScaleType = Enum.ScaleType.Fit,
+			Visible = asset ~= "",
+			ZIndex = 7,
+		}, button)
+
+		local tintList = {}
+		local fallback = fallbackBuilder(button, tintList)
+		fallback.AnchorPoint = Vector2.new(0.5, 0.5)
+		fallback.Position = UDim2.fromScale(0.5, 0.5)
+		fallback.Visible = asset == ""
+		bindPressScale(button, image.Visible and image or fallback)
+
+		Menu.navigation[name] = {
+			button = button,
+			image = image,
+			fallback = fallback,
+			tint = tintList,
+		}
+		return button
+	end
+
+	local function setTint(navigation, color)
+		navigation.image.ImageColor3 = color
+		for _, record in ipairs(navigation.tint) do
+			if record.object and record.object.Parent then
+				record.object[record.property] = color
+			end
+		end
+	end
+
+	function Menu:SetNavigation(name)
+		if not self.views[name] then
+			return
+		end
+
+		if name ~= "Home" then
+			local keyInput = self.references.KeySystemInput
+			if keyInput and keyInput.Visible then
+				if keyInput:IsFocused() then
+					keyInput:ReleaseFocus()
+				end
+				keyInput.Visible = false
+				self.references.KeySystemButton.Visible = true
+				self.references.KeySystemLabel.Visible = true
+			end
+		end
+
+		self.selectedNavigation = name
+		for viewName, view in pairs(self.views) do
+			view.Visible = viewName == name
+		end
+		for navigationName, navigation in pairs(self.navigation) do
+			local selected = navigationName == name
+			tween(navigation.button, FAST_TWEEN, {
+				BackgroundColor3 = selected and Config.Accent or Config.Panel,
+				BackgroundTransparency = selected and 0 or 0.32,
+			})
+			setTint(navigation, selected and Color3.fromRGB(4, 4, 5) or Config.White)
+		end
+	end
+
+	local function bindNavigationHover(name)
+		local navigation = Menu.navigation[name]
+		connect(navigation.button.MouseEnter, function()
+			if Menu.selectedNavigation ~= name then
+				tween(navigation.button, FAST_TWEEN, {
+					BackgroundColor3 = Color3.fromRGB(34, 35, 38),
+					BackgroundTransparency = 0.1,
+				})
+			end
+		end)
+		connect(navigation.button.MouseLeave, function()
+			if Menu.selectedNavigation ~= name then
+				tween(navigation.button, FAST_TWEEN, {
+					BackgroundColor3 = Config.Panel,
+					BackgroundTransparency = 0.32,
+				})
+			end
+		end)
+		connect(navigation.button.Activated, function()
+			Menu:SetNavigation(name)
+			local callback = Menu.callbacks[name]
+			if type(callback) == "function" then
+				task.spawn(callback, Menu)
+			end
+		end)
+	end
+
+	local function buildLeftPanel(surfaceGui, overlayGui)
+		local root = create("Frame", {
+			Name = "LeftMenu",
+			Position = UDim2.fromOffset(50, 12),
+			Size = UDim2.fromOffset(335, 452),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 1,
+		}, surfaceGui)
+		Menu.references.LeftRoot = root
+
+		-- The navigation strip now spans exactly the same width as Key System.
+		local navigationRow = create("Frame", {
+			Name = "NavigationRow",
+			Position = UDim2.fromOffset(0, 0),
+			Size = UDim2.fromOffset(335, 43),
+			BackgroundColor3 = Config.Panel,
+			BackgroundTransparency = 0.22,
+			BorderSizePixel = 0,
+			ZIndex = 3,
+		}, root)
+		addStroke(navigationRow, Config.Line, 0.55, 1)
+
+		makeNavigationIcon(navigationRow, "Home", 0, 168, resolvedAssets.HomeIcon, buildHomeFallback)
+		-- The folded-paper icon is the Announcements tab.
+		makeNavigationIcon(navigationRow, "Announcements", 168, 167, resolvedAssets.AnnouncementsIcon, buildAnnouncementsFallback)
+		addLine(navigationRow, UDim2.fromOffset(167, 6), UDim2.fromOffset(1, 31), 0.4, Config.Line, 8)
+
+		local homeContent = create("Frame", {
+			Name = "HomeView",
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 1,
+		}, root)
+		Menu.views.Home = homeContent
+
+		local keyBar, keyButton, keyLabel = makePanelBar(homeContent, "KeySystem", 48, 54, "Key System")
+		local keyStroke = keyBar:FindFirstChildOfClass("UIStroke")
+		-- The editable field lives in the flat overlay ScreenGui, then follows the
+		-- projected 3D Key System bar every frame. This prevents Roblox's mobile
+		-- keyboard from lifting the field away from the Success/Key System box.
+		local keyInput = create("TextBox", {
+			Name = "KeyInputOverlay",
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromOffset(-5000, -5000),
+			Size = UDim2.fromOffset(300, 48),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ClearTextOnFocus = false,
+			Font = MEDIUM_FONT,
+			MultiLine = false,
+			PlaceholderColor3 = Config.Muted,
+			PlaceholderText = "TYPE ANY KEY  •  PRESS ENTER",
+			Text = "",
+			TextColor3 = Config.White,
+			TextSize = 16,
+			TextStrokeTransparency = 0.82,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			Visible = false,
+			ZIndex = 200,
+		}, overlayGui)
+
+		-- News is now one joined card: no separate News bar above the experience image.
+		local imageHolder = create("Frame", {
+			Name = "CurrentGameNews",
+			Position = UDim2.fromOffset(0, 108),
+			Size = UDim2.fromOffset(335, 146),
+			BackgroundColor3 = Color3.fromRGB(43, 43, 49),
+			BorderSizePixel = 0,
+			ClipsDescendants = true,
+			ZIndex = 2,
+		}, homeContent)
+		create("UIGradient", {
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, Color3.fromRGB(21, 22, 27)),
+				ColorSequenceKeypoint.new(0.55, Color3.fromRGB(68, 68, 76)),
+				ColorSequenceKeypoint.new(1, Color3.fromRGB(25, 25, 29)),
+			}),
+			Rotation = 12,
+		}, imageHolder)
+
+		local loadingLabel = makeText(imageHolder, {
+			Name = "Loading",
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.new(1, -20, 0, 20),
+			Text = "DETECTING CURRENT EXPERIENCE",
+			TextColor3 = Config.Secondary,
+			TextSize = 11,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			ZIndex = 3,
+		})
+
+		local placeId = game.PlaceId
+		local thumbnail = ""
+		if placeId and placeId > 0 then
+			thumbnail = string.format("rbxthumb://type=GameThumbnail&id=%d&w=768&h=432", placeId)
+		end
+
+		local gameImage = create("ImageLabel", {
+			Name = "Thumbnail",
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Image = thumbnail,
+			ScaleType = Enum.ScaleType.Crop,
+			ZIndex = 4,
+		}, imageHolder)
+		addStroke(imageHolder, Config.Line, 0.42, 1)
+
+		local shade = create("Frame", {
+			Name = "ImageShade",
+			Size = UDim2.fromScale(1, 1),
+			BackgroundColor3 = Color3.new(0, 0, 0),
+			BackgroundTransparency = 0.72,
+			BorderSizePixel = 0,
+			ZIndex = 5,
+		}, imageHolder)
+		create("UIGradient", {
+			Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 0.82),
+				NumberSequenceKeypoint.new(0.62, 0.94),
+				NumberSequenceKeypoint.new(1, 0.25),
+			}),
+			Rotation = 90,
+		}, shade)
+
+		local newsBody = create("Frame", {
+			Name = "NewsBody",
+			Position = UDim2.fromOffset(0, 254),
+			Size = UDim2.fromOffset(335, 96),
+			BackgroundColor3 = Config.PanelRaised,
+			BackgroundTransparency = 0.12,
+			BorderSizePixel = 0,
+			ZIndex = 2,
+		}, homeContent)
+		addStroke(newsBody, Config.Line, 0.42, 1)
+
+		local titleLabel = makeText(newsBody, {
+			Name = "CurrentGameTitle",
+			Position = UDim2.fromOffset(5, 6),
+			Size = UDim2.fromOffset(325, 17),
+			Font = BOLD_FONT,
+			Text = string.upper((game.Name and game.Name ~= "") and game.Name or "CURRENT GAME"),
+			TextColor3 = Config.Accent,
+			TextSize = 13,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			ZIndex = 5,
+		})
+
+		local descriptionLabel = makeText(newsBody, {
+			Name = "CurrentGameDescription",
+			Position = UDim2.fromOffset(5, 23),
+			Size = UDim2.fromOffset(325, 51),
+			Text = Config.DefaultDescription,
+			TextColor3 = Config.Secondary,
+			TextSize = 12,
+			TextWrapped = true,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Top,
+			ZIndex = 5,
+		})
+
+		makeText(newsBody, {
+			Name = "Date",
+			Position = UDim2.fromOffset(5, 74),
+			Size = UDim2.fromOffset(325, 17),
+			Font = MEDIUM_FONT,
+			Text = Config.NewsDate .. " | Zenith Supported",
+			TextColor3 = Config.Accent,
+			TextSize = 12,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			ZIndex = 5,
+		})
+
+		local _, updatesButton = makePanelBar(homeContent, "Updates", 358, 55, "Updates")
+
+		local keybindRow = create("Frame", {
+			Name = "KeybindRow",
+			Position = UDim2.fromOffset(0, 417),
+			Size = UDim2.fromOffset(335, 34),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 4,
+		}, homeContent)
+
+		local function makeHotkey(key, labelText, x, labelWidth, dividerAfter)
+			local keyLabel = makeText(keybindRow, {
+				Name = key .. "Key",
+				Position = UDim2.fromOffset(x, 0),
+				Size = UDim2.fromOffset(18, 30),
+				Font = MEDIUM_FONT,
+				Text = key,
+				TextColor3 = Config.Accent,
+				TextSize = 15,
+				TextXAlignment = Enum.TextXAlignment.Center,
+				ZIndex = 6,
+			})
+			addLine(keybindRow, UDim2.fromOffset(x + 22, 5), UDim2.fromOffset(1, 23), 0.28, Config.Line, 6)
+			local valueLabel = makeText(keybindRow, {
+				Name = key .. "Action",
+				Position = UDim2.fromOffset(x + 28, 0),
+				Size = UDim2.fromOffset(labelWidth, 30),
+				Text = labelText,
+				TextColor3 = Config.White,
+				TextSize = 13,
+				TextScaled = true,
+				TextXAlignment = Enum.TextXAlignment.Left,
+				ZIndex = 6,
+			})
+			-- Scales down only when a label (e.g. "Zenith.com") would overflow its slot.
+			create("UITextSizeConstraint", { MaxTextSize = 13, MinTextSize = 8 }, valueLabel)
+			if dividerAfter then
+				addLine(keybindRow, UDim2.fromOffset(x + 30 + labelWidth, 5), UDim2.fromOffset(1, 23), 0.28, Config.Line, 6)
+			end
+			Menu.hotkeys[key] = { key = keyLabel, value = valueLabel }
+		end
+
+		-- Slots: F 0-130 | X 134-234 | C 238-335 (no text overlaps the next keybind).
+		makeHotkey("F", "Announcements", 0, 100, true)
+		makeHotkey("X", "Key Link", 134, 70, true)
+		makeHotkey("C", "Discord", 238, 69, false)
+
+		local announcementsShortcut = makeButton(keybindRow, {
+			Name = "AnnouncementsShortcut",
+			Position = UDim2.fromOffset(0, 0),
+			Size = UDim2.fromOffset(132, 30),
+			ZIndex = 9,
+		})
+		connect(announcementsShortcut.Activated, function()
+			Menu:OpenAnnouncements()
+		end)
+
+		local keyLinkButton = makeButton(keybindRow, {
+			Name = "KeyLinkButton",
+			Position = UDim2.fromOffset(132, 0),
+			Size = UDim2.fromOffset(104, 30),
+			ZIndex = 9,
+		})
+		connect(keyLinkButton.Activated, function()
+			Menu:PulseHotkey("X")
+			Menu:CopyKeyLink()
+			local callback = Menu.callbacks.KeyLink or Menu.callbacks.X
+			if type(callback) == "function" then
+				task.spawn(callback, Menu)
+			end
+		end)
+
+		local discordShortcut = makeButton(keybindRow, {
+			Name = "DiscordShortcut",
+			Position = UDim2.fromOffset(236, 0),
+			Size = UDim2.fromOffset(99, 30),
+			ZIndex = 9,
+		})
+		connect(discordShortcut.Activated, function()
+			Menu:OpenDiscord()
+		end)
+
+		local function makeEmptyView(name)
+			local view = create("Frame", {
+				Name = name .. "View",
+				Position = UDim2.fromOffset(0, 48),
+				Size = UDim2.fromOffset(335, 335),
+				BackgroundColor3 = Config.Panel,
+				BackgroundTransparency = 0.12,
+				BorderSizePixel = 0,
+				Visible = false,
+				ZIndex = 2,
+			}, root)
+			addStroke(view, Config.Line, 0.42, 1)
+			local emptyMessage = makeText(view, {
+				Name = "EmptyMessage",
+				Size = UDim2.fromScale(1, 1),
+				Font = MEDIUM_FONT,
+				Text = "Nothing here yet",
+				TextColor3 = Config.Secondary,
+				TextSize = 16,
+				TextXAlignment = Enum.TextXAlignment.Center,
+				TextYAlignment = Enum.TextYAlignment.Center,
+				ZIndex = 4,
+			})
+			Menu.views[name] = view
+			Menu.references[name .. "Message"] = emptyMessage
+			return view
+		end
+
+		local announcementsView = makeEmptyView("Announcements")
+		local updatesView = makeEmptyView("Updates")
+
+		Menu.references.KeySystemBar = keyBar
+		Menu.references.KeySystemButton = keyButton
+		Menu.references.KeySystemLabel = keyLabel
+		Menu.references.KeySystemInput = keyInput
+		Menu.references.KeySystemStroke = keyStroke
+		Menu.references.AnnouncementsShortcut = announcementsShortcut
+		Menu.references.KeyLinkButton = keyLinkButton
+		Menu.references.DiscordShortcut = discordShortcut
+		Menu.references.UpdatesButton = updatesButton
+		Menu.references.AnnouncementsView = announcementsView
+		Menu.references.UpdatesView = updatesView
+		Menu.references.GameImage = gameImage
+		Menu.references.GameImageLoading = loadingLabel
+		Menu.references.GameTitle = titleLabel
+		Menu.references.GameDescription = descriptionLabel
+
+		bindNavigationHover("Home")
+		bindNavigationHover("Announcements")
+		Menu:SetNavigation("Home")
+
+		local function restoreKeyPrompt()
+			if Menu.destroyed or Menu.keyAccepted then
+				return
+			end
+			keyInput.Visible = false
+			keyInput.Text = ""
+			keyLabel.Text = "Key System"
+			keyLabel.TextColor3 = Config.White
+			keyLabel.Visible = true
+			keyButton.Visible = true
+		end
+
+		local function submitKey()
+			if Menu.destroyed or Menu.keyAccepted then
+				return
+			end
+
+			if not string.find(keyInput.Text, "%S") then
+				keyInput.Text = ""
+				keyInput.PlaceholderText = "ENTER ANY KEY FIRST"
+				tween(keyInput, FAST_TWEEN, { TextColor3 = Config.Accent })
+				task.delay(0.2, function()
+					if not Menu.destroyed then
+						tween(keyInput, FAST_TWEEN, { TextColor3 = Config.White })
+					end
+				end)
+				return
+			end
+
+			local acceptedKey = keyInput.Text
+			Menu.keyAccepted = true
+			-- The Standard countdown starts now, at the moment a key is accepted.
+			-- It is written to Zenith/KeySystem.log so the Word Helper remembers it for 12 hours.
+			Menu.standardExpiresAt = ZenithKeyLog.Record()
+			if Menu.references.CountdownValue then
+				Menu.references.CountdownValue.Text = "12 Hours - Remaining"
+			end
+			keyInput.Visible = false
+			keyLabel.Visible = true
+			keyLabel.Text = "Success!"
+			keyLabel.TextColor3 = Color3.fromRGB(128, 255, 164)
+			keyButton.Visible = true
+			tween(keyBar, FAST_TWEEN, {
+				BackgroundColor3 = Color3.fromRGB(12, 36, 23),
+				BackgroundTransparency = 0.02,
+			})
+			if keyStroke then
+				tween(keyStroke, FAST_TWEEN, { Color = Color3.fromRGB(128, 255, 164), Transparency = 0.1 })
+			end
+
+			local callback = Menu.callbacks.KeyAccepted
+			if type(callback) == "function" then
+				task.spawn(callback, Menu, acceptedKey)
+			end
+
+			-- Slide the Key System out, remove it completely, then open the Word Helper.
+			task.delay(0.7, function()
+				if Menu.destroyed then
+					return
+				end
+				Menu:SetOpen(false)
+				task.wait(OPEN_TWEEN.Time + 0.1)
+				Menu:Destroy()
+				if type(onKeyAccepted) == "function" then
+					onKeyAccepted(Menu.standardExpiresAt)
+				end
+			end)
+		end
+
+		connect(keyButton.Activated, function()
+			if Menu.keyAccepted then
+				return
+			end
+			keyLabel.Visible = false
+			keyButton.Visible = false
+			keyInput.Visible = true
+			keyInput.PlaceholderText = "TYPE ANY KEY  •  PRESS ENTER"
+			task.defer(function()
+				if not Menu.destroyed and keyInput.Visible then
+					keyInput:CaptureFocus()
+				end
+			end)
+		end)
+		connect(keyInput.FocusLost, function(enterPressed)
+			if enterPressed then
+				submitKey()
+			else
+				restoreKeyPrompt()
+			end
+		end)
+		connect(updatesButton.Activated, function()
+			Menu:OpenUpdates()
+		end)
+
+		return root
+	end
+
+	local function createLogoSegment(parent, position, size, rotation, color, zIndex)
+		local segment = create("Frame", {
+			Position = position,
+			Size = size,
+			Rotation = rotation,
+			BackgroundColor3 = color,
+			BorderSizePixel = 0,
+			ZIndex = zIndex or 5,
+		}, parent)
+		create("UICorner", { CornerRadius = UDim.new(1, 0) }, segment)
+		return segment
+	end
+
+	local function buildDivisionLogoFallback(parent)
+		local holder = create("Frame", {
+			Name = "DivisionLogoVectorFallback",
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(92, 92),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 4,
+		}, parent)
+
+		local outerRing = create("Frame", {
+			Position = UDim2.fromOffset(5, 5),
+			Size = UDim2.fromOffset(82, 82),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 4,
+		}, holder)
+		create("UICorner", { CornerRadius = UDim.new(1, 0) }, outerRing)
+		addStroke(outerRing, Color3.fromRGB(215, 219, 225), 0, 7)
+
+		local topMask = create("Frame", {
+			Position = UDim2.fromOffset(28, 0),
+			Size = UDim2.fromOffset(37, 17),
+			BackgroundColor3 = Config.Panel,
+			BackgroundTransparency = 0.08,
+			BorderSizePixel = 0,
+			ZIndex = 5,
+		}, holder)
+		local dot = create("Frame", {
+			AnchorPoint = Vector2.new(0.5, 0),
+			Position = UDim2.fromOffset(46, 0),
+			Size = UDim2.fromOffset(15, 15),
+			BackgroundColor3 = Color3.fromRGB(215, 219, 225),
+			BorderSizePixel = 0,
+			ZIndex = 7,
+		}, holder)
+		create("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
+
+		createLogoSegment(holder, UDim2.fromOffset(13, 38), UDim2.fromOffset(45, 7), -44, Color3.fromRGB(245, 246, 248), 6)
+		createLogoSegment(holder, UDim2.fromOffset(34, 38), UDim2.fromOffset(45, 7), 44, Color3.fromRGB(245, 246, 248), 6)
+		createLogoSegment(holder, UDim2.fromOffset(20, 55), UDim2.fromOffset(36, 7), -44, Color3.fromRGB(145, 151, 160), 6)
+		createLogoSegment(holder, UDim2.fromOffset(36, 55), UDim2.fromOffset(36, 7), 44, Color3.fromRGB(145, 151, 160), 6)
+		createLogoSegment(holder, UDim2.fromOffset(29, 70), UDim2.fromOffset(25, 7), -44, Color3.fromRGB(42, 46, 52), 6)
+		createLogoSegment(holder, UDim2.fromOffset(38, 70), UDim2.fromOffset(25, 7), 44, Color3.fromRGB(42, 46, 52), 6)
+
+		-- topMask is intentionally kept referenced so it is not mistaken for a tint element.
+		topMask.Name = "TransparentGapApproximation"
+		return holder
+	end
+
+	local function buildRightPanel(surfaceGui)
+		local root = create("Frame", {
+			Name = "RightMenu",
+			Position = UDim2.fromOffset(14, 8),
+			Size = UDim2.fromOffset(323, 313),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 1,
+		}, surfaceGui)
+		Menu.references.RightRoot = root
+
+		addLine(root, UDim2.fromOffset(0, 0), UDim2.fromOffset(323, 1), 0.25, Config.Line, 4)
+
+		-- Clearance and Division were intentionally removed. The supplied Zenith mark
+		-- is now the only centered identity in the upper section.
+		local logoHolder = create("Frame", {
+			Name = "ZenithLogoHolder",
+			Position = UDim2.fromOffset(96, 5),
+			Size = UDim2.fromOffset(131, 131),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			ZIndex = 3,
+		}, root)
+		local logoImage = create("ImageLabel", {
+			Name = "ZenithLogoPNG",
+			AnchorPoint = Vector2.new(0.5, 0.5),
+			Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(118, 118),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Image = resolvedAssets.DivisionLogo,
+			ScaleType = Enum.ScaleType.Fit,
+			Visible = resolvedAssets.DivisionLogo ~= "",
+			ZIndex = 6,
+		}, logoHolder)
+		local logoFallback = buildDivisionLogoFallback(logoHolder)
+		create("UIScale", { Scale = 1.24 }, logoFallback)
+		logoFallback.Visible = not logoImage.Visible
+		local logoHomeButton = makeButton(logoHolder, {
+			Name = "HomeButton",
+			Size = UDim2.fromScale(1, 1),
+			ZIndex = 10,
+		})
+		connect(logoHomeButton.Activated, function()
+			Menu:OpenHome()
+		end)
+
+		local infoFrame = create("Frame", {
+			Name = "AccountInformation",
+			Position = UDim2.fromOffset(0, 145),
+			Size = UDim2.fromOffset(323, 94),
+			BackgroundColor3 = Config.Panel,
+			BackgroundTransparency = 0.18,
+			BorderSizePixel = 0,
+			ZIndex = 2,
+		}, root)
+		addLine(infoFrame, UDim2.fromOffset(0, 0), UDim2.fromOffset(323, 1), 0.42, Config.Line, 4)
+		addLine(infoFrame, UDim2.fromOffset(0, 93), UDim2.fromOffset(323, 1), 0.42, Config.Line, 4)
+
+		makeText(infoFrame, {
+			Name = "StandardLabel",
+			Position = UDim2.fromOffset(12, 2),
+			Size = UDim2.fromOffset(299, 20),
+			Text = "Standard",
+			TextColor3 = Config.White,
+			TextSize = 13,
+			ZIndex = 5,
+		})
+		local countdownValue = makeText(infoFrame, {
+			Name = "StandardRemaining",
+			Position = UDim2.fromOffset(12, 18),
+			Size = UDim2.fromOffset(299, 25),
+			Text = "Pending...",
+			TextColor3 = Config.Secondary,
+			TextSize = 19,
+			ZIndex = 5,
+		})
+
+		makeText(infoFrame, {
+			Name = "TimePlayedLabel",
+			Position = UDim2.fromOffset(12, 48),
+			Size = UDim2.fromOffset(299, 18),
+			Text = "Time Played",
+			TextColor3 = Config.White,
+			TextSize = 13,
+			ZIndex = 5,
+		})
+		local timePlayedValue = makeText(infoFrame, {
+			Name = "TimePlayedValue",
+			Position = UDim2.fromOffset(12, 64),
+			Size = UDim2.fromOffset(299, 24),
+			Text = "0d 0h 0m",
+			TextColor3 = Config.Secondary,
+			TextSize = 19,
+			ZIndex = 5,
+		})
+
+		local playerFrame = create("Frame", {
+			Name = "LocalPlayer",
+			Position = UDim2.fromOffset(0, 248),
+			Size = UDim2.fromOffset(323, 47),
+			BackgroundColor3 = Config.Panel,
+			BackgroundTransparency = 0.18,
+			BorderSizePixel = 0,
+			ZIndex = 2,
+		}, root)
+		addStroke(playerFrame, Config.Line, 0.5, 1)
+		local avatarBacking = create("Frame", {
+			Name = "AvatarBacking",
+			Position = UDim2.fromOffset(9, 6),
+			Size = UDim2.fromOffset(35, 35),
+			BackgroundColor3 = Color3.fromRGB(45, 45, 49),
+			BorderSizePixel = 0,
+			ZIndex = 4,
+		}, playerFrame)
+		addStroke(avatarBacking, Config.Line, 0.5, 1)
+		local avatar = create("ImageLabel", {
+			Name = "Avatar",
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Image = "",
+			ScaleType = Enum.ScaleType.Crop,
+			ZIndex = 5,
+		}, avatarBacking)
+		local playerName = makeText(playerFrame, {
+			Name = "Username",
+			Position = UDim2.fromOffset(59, 0),
+			Size = UDim2.fromOffset(251, 47),
+			Text = localPlayer.Name,
+			TextColor3 = Config.White,
+			TextSize = 14,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			ZIndex = 5,
+		})
+
+		addLine(root, UDim2.fromOffset(0, 304), UDim2.fromOffset(323, 1), 0.45, Config.Line, 4)
+
+		Menu.references.CountdownValue = countdownValue
+		Menu.references.TimePlayedValue = timePlayedValue
+		Menu.references.Avatar = avatar
+		Menu.references.PlayerName = playerName
+		Menu.references.DivisionLogo = logoImage
+		Menu.references.LogoHomeButton = logoHomeButton
+
+		return root
+	end
+
+	local screenGui = create("ScreenGui", {
+		Name = Config.GuiName,
+		DisplayOrder = Config.DisplayOrder,
+		IgnoreGuiInset = true,
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	}, playerGui)
+	Menu.references.ScreenGui = screenGui
+
+	-- Remove orphaned presentation objects left by an interrupted prior execution.
+	for _, staleName in ipairs({ "ZNTHLeftSurface", "ZNTHRightSurface" }) do
+		local staleSurface = playerGui:FindFirstChild(staleName)
+		if staleSurface then
+			staleSurface:Destroy()
+		end
+	end
+	local staleFolder = workspaceService:FindFirstChild("ZNTHMenu3D")
+	if staleFolder then
+		staleFolder:Destroy()
+	end
+	local staleBlur = lightingService:FindFirstChild("ZNTHMenuBlur")
+	if staleBlur then
+		staleBlur:Destroy()
+	end
+
+	local blurEffect = create("BlurEffect", {
+		Name = "ZNTHMenuBlur",
+		Enabled = false,
+		Size = 0,
+	}, lightingService)
+	Menu.references.BlurEffect = blurEffect
+
+	local surfaceFolder = create("Folder", {
+		Name = "ZNTHMenu3D",
+		Archivable = false,
+	}, workspaceService)
+	Menu.references.SurfaceFolder = surfaceFolder
+
+	local LEFT_CANVAS_SIZE = Vector2.new(410, 480)
+	local RIGHT_CANVAS_SIZE = Vector2.new(350, 400)
+
+	local function createWorldSurface(name, canvasSize)
+		local part = create("Part", {
+			Name = name .. "Plane",
+			Anchored = true,
+			Archivable = false,
+			CanCollide = false,
+			CanQuery = false,
+			CanTouch = false,
+			CastShadow = false,
+			Color = Color3.new(0, 0, 0),
+			CFrame = CFrame.new(0, 100000, 0),
+			LocalTransparencyModifier = 1,
+			Massless = true,
+			Size = Vector3.new(1, 1, 0.04),
+			Transparency = 1,
+		}, surfaceFolder)
+
+		local surfaceGui = create("SurfaceGui", {
+			Name = name,
+			Active = true,
+			Adornee = part,
+			AlwaysOnTop = true,
+			Brightness = 1,
+			CanvasSize = canvasSize,
+			Enabled = false,
+			Face = Enum.NormalId.Back,
+			LightInfluence = 0,
+			MaxDistance = 1000,
+			ResetOnSpawn = false,
+			SizingMode = Enum.SurfaceGuiSizingMode.FixedSize,
+			ZOffset = 0.01,
+		}, playerGui)
+
+		return part, surfaceGui
+	end
+
+	local leftPart, leftSurface = createWorldSurface("ZNTHLeftSurface", LEFT_CANVAS_SIZE)
+	local rightPart, rightSurface = createWorldSurface("ZNTHRightSurface", RIGHT_CANVAS_SIZE)
+	Menu.references.LeftPart = leftPart
+	Menu.references.RightPart = rightPart
+	Menu.references.LeftSurface = leftSurface
+	Menu.references.RightSurface = rightSurface
+
+	buildLeftPanel(leftSurface, screenGui)
+	buildRightPanel(rightSurface)
+
+
+	-- Rotation is controlled directly by dragging either visible 3D menu plane.
+	function Menu:SetOrientation(yaw, pitch)
+		self.targetOrientationYaw = math.clamp(tonumber(yaw) or 0, -Config.SurfaceMaxYaw, Config.SurfaceMaxYaw)
+		self.targetOrientationPitch = math.clamp(
+			tonumber(pitch) or Config.SurfaceDefaultPitch,
+			-Config.SurfaceMaxPitch,
+			Config.SurfaceMaxPitch
+		)
+	end
+
+	local function captureCoreGuiState()
+		if Menu.coreGuiCaptured then
+			return
+		end
+		Menu.coreGuiCaptured = true
+
+		local ok, coreTypes = pcall(function()
+			return Enum.CoreGuiType:GetEnumItems()
+		end)
+		if ok then
+			for _, coreType in ipairs(coreTypes) do
+				if coreType ~= Enum.CoreGuiType.All then
+					local stateOk, enabled = pcall(function()
+						return starterGui:GetCoreGuiEnabled(coreType)
+					end)
+					if stateOk then
+						Menu.coreGuiStates[coreType] = enabled
+					end
+				end
+			end
+		end
+
+		local topbarOk, topbarEnabled = pcall(function()
+			return starterGui:GetCore("TopbarEnabled")
+		end)
+		if topbarOk and type(topbarEnabled) == "boolean" then
+			Menu.topbarWasEnabled = topbarEnabled
+		end
+
+		-- Executors can usually reach the modern RobloxGui container even when the
+		-- legacy TopbarEnabled bridge is unavailable. Normal Studio clients simply
+		-- fail this protected lookup and continue with the supported StarterGui APIs.
+		pcall(function()
+			local robloxGui = coreGuiService:FindFirstChild("RobloxGui")
+			if robloxGui and robloxGui:IsA("ScreenGui") then
+				Menu.robloxGui = robloxGui
+				Menu.robloxGuiWasEnabled = robloxGui.Enabled
+			end
+		end)
+	end
+
+	local function setRobloxChromeHidden(hidden)
+		captureCoreGuiState()
+		if hidden then
+			-- The modern mobile Chrome bar responds more reliably when All is disabled
+			-- before individual CoreGui types and TopbarEnabled are applied.
+			pcall(function()
+				starterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, false)
+			end)
+		end
+		for coreType, wasEnabled in pairs(Menu.coreGuiStates) do
+			pcall(function()
+				starterGui:SetCoreGuiEnabled(coreType, hidden and false or wasEnabled)
+			end)
+		end
+		pcall(function()
+			starterGui:SetCore("TopbarEnabled", hidden and false or Menu.topbarWasEnabled)
+		end)
+		if Menu.robloxGui then
+			pcall(function()
+				Menu.robloxGui.Enabled = hidden and false or Menu.robloxGuiWasEnabled
+			end)
+		end
+	end
+
+	local function setMenuEnvironment(active, instant)
+		setRobloxChromeHidden(active)
+		blurEffect.Enabled = true
+		if instant then
+			blurEffect.Size = active and Config.BlurSize or 0
+		else
+			tween(blurEffect, OPEN_TWEEN, { Size = active and Config.BlurSize or 0 })
+		end
+
+		if not active then
+			task.delay(OPEN_TWEEN.Time + 0.03, function()
+				if not Menu.destroyed and not Menu.open and blurEffect.Size <= 0.1 then
+					blurEffect.Enabled = false
+				end
+			end)
+		else
+			-- Mobile Chrome can register after LocalScripts. Reapply during the short
+			-- opening window, but only while this menu is still active.
+			for _, retryDelay in ipairs({ 0.1, 0.35, 0.8, 1.4 }) do
+				task.delay(retryDelay, function()
+					if not Menu.destroyed and Menu.open then
+						setRobloxChromeHidden(true)
+					end
+				end)
+			end
+		end
+	end
+
+	local function expApproach(current, target, speed, deltaTime)
+		return current + (target - current) * (1 - math.exp(-speed * math.min(deltaTime, 0.1)))
+	end
+
+	-- Responsive sizing now controls world-space plane dimensions rather than flat GUI scale.
+	function Menu:UpdateScale()
+		if self.destroyed then
+			return
+		end
+		local camera = workspaceService.CurrentCamera
+		local viewport = camera and camera.ViewportSize or Vector2.new(Config.ReferenceWidth, Config.ReferenceHeight)
+		self.scale = math.clamp(math.min(viewport.X / Config.ReferenceWidth, viewport.Y / Config.ReferenceHeight), 0.62, 1.35)
+	end
+
+	local function placeSurface(part, canvasSize, centerX, centerY, yaw, pitch, camera, viewport)
+		local depth = Config.SurfaceDepth
+		local verticalWorldSize = 2 * depth * math.tan(math.rad(camera.FieldOfView * 0.5))
+		local worldPerPixel = verticalWorldSize / math.max(viewport.Y, 1)
+		-- Perspective expands the near edge; compressing physical width preserves
+		-- the reference's readable on-screen footprint while retaining a true trapezoid.
+		local width = canvasSize.X * Menu.scale * worldPerPixel * Config.SurfaceWidthCompression
+		local height = canvasSize.Y * Menu.scale * worldPerPixel
+		local localX = (centerX - viewport.X * 0.5) * worldPerPixel
+		local localY = -(centerY - viewport.Y * 0.5) * worldPerPixel
+
+		part.Size = Vector3.new(width, height, 0.04)
+		part.CFrame = camera.CFrame
+			* CFrame.new(localX, localY, -depth)
+			* CFrame.Angles(math.rad(pitch), math.rad(yaw), 0)
+	end
+
+	local KEY_INPUT_CANVAS_BOUNDS = {
+		left = 50,
+		top = 60,
+		width = 335,
+		height = 54,
+	}
+
+	local function surfaceCanvasPointToViewport(part, canvasSize, x, y, camera)
+		local localPoint = Vector3.new(
+			(x / canvasSize.X - 0.5) * part.Size.X,
+			(0.5 - y / canvasSize.Y) * part.Size.Y,
+			part.Size.Z * 0.5
+		)
+		local worldPoint = part.CFrame:PointToWorldSpace(localPoint)
+		local viewportPoint, onScreen = camera:WorldToViewportPoint(worldPoint)
+		return Vector2.new(viewportPoint.X, viewportPoint.Y), onScreen and viewportPoint.Z > 0
+	end
+
+	local function triangleSign(point, first, second)
+		return (point.X - second.X) * (first.Y - second.Y) - (first.X - second.X) * (point.Y - second.Y)
+	end
+
+	local function pointInTriangle(point, first, second, third)
+		local firstSign = triangleSign(point, first, second)
+		local secondSign = triangleSign(point, second, third)
+		local thirdSign = triangleSign(point, third, first)
+		local hasNegative = firstSign < 0 or secondSign < 0 or thirdSign < 0
+		local hasPositive = firstSign > 0 or secondSign > 0 or thirdSign > 0
+		return not (hasNegative and hasPositive)
+	end
+
+	local function pointInsideSurfaceRoot(point, part, canvasSize, left, top, width, height, camera)
+		local topLeft, topLeftVisible = surfaceCanvasPointToViewport(part, canvasSize, left, top, camera)
+		local topRight, topRightVisible = surfaceCanvasPointToViewport(part, canvasSize, left + width, top, camera)
+		local bottomLeft, bottomLeftVisible = surfaceCanvasPointToViewport(part, canvasSize, left, top + height, camera)
+		local bottomRight, bottomRightVisible = surfaceCanvasPointToViewport(part, canvasSize, left + width, top + height, camera)
+		if not (topLeftVisible or topRightVisible or bottomLeftVisible or bottomRightVisible) then
+			return false
+		end
+		return pointInTriangle(point, topLeft, topRight, bottomRight)
+			or pointInTriangle(point, topLeft, bottomRight, bottomLeft)
+	end
+
+	local function pointInsideMenu(point)
+		if not Menu.open then
+			return false
+		end
+		local camera = workspaceService.CurrentCamera
+		if not camera then
+			return false
+		end
+		return pointInsideSurfaceRoot(point, leftPart, LEFT_CANVAS_SIZE, 50, 12, 335, 452, camera)
+			or pointInsideSurfaceRoot(point, rightPart, RIGHT_CANVAS_SIZE, 14, 8, 323, 313, camera)
+	end
+
+	-- No separate orientation square is needed: a drag that begins directly on
+	-- either menu plane rotates both planes. A small movement threshold preserves
+	-- normal taps on Home, Announcements, Updates, Key System, and the footer.
+	connect(userInputService.InputBegan, function(input)
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+		local keyInput = Menu.references.KeySystemInput
+		if keyInput and keyInput.Visible then
+			return
+		end
+		local position = Vector2.new(input.Position.X, input.Position.Y)
+		if not pointInsideMenu(position) then
+			return
+		end
+		Menu.orientationDragging = true
+		Menu.orientationDragInput = input
+		Menu.orientationDragStart = position
+		Menu.orientationDragOriginYaw = Menu.targetOrientationYaw
+		Menu.orientationDragOriginPitch = Menu.targetOrientationPitch
+		Menu.orientationDragDistance = 0
+	end)
+
+	connect(userInputService.InputChanged, function(input)
+		if not Menu.orientationDragging then
+			return
+		end
+		if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+		if Menu.orientationDragInput.UserInputType == Enum.UserInputType.Touch and input ~= Menu.orientationDragInput then
+			return
+		end
+		local position = Vector2.new(input.Position.X, input.Position.Y)
+		local totalDelta = position - Menu.orientationDragStart
+		Menu.orientationDragDistance = totalDelta.Magnitude
+		if Menu.orientationDragDistance >= 4 then
+			Menu:SetOrientation(
+				Menu.orientationDragOriginYaw + totalDelta.X * 0.22,
+				Menu.orientationDragOriginPitch - totalDelta.Y * 0.18
+			)
+		end
+	end)
+
+	connect(userInputService.InputEnded, function(input)
+		if not Menu.orientationDragging then
+			return
+		end
+		local activeInput = Menu.orientationDragInput
+		local matchingMouse = activeInput.UserInputType == Enum.UserInputType.MouseButton1
+			and input.UserInputType == Enum.UserInputType.MouseButton1
+		local matchingTouch = activeInput.UserInputType == Enum.UserInputType.Touch and input == activeInput
+		if not matchingMouse and not matchingTouch then
+			return
+		end
+		Menu.orientationDragging = false
+		Menu.orientationDragInput = nil
+	end)
+
+	local function updateKeyInputOverlay(camera)
+		local keyInput = Menu.references.KeySystemInput
+		if not keyInput or not keyInput.Visible then
+			return
+		end
+
+		local bounds = KEY_INPUT_CANVAS_BOUNDS
+		local topLeft, topLeftVisible = surfaceCanvasPointToViewport(leftPart, LEFT_CANVAS_SIZE, bounds.left, bounds.top, camera)
+		local topRight, topRightVisible = surfaceCanvasPointToViewport(leftPart, LEFT_CANVAS_SIZE, bounds.left + bounds.width, bounds.top, camera)
+		local bottomLeft, bottomLeftVisible = surfaceCanvasPointToViewport(leftPart, LEFT_CANVAS_SIZE, bounds.left, bounds.top + bounds.height, camera)
+		local bottomRight, bottomRightVisible = surfaceCanvasPointToViewport(
+			leftPart,
+			LEFT_CANVAS_SIZE,
+			bounds.left + bounds.width,
+			bounds.top + bounds.height,
+			camera
+		)
+		if not (topLeftVisible or topRightVisible or bottomLeftVisible or bottomRightVisible) then
+			return
+		end
+
+		local centerX = (topLeft.X + topRight.X + bottomLeft.X + bottomRight.X) * 0.25
+		local centerY = (topLeft.Y + topRight.Y + bottomLeft.Y + bottomRight.Y) * 0.25
+		local projectedWidth = ((topRight - topLeft).Magnitude + (bottomRight - bottomLeft).Magnitude) * 0.5
+		local projectedHeight = ((bottomLeft - topLeft).Magnitude + (bottomRight - topRight).Magnitude) * 0.5
+		local edgeCenterLeft = (topLeft + bottomLeft) * 0.5
+		local edgeCenterRight = (topRight + bottomRight) * 0.5
+		local edge = edgeCenterRight - edgeCenterLeft
+		local rotation = math.deg(math.atan2(edge.Y, edge.X))
+		-- Back-face canvas X can project in reverse; normalize so mobile text never
+		-- flips upside down while still following the bar's visible slope.
+		if rotation > 90 then
+			rotation = rotation - 180
+		elseif rotation < -90 then
+			rotation = rotation + 180
+		end
+
+		keyInput.Position = UDim2.fromOffset(centerX, centerY)
+		keyInput.Size = UDim2.fromOffset(math.max(120, projectedWidth - 26), math.max(34, projectedHeight - 4))
+		keyInput.Rotation = rotation
+	end
+
+	local function updateWorldPresentation(deltaTime)
+		if Menu.destroyed then
+			return
+		end
+		local camera = workspaceService.CurrentCamera
+		if not camera then
+			return
+		end
+		local viewport = camera.ViewportSize
+		if viewport.X <= 0 or viewport.Y <= 0 then
+			return
+		end
+		Menu.scale = math.clamp(math.min(viewport.X / Config.ReferenceWidth, viewport.Y / Config.ReferenceHeight), 0.62, 1.35)
+
+		Menu.openAmount = expApproach(Menu.openAmount, Menu.targetOpenAmount, 10.5, deltaTime)
+		Menu.orientationYaw = expApproach(Menu.orientationYaw, Menu.targetOrientationYaw, 9, deltaTime)
+		Menu.orientationPitch = expApproach(Menu.orientationPitch, Menu.targetOrientationPitch, 9, deltaTime)
+
+		if math.abs(Menu.openAmount - Menu.targetOpenAmount) < 0.001 then
+			Menu.openAmount = Menu.targetOpenAmount
+		end
+		local reveal = 1 - ((1 - Menu.openAmount) ^ 3)
+		local leftClosedX = -LEFT_CANVAS_SIZE.X * Menu.scale * 0.58
+		local leftOpenX = 210 * Menu.scale
+		local rightClosedX = viewport.X + RIGHT_CANVAS_SIZE.X * Menu.scale * 0.58
+		local rightOpenX = viewport.X - 193 * Menu.scale
+		local leftCenterX = leftClosedX + (leftOpenX - leftClosedX) * reveal
+		local rightCenterX = rightClosedX + (rightOpenX - rightClosedX) * reveal
+		-- Align the visible root tops even though each SurfaceGui has a different
+		-- canvas height and internal top padding.
+		local sharedRootTop = viewport.Y * 0.245
+		local leftCenterY = sharedRootTop + (LEFT_CANVAS_SIZE.Y * 0.5 - 12) * Menu.scale
+		local rightCenterY = sharedRootTop + (RIGHT_CANVAS_SIZE.Y * 0.5 - 8) * Menu.scale
+
+		placeSurface(
+			leftPart,
+			LEFT_CANVAS_SIZE,
+			leftCenterX,
+			leftCenterY,
+			Config.SurfaceInwardYaw + Menu.orientationYaw,
+			Menu.orientationPitch,
+			camera,
+			viewport
+		)
+		placeSurface(
+			rightPart,
+			RIGHT_CANVAS_SIZE,
+			rightCenterX,
+			rightCenterY,
+			-Config.SurfaceInwardYaw + Menu.orientationYaw,
+			Menu.orientationPitch,
+			camera,
+			viewport
+		)
+		updateKeyInputOverlay(camera)
+
+		local shouldRender = Menu.openAmount > 0.005 or Menu.targetOpenAmount > 0
+		leftSurface.Enabled = shouldRender
+		rightSurface.Enabled = shouldRender
+	end
+
+	connect(runService.RenderStepped, updateWorldPresentation)
+
+	function Menu:SetOpen(shouldOpen, instant)
+		if self.destroyed then
+			return
+		end
+
+		shouldOpen = shouldOpen == true
+		self.open = shouldOpen
+		self.targetOpenAmount = shouldOpen and 1 or 0
+
+		if shouldOpen then
+			leftSurface.Enabled = true
+			rightSurface.Enabled = true
+		else
+			self.orientationDragging = false
+			self.orientationDragInput = nil
+		end
+		if not shouldOpen and self.references.KeySystemInput and self.references.KeySystemInput.Visible then
+			self.references.KeySystemInput:ReleaseFocus()
+			self.references.KeySystemInput.Visible = false
+			self.references.KeySystemButton.Visible = true
+			self.references.KeySystemLabel.Visible = true
+		end
+
+		if instant then
+			self.openAmount = self.targetOpenAmount
+			updateWorldPresentation(0)
+		end
+		setMenuEnvironment(shouldOpen, instant == true)
+	end
+	function Menu:Toggle()
+		self:SetOpen(not self.open)
+	end
+
+	function Menu:PulseHotkey(key)
+		local hotkey = self.hotkeys[key]
+		if not hotkey then
+			return
+		end
+
+		hotkey.key.TextColor3 = Config.White
+		hotkey.value.TextColor3 = Config.Accent
+		hotkey.key.TextSize = 17
+		tween(hotkey.key, FAST_TWEEN, { TextColor3 = Config.Accent, TextSize = 15 })
+		tween(hotkey.value, FAST_TWEEN, { TextColor3 = Config.White })
+	end
+
+	function Menu:OpenHome()
+		self:SetNavigation("Home")
+		local callback = self.callbacks.Home
+		if type(callback) == "function" then
+			task.spawn(callback, self)
+		end
+	end
+
+	function Menu:OpenAnnouncements()
+		self:SetNavigation("Announcements")
+		self:PulseHotkey("F")
+		local callback = self.callbacks.Announcements or self.callbacks.F
+		if type(callback) == "function" then
+			task.spawn(callback, self)
+		end
+	end
+
+	function Menu:OpenUpdates()
+		self:SetNavigation("Updates")
+		local callback = self.callbacks.Updates
+		if type(callback) == "function" then
+			task.spawn(callback, self)
+		end
+	end
+
+	function Menu:OpenDiscord()
+		self:PulseHotkey("C")
+		local callback = self.callbacks.Discord or self.callbacks.C
+		if type(callback) == "function" then
+			task.spawn(callback, self)
+		end
+	end
+
+	function Menu:CopyKeyLink()
+		local copied = false
+		if clipboardWriter then
+			copied = pcall(clipboardWriter, KEY_LINK_TEXT)
+		end
+
+		local hotkey = self.hotkeys.X
+		if hotkey then
+			hotkey.value.Text = copied and "Copied!" or "Zenith.com"
+			hotkey.value.TextColor3 = copied and Config.White or Config.Secondary
+			task.delay(0.9, function()
+				if not Menu.destroyed and hotkey.value.Parent then
+					hotkey.value.Text = "Key Link"
+					hotkey.value.TextColor3 = Config.White
+				end
+			end)
+		end
+		return copied
+	end
+
+	local function sanitizeDescription(value)
+		if type(value) ~= "string" or value == "" then
+			return Config.DefaultDescription
+		end
+		local sanitized = string.gsub(value, "[%c]+", " ")
+		sanitized = string.gsub(sanitized, "%s+", " ")
+
+		-- Truncate by UTF-8 character boundary so an emoji or accented title can
+		-- never leave invalid text in the Roblox label.
+		local characterCount = utf8.len(sanitized)
+		if characterCount and characterCount > 175 then
+			local byteAfterLimit = utf8.offset(sanitized, 173)
+			if byteAfterLimit then
+				sanitized = string.sub(sanitized, 1, byteAfterLimit - 1) .. "..."
+			end
+		end
+		return sanitized
+	end
+
+	-- Current experience data: title, real game thumbnail, and description.
+	local function bindCurrentGame()
+		local image = Menu.references.GameImage
+		if image.Image ~= "" then
+			task.spawn(function()
+				pcall(function()
+					contentProvider:PreloadAsync({ image })
+				end)
+				if Menu.destroyed then
+					return
+				end
+				if image.IsLoaded then
+					Menu.references.GameImageLoading.Visible = false
+				end
+			end)
+		end
+
+		task.spawn(function()
+			local ok, information = pcall(function()
+				return marketplaceService:GetProductInfo(game.PlaceId, Enum.InfoType.Asset)
+			end)
+
+			if Menu.destroyed or not ok or type(information) ~= "table" then
+				return
+			end
+
+			if type(information.Name) == "string" and information.Name ~= "" then
+				Menu.references.GameTitle.Text = string.upper(information.Name)
+			end
+			Menu.references.GameDescription.Text = sanitizeDescription(information.Description)
+		end)
+	end
+
+	-- Local Roblox username + headshot, loaded entirely on the client.
+	local function bindLocalPlayer()
+		Menu.references.PlayerName.Text = localPlayer.Name
+		task.spawn(function()
+			local ok, thumbnail = pcall(function()
+				return playersService:GetUserThumbnailAsync(
+					localPlayer.UserId,
+					Enum.ThumbnailType.HeadShot,
+					Enum.ThumbnailSize.Size180x180
+				)
+			end)
+			if not Menu.destroyed and ok and type(thumbnail) == "string" then
+				Menu.references.Avatar.Image = thumbnail
+			end
+		end)
+	end
+
+	local function getServerTime()
+		local ok, value = pcall(function()
+			return workspaceService:GetServerTimeNow()
+		end)
+		if ok and type(value) == "number" then
+			return value
+		end
+		return os.time()
+	end
+
+	Menu.getServerTime = getServerTime
+	local startedAt = getServerTime()
+	-- Clear the expiry left by older versions, which started the timer at launch.
+	pcall(function()
+		localPlayer:SetAttribute("ZNTHStandardExpiresAt", nil)
+	end)
+
+	local function formatRemaining(seconds)
+		seconds = math.max(0, math.floor(seconds + 0.5))
+		if seconds <= 0 then
+			return "Expired"
+		end
+		if seconds >= Config.StandardDurationSeconds then
+			return "12 Hours - Remaining"
+		end
+		local hours = math.floor(seconds / 3600)
+		local minutes = math.floor((seconds % 3600) / 60)
+		local remainingSeconds = seconds % 60
+		return string.format("%02d:%02d:%02d - Remaining", hours, minutes, remainingSeconds)
+	end
+
+	local function formatPlayed(seconds)
+		seconds = math.max(0, math.floor(seconds))
+		local days = math.floor(seconds / 86400)
+		local hours = math.floor((seconds % 86400) / 3600)
+		local minutes = math.floor((seconds % 3600) / 60)
+		return string.format("%dd %dh %dm", days, hours, minutes)
+	end
+
+	local function updateTimers()
+		local now = getServerTime()
+		Menu.references.CountdownValue.Text = (Menu.keyAccepted and Menu.standardExpiresAt) and formatRemaining(Menu.standardExpiresAt - os.time()) or "Pending..."
+		Menu.references.TimePlayedValue.Text = formatPlayed(now - startedAt)
+	end
+
+	local timerAccumulator = 1
+	connect(runService.Heartbeat, function(deltaTime)
+		timerAccumulator = timerAccumulator + deltaTime
+		if timerAccumulator >= 1 then
+			timerAccumulator = timerAccumulator % 1
+			updateTimers()
+		end
+	end)
+	updateTimers()
+
+	-- RightShift always toggles the complete presentation, even while the key box is focused.
+	connect(userInputService.InputBegan, function(input, gameProcessed)
+		if input.KeyCode == Enum.KeyCode.RightShift then
+			Menu:Toggle()
+			return
+		end
+		if gameProcessed or userInputService:GetFocusedTextBox() then
+			return
+		end
+
+		if input.KeyCode == Enum.KeyCode.Z then
+			if not Menu.open then
+				Menu:SetOpen(true)
+			end
+			Menu:OpenHome()
+		elseif input.KeyCode == Enum.KeyCode.F then
+			Menu:OpenAnnouncements()
+		elseif input.KeyCode == Enum.KeyCode.X then
+			Menu:PulseHotkey("X")
+			Menu:CopyKeyLink()
+			local callback = Menu.callbacks.KeyLink or Menu.callbacks.X
+			if type(callback) == "function" then
+				task.spawn(callback, Menu)
+			end
+		elseif input.KeyCode == Enum.KeyCode.C then
+			Menu:OpenDiscord()
+		end
+	end)
+
+	local function bindViewport()
+		local camera = workspaceService.CurrentCamera
+		if camera then
+			connect(camera:GetPropertyChangedSignal("ViewportSize"), function()
+				Menu:UpdateScale()
+			end)
+		end
+	end
+
+	connect(workspaceService:GetPropertyChangedSignal("CurrentCamera"), function()
+		Menu:UpdateScale()
+	end)
+
+	function Menu:Destroy()
+		if self.destroyed then
+			return
+		end
+
+		if self.references.KeySystemInput and self.references.KeySystemInput:IsFocused() then
+			self.references.KeySystemInput:ReleaseFocus()
+		end
+		if self.coreGuiCaptured then
+			setRobloxChromeHidden(false)
+		end
+		self.destroyed = true
+
+		for _, connection in ipairs(self.connections) do
+			if connection and connection.Connected then
+				connection:Disconnect()
+			end
+		end
+		table.clear(self.connections)
+
+		for _, referenceName in ipairs({ "ScreenGui", "LeftSurface", "RightSurface", "SurfaceFolder", "BlurEffect" }) do
+			local object = self.references[referenceName]
+			if object and object.Parent then
+				object:Destroy()
+			end
+		end
+
+		if sharedEnvironment.ZNTHMainMenu == self then
+			sharedEnvironment.ZNTHMainMenu = nil
+		end
+	end
+
+	bindViewport()
+	Menu:UpdateScale()
+	bindCurrentGame()
+	bindLocalPlayer()
+	sharedEnvironment.ZNTHMainMenu = Menu
+
+	-- Start just off-screen, then reproduce the two-sided entrance from the reference.
+	Menu:SetOpen(false, true)
+	task.defer(function()
+		if not Menu.destroyed then
+			Menu:SetOpen(true)
+		end
+	end)
+
+	return Menu
+end
+
+-- ===================== ZENITH ASSISTANT =====================
+launchWordHelper = function(standardExpiresAt)
+	-- Compact, movable Zenith assistant. Outside chess it detects typed word
+	-- fragments; in supported chess games a separate Zenith Chess window reads
+	-- the live board and asks Chess-API only on the local player's turn. It never moves a
+	-- piece, blurs the game, or changes CoreGui.
+	local playersService = game:GetService("Players")
+	local userInputService = game:GetService("UserInputService")
+	local tweenService = game:GetService("TweenService")
+	local runService = game:GetService("RunService")
+	local workspaceService = game:GetService("Workspace")
+	local replicatedStorage = game:GetService("ReplicatedStorage")
+	local httpService = game:GetService("HttpService")
+
+	if not game:IsLoaded() then
+		game.Loaded:Wait()
+	end
+
+	local localPlayer = playersService.LocalPlayer
+	while not localPlayer do
+		playersService:GetPropertyChangedSignal("LocalPlayer"):Wait()
+		localPlayer = playersService.LocalPlayer
+	end
+	local playerGui = localPlayer:WaitForChild("PlayerGui")
+
+	local Config = {
+		GuiName = "ZNTHChessBase",
+		DisplayOrder = 101,
+		WindowWidth = 300,
+		WindowHeight = 360,
+		HeaderHeight = 40,
+		CollapsedHeight = 40,
+		MaximumResults = 180,
+		DictionaryFile = "Zenith/words.txt",
+		DictionaryUrl = "https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt",
+		PassiveResetSeconds = 1.35,
+		ChessApiEndpoint = "https://chess-api.com/v1",
+		ChessApiDepth = 12,
+		ChessApiThinkingTime = 50,
+		ChessPollSeconds = 0.35,
+		ChessWindowWidth = 300,
+		ChessWindowHeight = 330,
+		ChessIconFile = "Zenith/zenith-chess-icon.png",
+		ChessIconUrl = "https://raw.githubusercontent.com/XzAngel19/Models/arena/cbc36148-models/SCP-Main-Menu/assets/zenith-chess-icon.png",
+		SupportedChessGames = {
+			[130878180532794] = "RoChess",
+			[89083628291452] = "Chess Duels",
+			[93365009198479] = "Play Chess",
+		},
+
+		-- Compact form of the same neutral Zenith palette used by the Key System.
+		Accent = Color3.fromRGB(207, 211, 217),
+		Panel = Color3.fromRGB(5, 5, 6),
+		PanelRaised = Color3.fromRGB(12, 13, 15),
+		Row = Color3.fromRGB(24, 25, 28),
+		Hover = Color3.fromRGB(34, 35, 38),
+		Selected = Color3.fromRGB(46, 48, 53),
+		White = Color3.fromRGB(242, 243, 245),
+		Secondary = Color3.fromRGB(181, 185, 191),
+		Muted = Color3.fromRGB(108, 112, 119),
+		Line = Color3.fromRGB(198, 202, 208),
+		Danger = Color3.fromRGB(224, 83, 91),
+	}
+
+	local REGULAR_FONT = Enum.Font.Gotham
+	local MEDIUM_FONT = Enum.Font.GothamMedium
+	local BOLD_FONT = Enum.Font.GothamBold
+	local FAST_TWEEN = TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local OPEN_TWEEN = TweenInfo.new(0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+	local PRESS_TWEEN = TweenInfo.new(0.09, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+	-- Immediate offline coverage, including X and the NE examples from the visual
+	-- reference. A complete dictionary replaces this list from cache/HTTP later.
+	local FALLBACK_WORDS = [[
+aardvark
+ability
+absence
+academy
+account
+acoustic
+activate
+adventure
+airplane
+alphabet
+amazing
+ancient
+answer
+anything
+apricot
+argument
+arrival
+article
+athletic
+balance
+balloon
+beautiful
+because
+between
+blanket
+building
+cabinet
+camera
+captain
+careful
+chocolate
+circle
+complete
+computer
+creative
+danger
+decision
+different
+discover
+distance
+dolphin
+dynamic
+earthquake
+electric
+elegant
+energy
+example
+fantastic
+favorite
+feature
+festival
+freedom
+future
+galaxy
+garden
+general
+gentle
+giraffe
+golden
+guitar
+harmony
+history
+holiday
+imagine
+important
+inside
+journey
+justice
+keyboard
+language
+library
+machine
+memory
+mountain
+natural
+negative
+negativisms
+nebulize
+nebulizes
+neglectednesses
+neoterists
+netbraider
+neuraxial
+neurocrine
+network
+neutral
+never
+newspaper
+observe
+ocean
+orange
+outside
+picture
+planet
+possible
+question
+quickly
+rainbow
+remember
+science
+silver
+special
+station
+strength
+sunlight
+system
+together
+triangle
+universe
+victory
+window
+wonderful
+xanthic
+xebec
+xenial
+xenon
+xeric
+xylophone
+xyster
+zenith
+]]
+
+	local function getSharedEnvironment()
+		local environment = _G
+		local ok, executorEnvironment = pcall(function()
+			if type(getgenv) == "function" then
+				return getgenv()
+			end
+			return nil
+		end)
+		if ok and type(executorEnvironment) == "table" then
+			environment = executorEnvironment
+		end
+		return environment
+	end
+
+	local sharedEnvironment = getSharedEnvironment()
+	-- Product lifecycles are isolated: re-running Chess replaces only an earlier
+	-- Chess instance and never tears down the standalone Vocabulary tool.
+	local previousHelper = sharedEnvironment.ZenithChess
+	if type(previousHelper) == "table" and type(previousHelper.Destroy) == "function" then
+		pcall(function()
+			previousHelper:Destroy()
+		end)
+	end
+	local previousKeyMenu = sharedEnvironment.ZNTHMainMenu
+	if type(previousKeyMenu) == "table" and type(previousKeyMenu.Destroy) == "function" then
+		pcall(function()
+			previousKeyMenu:Destroy()
+		end)
+	end
+
+	local supportedChessGame = Config.SupportedChessGames[game.PlaceId] or "Zenith Chess"
+	local WordHelper = {
+		product = "Chess",
+		destroyed = false,
+		visible = true,
+		minimized = false,
+		mode = supportedChessGame and "Chess" or "Words",
+		connections = {},
+		rowConnections = {},
+		focusConnections = {},
+		rows = {},
+		words = {},
+		firstLetterBuckets = {},
+		prefixBuckets = {},
+		callbacks = {},
+		references = {},
+		selectedWord = nil,
+		currentQuery = "",
+		detectionSource = "automatic",
+		refreshVersion = 0,
+		activeExternalTextBox = nil,
+		passiveBuffer = "",
+		lastPassiveInput = 0,
+		dragging = false,
+		hasUserPosition = false,
+		dictionaryLabel = "Built-in dictionary",
+		chess = {
+			supported = supportedChessGame ~= nil,
+			gameName = supportedChessGame or "Unsupported game",
+			minimized = false,
+			dragging = false,
+			hasUserPosition = false,
+			adapter = nil,
+			lastFen = nil,
+			lastRequestedFen = nil,
+			pendingSnapshot = nil,
+			requestGeneration = 0,
+			busy = false,
+			bestMove = nil,
+			ponder = nil,
+			evaluation = nil,
+			mate = nil,
+			lastError = nil,
+			retryAt = 0,
+		},
+	}
+
+	local function create(className, properties, parent)
+		local object = Instance.new(className)
+		for property, value in pairs(properties or {}) do
+			object[property] = value
+		end
+		if parent then
+			object.Parent = parent
+		end
+		return object
+	end
+
+	local function connect(signal, callback)
+		local connection = signal:Connect(callback)
+		table.insert(WordHelper.connections, connection)
+		return connection
+	end
+
+	local function connectRow(signal, callback)
+		local connection = signal:Connect(callback)
+		table.insert(WordHelper.rowConnections, connection)
+		return connection
+	end
+
+	local function tween(object, info, goals)
+		if WordHelper.destroyed or not object or not object.Parent then
+			return nil
+		end
+		local animation = tweenService:Create(object, info, goals)
+		animation:Play()
+		return animation
+	end
+
+	local function addStroke(parent, color, transparency, thickness)
+		return create("UIStroke", {
+			ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+			Color = color or Config.Line,
+			Transparency = transparency == nil and 0.48 or transparency,
+			Thickness = thickness or 1,
+			LineJoinMode = Enum.LineJoinMode.Miter,
+		}, parent)
+	end
+
+	local function addLine(parent, position, size, transparency, color, zIndex)
+		return create("Frame", {
+			Name = "Divider",
+			Position = position,
+			Size = size,
+			BackgroundColor3 = color or Config.Line,
+			BackgroundTransparency = transparency == nil and 0.52 or transparency,
+			BorderSizePixel = 0,
+			ZIndex = zIndex or 4,
+		}, parent)
+	end
+
+	local function makeText(parent, properties)
+		local defaults = {
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Font = REGULAR_FONT,
+			Text = "",
+			TextColor3 = Config.White,
+			TextSize = 14,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextYAlignment = Enum.TextYAlignment.Center,
+			ZIndex = 5,
+		}
+		for property, value in pairs(properties or {}) do
+			defaults[property] = value
+		end
+		return create("TextLabel", defaults, parent)
+	end
+
+	local function makeButton(parent, properties)
+		local defaults = {
+			AutoButtonColor = false,
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			Text = "",
+			ZIndex = 8,
+		}
+		for property, value in pairs(properties or {}) do
+			defaults[property] = value
+		end
+		return create("TextButton", defaults, parent)
+	end
+
+	local function normalize(text)
+		text = string.lower(tostring(text or ""))
+		text = string.gsub(text, "^%s+", "")
+		text = string.gsub(text, "%s+$", "")
+		return text
+	end
+
+	local function normalizeLetters(text)
+		return string.gsub(normalize(text), "[^a-z]", "")
+	end
+
+	local function escapeRichText(text)
+		text = string.gsub(text, "&", "&amp;")
+		text = string.gsub(text, "<", "&lt;")
+		text = string.gsub(text, ">", "&gt;")
+		text = string.gsub(text, '"', "&quot;")
+		return text
+	end
+
+	local function extractCurrentFragment(text, cursorPosition)
+		text = string.lower(tostring(text or ""))
+		cursorPosition = tonumber(cursorPosition)
+		if cursorPosition and cursorPosition > 0 then
+			text = string.sub(text, 1, math.min(#text, cursorPosition - 1))
+		end
+		return string.match(text, "([a-z]+)$") or ""
+	end
+
+	local clipboardWriter = zenithFileFunction("setclipboard") or zenithFileFunction("toclipboard")
+	local readFile = zenithFileFunction("readfile")
+	local writeFile = zenithFileFunction("writefile")
+	local isFile = zenithFileFunction("isfile")
+	local makeFolder = zenithFileFunction("makefolder")
+	local getCustomAsset = zenithFileFunction("getcustomasset") or zenithFileFunction("getsynasset")
+	local executorRequest = zenithFileFunction("request")
+		or zenithFileFunction("http_request")
+		or zenithFileFunction("httprequest")
+	local getGarbageCollected = zenithFileFunction("getgc")
+	if not executorRequest and type(sharedEnvironment.syn) == "table" and type(sharedEnvironment.syn.request) == "function" then
+		executorRequest = sharedEnvironment.syn.request
+	end
+
+	for _, guiName in ipairs({ Config.GuiName, "ZenithAssistant", "ZenithChess", "ZenithChessBoardGuide" }) do
+		local previousGui = playerGui:FindFirstChild(guiName)
+		if previousGui then
+			previousGui:Destroy()
+		end
+	end
+	-- Remove presentation objects from an interrupted older 3D Word Helper build.
+	for _, staleName in ipairs({ "ZNTHWordSurface", "ZNTHLeftSurface", "ZNTHRightSurface" }) do
+		local staleGui = playerGui:FindFirstChild(staleName)
+		if staleGui then
+			staleGui:Destroy()
+		end
+	end
+	for _, staleName in ipairs({ "ZNTHWord3D", "ZNTHMenu3D" }) do
+		local staleFolder = workspaceService:FindFirstChild(staleName)
+		if staleFolder then
+			staleFolder:Destroy()
+		end
+	end
+	pcall(function()
+		local lightingService = game:GetService("Lighting")
+		for _, staleName in ipairs({ "ZNTHWordBlur", "ZNTHMenuBlur" }) do
+			local staleBlur = lightingService:FindFirstChild(staleName)
+			if staleBlur then
+				staleBlur:Destroy()
+			end
+		end
+	end)
+
+	local screenGui = create("ScreenGui", {
+		Name = Config.GuiName,
+		DisplayOrder = Config.DisplayOrder,
+		Enabled = not WordHelper.chess.supported,
+		IgnoreGuiInset = true,
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	}, playerGui)
+
+	local window = create("Frame", {
+		Name = "Window",
+		Position = UDim2.fromOffset(16, 16),
+		Size = UDim2.fromOffset(Config.WindowWidth, Config.WindowHeight),
+		BackgroundColor3 = Config.Panel,
+		BackgroundTransparency = 0.035,
+		BorderSizePixel = 0,
+		ClipsDescendants = true,
+		Active = true,
+		ZIndex = 2,
+	}, screenGui)
+	addStroke(window, Config.Line, 0.42, 1)
+	create("UIGradient", {
+		Color = ColorSequence.new(Config.PanelRaised, Config.Panel),
+		Rotation = 90,
+	}, window)
+	local windowScale = create("UIScale", { Scale = 1 }, window)
+
+	local header = create("Frame", {
+		Name = "Header",
+		Size = UDim2.new(1, 0, 0, Config.HeaderHeight),
+		BackgroundColor3 = Color3.fromRGB(18, 19, 22),
+		BackgroundTransparency = 0.04,
+		BorderSizePixel = 0,
+		Active = true,
+		ZIndex = 4,
+	}, window)
+	addLine(header, UDim2.new(0, 0, 1, -1), UDim2.new(1, 0, 0, 1), 0.68, Config.Line, 6)
+
+	local titleLabel = makeText(header, {
+		Name = "Title",
+		Position = UDim2.fromOffset(12, 0),
+		Size = UDim2.new(1, -86, 1, 0),
+		Font = BOLD_FONT,
+		RichText = true,
+		Text = '<b>Zenith</b> <font color="#B5B9BF">WORDS</font>',
+		TextColor3 = Config.White,
+		TextSize = 15,
+		ZIndex = 7,
+	})
+
+	local function makeHeaderButton(text, rightOffset)
+		return makeButton(header, {
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, rightOffset, 0.5, 0),
+			Size = UDim2.fromOffset(30, 30),
+			BackgroundColor3 = Config.Row,
+			BackgroundTransparency = 1,
+			Font = BOLD_FONT,
+			Text = text,
+			TextColor3 = Config.Secondary,
+			TextSize = 16,
+			ZIndex = 8,
+		})
+	end
+
+	local minimizeButton = makeHeaderButton("−", -38)
+	local closeButton = makeHeaderButton("X", -6)
+
+	local body = create("Frame", {
+		Name = "Body",
+		Position = UDim2.fromOffset(0, Config.HeaderHeight),
+		Size = UDim2.new(1, 0, 1, -Config.HeaderHeight),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ZIndex = 2,
+	}, window)
+
+	local wordsView = create("Frame", {
+		Name = "WordsView",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Visible = true,
+		ZIndex = 2,
+	}, body)
+
+	local searchHolder = create("Frame", {
+		Name = "SearchHolder",
+		Position = UDim2.fromOffset(10, 10),
+		Size = UDim2.new(1, -20, 0, 38),
+		BackgroundColor3 = Config.Row,
+		BackgroundTransparency = 0.1,
+		BorderSizePixel = 0,
+		ZIndex = 3,
+	}, wordsView)
+	local searchStroke = addStroke(searchHolder, Config.Line, 0.78, 1)
+
+	local autoDot = create("Frame", {
+		Name = "AutomaticDetection",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromOffset(15, 19),
+		Size = UDim2.fromOffset(7, 7),
+		BackgroundColor3 = Config.Accent,
+		BorderSizePixel = 0,
+		ZIndex = 5,
+	}, searchHolder)
+	create("UICorner", { CornerRadius = UDim.new(1, 0) }, autoDot)
+
+	local searchBox = create("TextBox", {
+		Name = "SearchWords",
+		Position = UDim2.fromOffset(28, 0),
+		Size = UDim2.new(1, -38, 1, 0),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ClearTextOnFocus = false,
+		Font = MEDIUM_FONT,
+		MultiLine = false,
+		PlaceholderColor3 = Config.Muted,
+		PlaceholderText = "Search words...",
+		Text = "",
+		TextColor3 = Config.White,
+		TextSize = 14,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		ZIndex = 6,
+	}, searchHolder)
+
+	local detectionLabel = makeText(wordsView, {
+		Name = "DetectionStatus",
+		Position = UDim2.fromOffset(11, 52),
+		Size = UDim2.new(1, -22, 0, 20),
+		Text = "Detección automática activa",
+		TextColor3 = Config.Muted,
+		TextSize = 10,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		ZIndex = 5,
+	})
+
+	local listHolder = create("Frame", {
+		Name = "WordListHolder",
+		Position = UDim2.fromOffset(10, 76),
+		Size = UDim2.new(1, -20, 1, -106),
+		BackgroundColor3 = Config.Panel,
+		BackgroundTransparency = 0.34,
+		BorderSizePixel = 0,
+		ClipsDescendants = true,
+		ZIndex = 3,
+	}, wordsView)
+	addStroke(listHolder, Config.Line, 0.82, 1)
+
+	local wordList = create("ScrollingFrame", {
+		Name = "Words",
+		Position = UDim2.fromOffset(4, 4),
+		Size = UDim2.new(1, -8, 1, -8),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		ScrollBarThickness = 3,
+		ScrollBarImageColor3 = Config.Secondary,
+		ScrollBarImageTransparency = 0.28,
+		ScrollingDirection = Enum.ScrollingDirection.Y,
+		ZIndex = 4,
+	}, listHolder)
+	create("UIListLayout", {
+		Padding = UDim.new(0, 5),
+		SortOrder = Enum.SortOrder.LayoutOrder,
+	}, wordList)
+	create("UIPadding", {
+		PaddingTop = UDim.new(0, 2),
+		PaddingBottom = UDim.new(0, 2),
+		PaddingRight = UDim.new(0, 4),
+	}, wordList)
+
+	local emptyLabel = makeText(listHolder, {
+		Name = "Empty",
+		Position = UDim2.fromOffset(10, 0),
+		Size = UDim2.new(1, -20, 1, 0),
+		Font = MEDIUM_FONT,
+		Text = "Escribe una letra en el chat o juego",
+		TextColor3 = Config.Muted,
+		TextSize = 12,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Visible = true,
+		ZIndex = 6,
+	})
+
+	local statusLabel = makeText(wordsView, {
+		Name = "Status",
+		Position = UDim2.new(0, 11, 1, -28),
+		Size = UDim2.new(1, -22, 0, 24),
+		Text = "Esperando texto...",
+		TextColor3 = Config.Muted,
+		TextSize = 10,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		ZIndex = 5,
+	})
+
+	-- Chess is intentionally a separate menu, not a tab inside the Words helper.
+	local chessScreenGui = create("ScreenGui", {
+		Name = "ZenithChess",
+		DisplayOrder = Config.DisplayOrder + 1,
+		Enabled = WordHelper.chess.supported,
+		IgnoreGuiInset = true,
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	}, playerGui)
+	local chessWindow = create("Frame", {
+		Name = "Window",
+		Position = UDim2.fromOffset(16, 16),
+		Size = UDim2.fromOffset(Config.ChessWindowWidth, Config.ChessWindowHeight),
+		BackgroundColor3 = Config.Panel,
+		BackgroundTransparency = 0.035,
+		BorderSizePixel = 0,
+		ClipsDescendants = true,
+		Active = true,
+		ZIndex = 2,
+	}, chessScreenGui)
+	addStroke(chessWindow, Config.Line, 0.42, 1)
+	create("UIGradient", {
+		Color = ColorSequence.new(Config.PanelRaised, Config.Panel),
+		Rotation = 90,
+	}, chessWindow)
+	local chessWindowScale = create("UIScale", { Scale = 1 }, chessWindow)
+	local chessHeader = create("Frame", {
+		Name = "Header",
+		Size = UDim2.new(1, 0, 0, Config.HeaderHeight),
+		BackgroundColor3 = Color3.fromRGB(18, 19, 22),
+		BackgroundTransparency = 0.04,
+		BorderSizePixel = 0,
+		Active = true,
+		ZIndex = 4,
+	}, chessWindow)
+	addLine(chessHeader, UDim2.new(0, 0, 1, -1), UDim2.new(1, 0, 0, 1), 0.68, Config.Line, 6)
+	local chessBrandLabel = makeText(chessHeader, {
+		Name = "Brand",
+		Position = UDim2.fromOffset(12, 0),
+		Size = UDim2.fromOffset(58, Config.HeaderHeight),
+		Font = BOLD_FONT,
+		Text = "Zenith",
+		TextColor3 = Config.White,
+		TextSize = 15,
+		ZIndex = 7,
+	})
+	local chessIconFallback = makeText(chessHeader, {
+		Name = "IconFallback",
+		Position = UDim2.fromOffset(70, 5),
+		Size = UDim2.fromOffset(30, 30),
+		Font = REGULAR_FONT,
+		Text = "♟",
+		TextColor3 = Config.White,
+		TextSize = 27,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		ZIndex = 7,
+	})
+	local chessIcon = create("ImageLabel", {
+		Name = "Icon",
+		Position = UDim2.fromOffset(70, 5),
+		Size = UDim2.fromOffset(30, 30),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Image = "",
+		ImageTransparency = 1,
+		ScaleType = Enum.ScaleType.Fit,
+		ZIndex = 8,
+	}, chessHeader)
+	local function makeChessHeaderButton(text, rightOffset)
+		return makeButton(chessHeader, {
+			AnchorPoint = Vector2.new(1, 0.5),
+			Position = UDim2.new(1, rightOffset, 0.5, 0),
+			Size = UDim2.fromOffset(30, 30),
+			BackgroundColor3 = Config.Row,
+			BackgroundTransparency = 1,
+			Font = BOLD_FONT,
+			Text = text,
+			TextColor3 = Config.Secondary,
+			TextSize = 16,
+			ZIndex = 8,
+		})
+	end
+	local chessMinimizeButton = makeChessHeaderButton("−", -38)
+	local chessCloseButton = makeChessHeaderButton("X", -6)
+	local chessBody = create("Frame", {
+		Name = "Body",
+		Position = UDim2.fromOffset(0, Config.HeaderHeight),
+		Size = UDim2.new(1, 0, 1, -Config.HeaderHeight),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ZIndex = 2,
+	}, chessWindow)
+
+	local chessView = create("Frame", {
+		Name = "ChessView",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Visible = true,
+		ZIndex = 2,
+	}, chessBody)
+
+	local chessGameCard = create("Frame", {
+		Name = "GameCard",
+		Position = UDim2.fromOffset(10, 10),
+		Size = UDim2.new(1, -20, 0, 48),
+		BackgroundColor3 = Config.Row,
+		BackgroundTransparency = 0.1,
+		BorderSizePixel = 0,
+		ZIndex = 3,
+	}, chessView)
+	addStroke(chessGameCard, Config.Line, 0.78, 1)
+	local chessGameLabel = makeText(chessGameCard, {
+		Name = "Game",
+		Position = UDim2.fromOffset(11, 5),
+		Size = UDim2.new(1, -22, 0, 20),
+		Font = BOLD_FONT,
+		Text = WordHelper.chess.gameName,
+		TextColor3 = Config.White,
+		TextSize = 13,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		ZIndex = 5,
+	})
+	local chessModeLabel = makeText(chessGameCard, {
+		Name = "Mode",
+		Position = UDim2.fromOffset(11, 24),
+		Size = UDim2.new(1, -22, 0, 17),
+		Text = WordHelper.chess.supported and "READ-ONLY • verificando partida" or "READ-ONLY • juego no compatible",
+		TextColor3 = Config.Muted,
+		TextSize = 10,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		ZIndex = 5,
+	})
+
+	local bestMoveCard = create("Frame", {
+		Name = "BestMoveCard",
+		Position = UDim2.fromOffset(10, 66),
+		Size = UDim2.new(1, -20, 0, 102),
+		BackgroundColor3 = Config.Panel,
+		BackgroundTransparency = 0.24,
+		BorderSizePixel = 0,
+		ZIndex = 3,
+	}, chessView)
+	addStroke(bestMoveCard, Config.Line, 0.82, 1)
+	makeText(bestMoveCard, {
+		Position = UDim2.fromOffset(11, 7),
+		Size = UDim2.new(1, -22, 0, 16),
+		Font = BOLD_FONT,
+		Text = "MEJOR MOVIMIENTO",
+		TextColor3 = Config.Muted,
+		TextSize = 9,
+		ZIndex = 5,
+	})
+	local bestMoveLabel = makeText(bestMoveCard, {
+		Name = "BestMove",
+		Position = UDim2.fromOffset(11, 22),
+		Size = UDim2.new(0.58, -11, 0, 43),
+		Font = BOLD_FONT,
+		Text = "—",
+		TextColor3 = Config.White,
+		TextSize = 27,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		ZIndex = 5,
+	})
+	local chessEvalLabel = makeText(bestMoveCard, {
+		Name = "Evaluation",
+		Position = UDim2.new(0.58, 0, 0, 27),
+		Size = UDim2.new(0.42, -11, 0, 18),
+		Font = BOLD_FONT,
+		Text = "EVAL —",
+		TextColor3 = Config.Secondary,
+		TextSize = 11,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		ZIndex = 5,
+	})
+	local chessPonderLabel = makeText(bestMoveCard, {
+		Name = "Ponder",
+		Position = UDim2.new(0.58, 0, 0, 48),
+		Size = UDim2.new(0.42, -11, 0, 17),
+		Text = "RESPUESTA —",
+		TextColor3 = Config.Muted,
+		TextSize = 9,
+		TextXAlignment = Enum.TextXAlignment.Right,
+		ZIndex = 5,
+	})
+	local chessLineLabel = makeText(bestMoveCard, {
+		Name = "Line",
+		Position = UDim2.fromOffset(11, 72),
+		Size = UDim2.new(1, -22, 0, 20),
+		Text = "Esperando una posición válida...",
+		TextColor3 = Config.Muted,
+		TextSize = 10,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		ZIndex = 5,
+	})
+
+	local chessMoveGuide = create("Frame", {
+		Name = "MoveGuide",
+		Position = UDim2.fromOffset(10, 176),
+		Size = UDim2.new(1, -20, 0, 42),
+		BackgroundColor3 = Config.Row,
+		BackgroundTransparency = 0.12,
+		BorderSizePixel = 0,
+		ZIndex = 3,
+	}, chessView)
+	addStroke(chessMoveGuide, Config.Line, 0.82, 1)
+	local chessMoveGuideLabel = makeText(chessMoveGuide, {
+		Name = "Instruction",
+		Position = UDim2.fromOffset(10, 0),
+		Size = UDim2.new(1, -20, 1, 0),
+		Font = BOLD_FONT,
+		Text = "Esperando el mejor movimiento...",
+		TextColor3 = Config.White,
+		TextSize = 12,
+		TextWrapped = true,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		ZIndex = 5,
+	})
+	local chessStateLabel = makeText(chessView, {
+		Name = "State",
+		Position = UDim2.fromOffset(11, 222),
+		Size = UDim2.new(1, -22, 0, 32),
+		Font = MEDIUM_FONT,
+		Text = WordHelper.chess.supported and "Leyendo automáticamente el tablero..." or "Juego no compatible.",
+		TextColor3 = Config.Secondary,
+		TextSize = 10,
+		TextWrapped = true,
+		ZIndex = 5,
+	})
+	local noAutoplayLabel = makeText(chessView, {
+		Name = "NoAutoplay",
+		Position = UDim2.fromOffset(11, 253),
+		Size = UDim2.new(1, -22, 0, 16),
+		Text = "SOLO LECTURA • nunca mueve piezas",
+		TextColor3 = Config.Muted,
+		TextSize = 9,
+		ZIndex = 5,
+	})
+	local chessFooterLabel = makeText(chessView, {
+		Name = "Footer",
+		Position = UDim2.fromOffset(11, 269),
+		Size = UDim2.new(1, -22, 0, 16),
+		Text = "chess-api.com • automático • profundidad " .. tostring(Config.ChessApiDepth),
+		TextColor3 = Config.Muted,
+		TextSize = 9,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		ZIndex = 5,
+	})
+
+	-- Screen-space guidance is visual only. It never captures input or calls a
+	-- move remote; the highlighted squares and arrow sit over the detected board.
+	local moveOverlayGui = create("ScreenGui", {
+		Name = "ZenithChessBoardGuide",
+		DisplayOrder = Config.DisplayOrder,
+		Enabled = WordHelper.chess.supported,
+		IgnoreGuiInset = true,
+		ResetOnSpawn = false,
+		ZIndexBehavior = Enum.ZIndexBehavior.Global,
+	}, playerGui)
+	local moveOverlayRoot = create("Frame", {
+		Name = "Guide",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		Active = false,
+		Visible = false,
+		ZIndex = 100,
+	}, moveOverlayGui)
+	local sourceSquareGuide = create("Frame", {
+		Name = "From",
+		BackgroundColor3 = Color3.fromRGB(246, 181, 72),
+		BackgroundTransparency = 0.5,
+		BorderSizePixel = 0,
+		Active = false,
+		ZIndex = 101,
+	}, moveOverlayRoot)
+	addStroke(sourceSquareGuide, Color3.fromRGB(255, 221, 143), 0.08, 2)
+	local targetSquareGuide = create("Frame", {
+		Name = "To",
+		BackgroundColor3 = Color3.fromRGB(112, 151, 255),
+		BackgroundTransparency = 0.42,
+		BorderSizePixel = 0,
+		Active = false,
+		ZIndex = 101,
+	}, moveOverlayRoot)
+	addStroke(targetSquareGuide, Color3.fromRGB(190, 210, 255), 0.04, 2)
+	local moveArrow = create("Frame", {
+		Name = "Arrow",
+		AnchorPoint = Vector2.new(0, 0.5),
+		BackgroundColor3 = Color3.fromRGB(88, 131, 245),
+		BackgroundTransparency = 0.14,
+		BorderSizePixel = 0,
+		Active = false,
+		ZIndex = 102,
+	}, moveOverlayRoot)
+	create("UICorner", { CornerRadius = UDim.new(1, 0) }, moveArrow)
+	local moveArrowHead = makeText(moveOverlayRoot, {
+		Name = "ArrowHead",
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Size = UDim2.fromOffset(28, 28),
+		Font = BOLD_FONT,
+		Text = "▶",
+		TextColor3 = Color3.fromRGB(112, 151, 255),
+		TextSize = 24,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		ZIndex = 103,
+	})
+
+	WordHelper.references.ScreenGui = screenGui
+	WordHelper.references.Window = window
+	WordHelper.references.WindowScale = windowScale
+	WordHelper.references.Header = header
+	WordHelper.references.Body = body
+	WordHelper.references.TitleLabel = titleLabel
+	WordHelper.references.WordsView = wordsView
+	WordHelper.references.ChessScreenGui = chessScreenGui
+	WordHelper.references.ChessWindow = chessWindow
+	WordHelper.references.ChessWindowScale = chessWindowScale
+	WordHelper.references.ChessHeader = chessHeader
+	WordHelper.references.ChessBody = chessBody
+	WordHelper.references.ChessBrandLabel = chessBrandLabel
+	WordHelper.references.ChessIcon = chessIcon
+	WordHelper.references.ChessView = chessView
+	WordHelper.references.MoveOverlayGui = moveOverlayGui
+	WordHelper.references.MoveOverlayRoot = moveOverlayRoot
+	WordHelper.references.SearchBox = searchBox
+	WordHelper.references.WordList = wordList
+	WordHelper.references.EmptyLabel = emptyLabel
+	WordHelper.references.StatusLabel = statusLabel
+	WordHelper.references.DetectionLabel = detectionLabel
+	WordHelper.references.ChessGameLabel = chessGameLabel
+	WordHelper.references.ChessModeLabel = chessModeLabel
+	WordHelper.references.BestMoveLabel = bestMoveLabel
+	WordHelper.references.ChessEvalLabel = chessEvalLabel
+	WordHelper.references.ChessPonderLabel = chessPonderLabel
+	WordHelper.references.ChessLineLabel = chessLineLabel
+	WordHelper.references.ChessMoveGuideLabel = chessMoveGuideLabel
+	WordHelper.references.ChessStateLabel = chessStateLabel
+	WordHelper.references.MinimizeButton = minimizeButton
+	WordHelper.references.CloseButton = closeButton
+	WordHelper.references.ChessMinimizeButton = chessMinimizeButton
+	WordHelper.references.ChessCloseButton = chessCloseButton
+
+	local function loadChessIcon()
+		if not getCustomAsset then return end
+		local path = Config.ChessIconFile
+		local available = false
+		if isFile then
+			local ok, value = pcall(isFile, path)
+			available = ok and value == true
+		end
+		if not available and writeFile then
+			local ok, bytes = pcall(function()
+				return game:HttpGet(Config.ChessIconUrl, true)
+			end)
+			if ok and type(bytes) == "string" and #bytes > 100 then
+				pcall(function()
+					if makeFolder then pcall(makeFolder, "Zenith") end
+					writeFile(path, bytes)
+					available = true
+				end)
+			end
+		end
+		if not available and readFile then
+			local ok, bytes = pcall(readFile, path)
+			available = ok and type(bytes) == "string" and #bytes > 100
+		end
+		if available then
+			local ok, asset = pcall(getCustomAsset, path)
+			if ok and type(asset) == "string" and asset ~= "" and not WordHelper.destroyed then
+				chessIcon.Image = asset
+				chessIcon.ImageTransparency = 0
+				chessIconFallback.Visible = false
+			end
+		end
+	end
+
+	local function setStatus(text, color)
+		statusLabel.Text = text
+		statusLabel.TextColor3 = color or Config.Muted
+	end
+
+	local function parseDictionary(content)
+		local output = {}
+		local seen = {}
+		local sorted = true
+		local previousWord = nil
+		for rawWord in string.gmatch(tostring(content or ""), "[^\r\n]+") do
+			local word = normalize(rawWord)
+			if #word >= 2 and #word <= 32 and string.match(word, "^[a-z]+$") and not seen[word] then
+				seen[word] = true
+				if previousWord and word < previousWord then
+					sorted = false
+				end
+				previousWord = word
+				table.insert(output, word)
+			end
+		end
+		if not sorted then
+			table.sort(output)
+		end
+		return output
+	end
+
+	local function buildBuckets(words)
+		local firstLetterBuckets = {}
+		local prefixBuckets = {}
+		for _, word in ipairs(words) do
+			local first = string.sub(word, 1, 1)
+			local firstBucket = firstLetterBuckets[first]
+			if not firstBucket then
+				firstBucket = {}
+				firstLetterBuckets[first] = firstBucket
+			end
+			table.insert(firstBucket, word)
+
+			if #word >= 2 then
+				local prefix = string.sub(word, 1, 2)
+				local prefixBucket = prefixBuckets[prefix]
+				if not prefixBucket then
+					prefixBucket = {}
+					prefixBuckets[prefix] = prefixBucket
+				end
+				table.insert(prefixBucket, word)
+			end
+		end
+		return firstLetterBuckets, prefixBuckets
+	end
+
+	local function installCleanWords(words)
+		WordHelper.words = words
+		WordHelper.firstLetterBuckets, WordHelper.prefixBuckets = buildBuckets(words)
+	end
+
+	local function disconnectRows()
+		for _, connection in ipairs(WordHelper.rowConnections) do
+			if connection and connection.Connected then
+				connection:Disconnect()
+			end
+		end
+		table.clear(WordHelper.rowConnections)
+	end
+
+	local function clearRows()
+		disconnectRows()
+		for _, record in ipairs(WordHelper.rows) do
+			if record.button and record.button.Parent then
+				record.button:Destroy()
+			end
+		end
+		table.clear(WordHelper.rows)
+	end
+
+	local function formatWord(word, query)
+		local prefix = escapeRichText(string.sub(word, 1, #query))
+		local suffix = escapeRichText(string.sub(word, #query + 1))
+		return '<font color="#F2F3F5"><b>' .. prefix .. '</b></font><font color="#B5B9BF">' .. suffix .. "</font>"
+	end
+
+	local function styleRows()
+		for _, record in ipairs(WordHelper.rows) do
+			local selected = record.word == WordHelper.selectedWord
+			record.button.BackgroundColor3 = selected and Config.Selected or Config.Row
+			record.button.BackgroundTransparency = selected and 0.04 or 0.18
+			record.stroke.Transparency = selected and 0.38 or 0.88
+		end
+	end
+
+	function WordHelper:SelectWord(word)
+		if self.destroyed then
+			return false
+		end
+		self.selectedWord = word
+		styleRows()
+
+		local copied = false
+		if clipboardWriter then
+			copied = pcall(clipboardWriter, word)
+		end
+		setStatus(copied and ("Copiado: " .. word) or ("Seleccionado: " .. word), copied and Config.Secondary or Config.Muted)
+
+		local callback = self.callbacks.WordSelected
+		if type(callback) == "function" then
+			task.spawn(callback, self, word, copied)
+		end
+		return copied
+	end
+
+	local function createWordRow(word, query, order)
+		local button = makeButton(wordList, {
+			Name = word,
+			Size = UDim2.new(1, -2, 0, 38),
+			BackgroundColor3 = Config.Row,
+			BackgroundTransparency = 0.18,
+			Font = MEDIUM_FONT,
+			LayoutOrder = order,
+			RichText = true,
+			Text = formatWord(word, query),
+			TextColor3 = Config.White,
+			TextSize = 13,
+			TextXAlignment = Enum.TextXAlignment.Left,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+			ZIndex = 5,
+		})
+		create("UIPadding", {
+			PaddingLeft = UDim.new(0, 11),
+			PaddingRight = UDim.new(0, 8),
+		}, button)
+		local stroke = addStroke(button, Config.Line, 0.88, 1)
+		local pressScale = create("UIScale", { Scale = 1 }, button)
+		local record = { button = button, stroke = stroke, word = word }
+		table.insert(WordHelper.rows, record)
+
+		connectRow(button.MouseButton1Down, function()
+			tween(pressScale, PRESS_TWEEN, { Scale = 0.985 })
+		end)
+		connectRow(button.MouseButton1Up, function()
+			tween(pressScale, PRESS_TWEEN, { Scale = 1 })
+		end)
+		connectRow(button.MouseEnter, function()
+			if WordHelper.selectedWord ~= word then
+				tween(button, FAST_TWEEN, { BackgroundColor3 = Config.Hover, BackgroundTransparency = 0.06 })
+				tween(stroke, FAST_TWEEN, { Transparency = 0.62 })
+			end
+		end)
+		connectRow(button.MouseLeave, function()
+			tween(pressScale, PRESS_TWEEN, { Scale = 1 })
+			if WordHelper.selectedWord ~= word then
+				tween(button, FAST_TWEEN, { BackgroundColor3 = Config.Row, BackgroundTransparency = 0.18 })
+				tween(stroke, FAST_TWEEN, { Transparency = 0.88 })
+			end
+		end)
+		connectRow(button.Activated, function()
+			WordHelper:SelectWord(word)
+		end)
+	end
+
+	local function refreshWords()
+		if WordHelper.destroyed then
+			return
+		end
+		clearRows()
+
+		local query = WordHelper.currentQuery
+		if query == "" then
+			emptyLabel.Visible = true
+			emptyLabel.Text = "Escribe una letra en el chat o juego"
+			wordList.CanvasPosition = Vector2.new(0, 0)
+			setStatus("Esperando texto...", Config.Muted)
+			return
+		end
+
+		local source
+		if #query == 1 then
+			source = WordHelper.firstLetterBuckets[query] or {}
+		else
+			source = WordHelper.prefixBuckets[string.sub(query, 1, 2)] or {}
+		end
+
+		local shown = 0
+		local totalMatches = 0
+		for _, word in ipairs(source) do
+			if string.sub(word, 1, #query) == query then
+				totalMatches = totalMatches + 1
+				if shown < Config.MaximumResults then
+					shown = shown + 1
+					createWordRow(word, query, shown)
+				end
+			end
+		end
+
+		emptyLabel.Visible = shown == 0
+		emptyLabel.Text = "No se encontraron palabras"
+		wordList.CanvasPosition = Vector2.new(0, 0)
+		if shown == 0 then
+			setStatus("Sin resultados para “" .. query .. "”", Config.Muted)
+		elseif totalMatches > shown then
+			setStatus(string.format("%d de %d resultados", shown, totalMatches), Config.Muted)
+		else
+			setStatus(string.format("%d resultado%s", shown, shown == 1 and "" or "s"), Config.Muted)
+		end
+	end
+
+	local function scheduleRefresh()
+		WordHelper.refreshVersion = WordHelper.refreshVersion + 1
+		local version = WordHelper.refreshVersion
+		task.delay(0.045, function()
+			if not WordHelper.destroyed and version == WordHelper.refreshVersion then
+				refreshWords()
+			end
+		end)
+	end
+
+	local synchronizingSearch = false
+	local function applyDetectedQuery(query, source, reflectInSearch)
+		if WordHelper.destroyed then
+			return
+		end
+		query = normalizeLetters(query)
+		WordHelper.currentQuery = query
+		WordHelper.detectionSource = source or "automatic"
+		if reflectInSearch and searchBox.Text ~= query then
+			synchronizingSearch = true
+			searchBox.Text = query
+			synchronizingSearch = false
+		end
+		if query == "" then
+			detectionLabel.Text = "Detección automática activa"
+		else
+			local sourceLabel = source == "manual" and "manual" or "detectado automáticamente"
+			detectionLabel.Text = "Prefijo: " .. query .. "  •  " .. sourceLabel
+		end
+		scheduleRefresh()
+	end
+
+	function WordHelper:SetWords(words)
+		if self.destroyed or type(words) ~= "table" then
+			return
+		end
+		local clean = {}
+		local seen = {}
+		for _, value in ipairs(words) do
+			local word = normalize(value)
+			if #word >= 2 and #word <= 32 and string.match(word, "^[a-z]+$") and not seen[word] then
+				seen[word] = true
+				table.insert(clean, word)
+			end
+		end
+		table.sort(clean)
+		installCleanWords(clean)
+		scheduleRefresh()
+	end
+
+	function WordHelper:SetQuery(text)
+		applyDetectedQuery(text, "manual", true)
+	end
+
+	-- Compatibility alias for integrations written against the first Word Helper.
+	function WordHelper:SetInput(text)
+		self:SetQuery(text)
+	end
+
+	function WordHelper:DetectText(text, cursorPosition)
+		local fragment = extractCurrentFragment(text, cursorPosition)
+		applyDetectedQuery(fragment, "external", true)
+		return fragment
+	end
+
+	function WordHelper:Refresh()
+		scheduleRefresh()
+	end
+
+	function WordHelper:SetVisible(visible)
+		if self.destroyed then return end
+		self.visible = visible == true
+		screenGui.Enabled = self.visible and not self.chess.supported
+		chessScreenGui.Enabled = self.visible and self.chess.supported
+		moveOverlayGui.Enabled = self.visible and self.chess.supported
+	end
+
+	function WordHelper:Toggle()
+		self:SetVisible(not self.visible)
+	end
+
+	function WordHelper:SetMinimized(minimized)
+		if self.destroyed then return end
+		self.minimized = minimized == true
+		minimizeButton.Text = self.minimized and "+" or "−"
+		if self.minimized then
+			if searchBox:IsFocused() then searchBox:ReleaseFocus() end
+			body.Visible = false
+			tween(window, OPEN_TWEEN, { Size = UDim2.fromOffset(Config.WindowWidth, Config.CollapsedHeight) })
+		else
+			body.Visible = true
+			tween(window, OPEN_TWEEN, { Size = UDim2.fromOffset(Config.WindowWidth, Config.WindowHeight) })
+		end
+	end
+
+	function WordHelper:SetChessMinimized(minimized)
+		if self.destroyed then return end
+		self.chess.minimized = minimized == true
+		chessMinimizeButton.Text = self.chess.minimized and "+" or "−"
+		if self.chess.minimized then
+			chessBody.Visible = false
+			tween(chessWindow, OPEN_TWEEN, { Size = UDim2.fromOffset(Config.ChessWindowWidth, Config.CollapsedHeight) })
+		else
+			chessBody.Visible = true
+			tween(chessWindow, OPEN_TWEEN, { Size = UDim2.fromOffset(Config.ChessWindowWidth, Config.ChessWindowHeight) })
+		end
+	end
+
+	-- Compatibility only: switches between two independent ScreenGuis, never
+	-- combines Words and Chess inside the same menu.
+	function WordHelper:SetMode(mode)
+		if self.destroyed then return end
+		if mode == "Chess" and self.chess.supported then
+			self.mode = "Chess"
+			screenGui.Enabled = false
+			chessScreenGui.Enabled = self.visible
+			moveOverlayGui.Enabled = self.visible
+		else
+			self.mode = "Words"
+			chessScreenGui.Enabled = false
+			moveOverlayGui.Enabled = false
+			screenGui.Enabled = self.visible
+		end
+	end
+
+	local function splitWords(value)
+		local result = {}
+		for token in string.gmatch(tostring(value or ""), "%S+") do
+			table.insert(result, token)
+		end
+		return result
+	end
+
+	local function normalizeSide(value)
+		if type(value) == "number" then
+			if value == 1 then
+				return "w"
+			elseif value == -1 or value == 2 then
+				return "b"
+			end
+		elseif type(value) == "boolean" then
+			return value and "w" or "b"
+		elseif type(value) == "string" then
+			local lowered = string.lower(value)
+			lowered = string.gsub(lowered, "[%s_%-]", "")
+			if lowered == "w" or lowered == "white" or lowered == "light" then
+				return "w"
+			elseif lowered == "b" or lowered == "black" or lowered == "dark" then
+				return "b"
+			end
+		end
+		return nil
+	end
+
+	local function normalizeFen(value)
+		if type(value) ~= "string" then
+			return nil, "FEN ausente"
+		end
+		value = string.gsub(value, "^%s+", "")
+		value = string.gsub(value, "%s+$", "")
+		local fields = splitWords(value)
+		if #fields < 2 then
+			return nil, "FEN incompleto"
+		end
+		local ranks = {}
+		for rank in string.gmatch(fields[1], "[^/]+") do
+			table.insert(ranks, rank)
+		end
+		if #ranks ~= 8 then
+			return nil, "el tablero FEN debe tener 8 filas"
+		end
+		local whiteKings, blackKings = 0, 0
+		for _, rank in ipairs(ranks) do
+			local squares = 0
+			for index = 1, #rank do
+				local symbol = string.sub(rank, index, index)
+				local empty = tonumber(symbol)
+				if empty then
+					if empty < 1 or empty > 8 then
+						return nil, "fila FEN inválida"
+					end
+					squares = squares + empty
+				elseif string.match(symbol, "[prnbqkPRNBQK]") then
+					squares = squares + 1
+					if symbol == "K" then
+						whiteKings = whiteKings + 1
+					elseif symbol == "k" then
+						blackKings = blackKings + 1
+					end
+				else
+					return nil, "pieza FEN inválida"
+				end
+			end
+			if squares ~= 8 then
+				return nil, "cada fila FEN debe tener 8 casillas"
+			end
+		end
+		if whiteKings ~= 1 or blackKings ~= 1 then
+			return nil, "el FEN debe incluir ambos reyes"
+		end
+		if fields[2] ~= "w" and fields[2] ~= "b" then
+			return nil, "turno FEN inválido"
+		end
+		local castling = fields[3] or "-"
+		if castling ~= "-" and (not string.match(castling, "^[KQkq]+$") or string.match(castling, "(.).*%1")) then
+			return nil, "enroque FEN inválido"
+		end
+		local enPassant = fields[4] or "-"
+		if enPassant ~= "-" and not string.match(enPassant, "^[a-h][36]$") then
+			return nil, "en passant FEN inválido"
+		end
+		local halfmove = tonumber(fields[5] or "0")
+		local fullmove = tonumber(fields[6] or "1")
+		if not halfmove or halfmove < 0 or halfmove % 1 ~= 0 or not fullmove or fullmove < 1 or fullmove % 1 ~= 0 then
+			return nil, "contadores FEN inválidos"
+		end
+		return table.concat({ fields[1], fields[2], castling, enPassant, tostring(halfmove), tostring(fullmove) }, " ")
+	end
+
+	local function fenTurn(fen)
+		return string.match(tostring(fen or ""), "^%S+%s+([wb])%s")
+	end
+
+	local function rawField(source, key)
+		if type(source) ~= "table" then
+			return nil
+		end
+		local ok, value = pcall(rawget, source, key)
+		return ok and value or nil
+	end
+
+	local function firstField(source, keys)
+		for _, key in ipairs(keys) do
+			local value = rawField(source, key)
+			if value ~= nil then
+				return value, key
+			end
+		end
+		return nil, nil
+	end
+
+	local function truthyFlag(source, keys)
+		local value = firstField(source, keys)
+		if type(value) == "boolean" then
+			return value
+		elseif type(value) == "number" then
+			return value ~= 0
+		end
+		return nil
+	end
+
+	local SAFE_CONTEXT_KEYS = {
+		"isBot", "IsBot", "versusBot", "vsBot", "againstBot", "botGame", "isComputer",
+		"isPractice", "practice", "training", "isTraining", "analysisMode",
+		"isPrivate", "IsPrivate", "private", "privateGame", "privateMatch", "sandbox",
+	}
+	local COMPETITIVE_CONTEXT_KEYS = {
+		"ranked", "Ranked", "isRanked", "IsRanked", "rated", "isRated", "competitive", "isCompetitive",
+	}
+	local CONTEXT_VALUE_KEYS = {
+		"mode", "Mode", "gameMode", "GameMode", "matchMode", "matchType", "gameType", "GameType", "opponentType",
+		"queue", "queueType", "roomType", "visibility",
+	}
+	local SAFE_CONTEXT_VALUES = {
+		bot = true, vsbot = true, playvsbot = true, computer = true, computeropponent = true, ai = true,
+		practice = true, training = true, private = true, privategame = true, privatematch = true,
+		analysis = true, postgame = true, review = true, sandbox = true, solo = true, puzzle = true,
+	}
+	local COMPETITIVE_CONTEXT_VALUES = {
+		ranked = true, rankedmatch = true, rated = true, competitive = true, public = true,
+		publicmatch = true, matchmaking = true, ladder = true,
+	}
+
+	local function scanContextTable(root)
+		if type(root) ~= "table" then
+			return nil, nil
+		end
+		local queue = { { value = root, depth = 0 } }
+		local visited = { [root] = true }
+		local safeReason = nil
+		local inspected = 0
+		while #queue > 0 and inspected < 80 do
+			local entry = table.remove(queue, 1)
+			local source = entry.value
+			inspected = inspected + 1
+			for _, key in ipairs(COMPETITIVE_CONTEXT_KEYS) do
+				if truthyFlag(source, { key }) == true then
+					return false, "partida competitiva"
+				end
+			end
+			for _, key in ipairs(CONTEXT_VALUE_KEYS) do
+				local value = rawField(source, key)
+				if type(value) == "string" then
+					local lowered = string.lower(value)
+					lowered = string.gsub(lowered, "[%s_%-]", "")
+					if COMPETITIVE_CONTEXT_VALUES[lowered] then
+						return false, "modo " .. lowered
+					elseif SAFE_CONTEXT_VALUES[lowered] then
+						safeReason = safeReason or ("modo " .. lowered)
+					end
+				end
+			end
+			for _, key in ipairs(SAFE_CONTEXT_KEYS) do
+				if truthyFlag(source, { key }) == true then
+					safeReason = safeReason or key
+				end
+			end
+			for _, key in ipairs({ "bot", "computer", "aiOpponent" }) do
+				local value = rawField(source, key)
+				if value == true or (type(value) == "number" and value ~= 0)
+					or (type(value) == "string" and value ~= "")
+				then
+					safeReason = safeReason or key
+				end
+			end
+			if entry.depth < 2 then
+				for _, key in ipairs({ "game", "Game", "gameInfo", "match", "Match", "matchInfo", "room", "roomInfo", "opponent", "settings", "options", "metadata", "config", "players" }) do
+					local nested = rawField(source, key)
+					if type(nested) == "table" and not visited[nested] then
+						visited[nested] = true
+						table.insert(queue, { value = nested, depth = entry.depth + 1 })
+					end
+				end
+			end
+		end
+		if safeReason then
+			return true, safeReason
+		end
+		return nil, nil
+	end
+
+	local function isEffectivelyVisible(object)
+		local current = object
+		while current and current ~= playerGui do
+			local isGuiObject, isLayerCollector = false, false
+			pcall(function()
+				isGuiObject = current:IsA("GuiObject")
+				isLayerCollector = current:IsA("LayerCollector")
+			end)
+			if isGuiObject and current.Visible == false then return false end
+			if isLayerCollector and current.Enabled == false then return false end
+			current = current.Parent
+		end
+		return true
+	end
+
+	local function isAssistantGui(object)
+		local current = object
+		while current do
+			if current == screenGui or current == chessScreenGui or current == moveOverlayGui then return true end
+			current = current.Parent
+		end
+		return false
+	end
+
+	local function boardCandidateScore(object)
+		if isAssistantGui(object) or not isEffectivelyVisible(object) then return nil end
+		local ok, position, size = pcall(function()
+			return object.AbsolutePosition, object.AbsoluteSize
+		end)
+		if not ok or not size or size.X < 240 or size.Y < 240 then return nil end
+		local minimum, maximum = math.min(size.X, size.Y), math.max(size.X, size.Y)
+		if maximum <= 0 or minimum / maximum < 0.82 then return nil end
+		local name = string.lower(tostring(object.Name or ""))
+		local score = minimum * 0.12 - math.abs(size.X - size.Y) * 0.5
+		if string.find(name, "board", 1, true) then score = score + 500 end
+		if string.find(name, "chess", 1, true) then score = score + 220 end
+		if string.find(name, "grid", 1, true) then score = score + 120 end
+		local childCount, descendantCount = 0, 0
+		pcall(function()
+			for _, child in ipairs(object:GetChildren()) do
+				if child:IsA("GuiObject") then childCount = childCount + 1 end
+			end
+			descendantCount = math.min(#object:GetDescendants(), 200)
+		end)
+		if childCount >= 60 and childCount <= 80 then score = score + 260 end
+		if descendantCount >= 64 then score = score + math.min(descendantCount, 128) end
+		return score, position, size
+	end
+
+	local function boardInstancePath(object)
+		local names, current = {}, object
+		for _ = 1, 12 do
+			if not current then break end
+			table.insert(names, 1, tostring(current.Name))
+			current = current.Parent
+		end
+		return table.concat(names, ".")
+	end
+
+	local function locateBoardGui(force)
+		local cached = WordHelper.chess.boardGui
+		local cachedUsable = cached and cached.Parent and isEffectivelyVisible(cached)
+		if not force and cachedUsable and os.clock() < (WordHelper.chess.nextBoardScan or 0) then return cached end
+		if not force and not cachedUsable and os.clock() < (WordHelper.chess.nextBoardScan or 0) then return nil end
+		WordHelper.chess.nextBoardScan = os.clock() + 2.5
+		local ok, descendants = pcall(function() return playerGui:GetDescendants() end)
+		if not ok then return nil end
+		local best, bestScore = nil, -math.huge
+		for index, object in ipairs(descendants) do
+			if index > 5000 then break end
+			local guiObject = false
+			pcall(function() guiObject = object:IsA("GuiObject") end)
+			if guiObject then
+				local score = boardCandidateScore(object)
+				if score and score > bestScore then best, bestScore = object, score end
+			end
+		end
+		WordHelper.chess.boardGui = best
+		if best then WordHelper.chess.boardPath = boardInstancePath(best) end
+		return best
+	end
+
+	local function clearBoardMove()
+		moveOverlayRoot.Visible = false
+		WordHelper.chess.overlayMove = nil
+	end
+
+	local function squareCenter(square, boardPosition, boardSize, whiteBottom)
+		if type(square) ~= "string" or not string.match(square, "^[a-h][1-8]$") then return nil end
+		local file = string.byte(string.sub(square, 1, 1)) - string.byte("a")
+		local rank = tonumber(string.sub(square, 2, 2)) - 1
+		local column, row
+		if whiteBottom then
+			column, row = file, 7 - rank
+		else
+			column, row = 7 - file, rank
+		end
+		local squareWidth, squareHeight = boardSize.X / 8, boardSize.Y / 8
+		return Vector2.new(
+			boardPosition.X + (column + 0.5) * squareWidth,
+			boardPosition.Y + (row + 0.5) * squareHeight
+		), squareWidth, squareHeight
+	end
+
+	local function boardWhiteAtBottom(board, boardPosition, boardSize, fallback)
+		local ok, descendants = pcall(function() return board:GetDescendants() end)
+		if ok then
+			for index, object in ipairs(descendants) do
+				if index > 800 then break end
+				local isText = false
+				pcall(function() isText = object:IsA("TextLabel") or object:IsA("TextButton") end)
+				if isText and isEffectivelyVisible(object) then
+					local text, position, size = "", nil, nil
+					pcall(function() text, position, size = string.lower(tostring(object.Text or "")), object.AbsolutePosition, object.AbsoluteSize end)
+					if position and size then
+						local centerX, centerY = position.X + size.X / 2, position.Y + size.Y / 2
+						if centerY > boardPosition.Y + boardSize.Y * 0.82 then
+							if text == "a" then return centerX < boardPosition.X + boardSize.X * 0.5 end
+							if text == "h" then return centerX > boardPosition.X + boardSize.X * 0.5 end
+							if text == "1" then return true end
+							if text == "8" then return false end
+						end
+						if centerX < boardPosition.X + boardSize.X * 0.18 then
+							if text == "1" then return true end
+							if text == "8" then return false end
+						end
+					end
+				end
+			end
+		end
+		return fallback
+	end
+
+	local function renderBoardMove(move, snapshot)
+		if type(move) ~= "string" then clearBoardMove() return false end
+		local from = string.sub(string.lower(move), 1, 2)
+		local to = string.sub(string.lower(move), 3, 4)
+		if not string.match(from, "^[a-h][1-8]$") or not string.match(to, "^[a-h][1-8]$") then
+			clearBoardMove()
+			return false
+		end
+		local board = locateBoardGui(false)
+		if not board then clearBoardMove() return false end
+		local ok, boardPosition, boardSize = pcall(function() return board.AbsolutePosition, board.AbsoluteSize end)
+		if not ok then clearBoardMove() return false end
+		local whiteBottom = boardWhiteAtBottom(board, boardPosition, boardSize, not snapshot or snapshot.ownSide ~= "b")
+		local fromPoint, squareWidth, squareHeight = squareCenter(from, boardPosition, boardSize, whiteBottom)
+		local toPoint = squareCenter(to, boardPosition, boardSize, whiteBottom)
+		if not fromPoint or not toPoint then clearBoardMove() return false end
+		local boxWidth, boxHeight = math.max(12, squareWidth - 4), math.max(12, squareHeight - 4)
+		sourceSquareGuide.Position = UDim2.fromOffset(fromPoint.X - boxWidth / 2, fromPoint.Y - boxHeight / 2)
+		sourceSquareGuide.Size = UDim2.fromOffset(boxWidth, boxHeight)
+		targetSquareGuide.Position = UDim2.fromOffset(toPoint.X - boxWidth / 2, toPoint.Y - boxHeight / 2)
+		targetSquareGuide.Size = UDim2.fromOffset(boxWidth, boxHeight)
+		local dx, dy = toPoint.X - fromPoint.X, toPoint.Y - fromPoint.Y
+		local distance = math.sqrt(dx * dx + dy * dy)
+		local angle = math.deg(math.atan2(dy, dx))
+		moveArrow.Position = UDim2.fromOffset(fromPoint.X, fromPoint.Y)
+		moveArrow.Size = UDim2.fromOffset(math.max(8, distance - math.min(squareWidth, squareHeight) * 0.22), math.clamp(math.min(squareWidth, squareHeight) * 0.11, 5, 12))
+		moveArrow.Rotation = angle
+		moveArrowHead.Position = UDim2.fromOffset(toPoint.X, toPoint.Y)
+		moveArrowHead.Rotation = angle
+		moveOverlayRoot.Visible = true
+		WordHelper.chess.overlayMove = move
+		return true
+	end
+
+	local ROCHESS_BOT_NAMES = { poppy = true, jasper = true }
+	local function visibleRoChessBot(text)
+		if game.PlaceId ~= 130878180532794 then return nil end
+		local opponent = string.match(text, "vs%s+([%w_%-]+)")
+		if not opponent then return nil end
+		opponent = string.lower(opponent)
+		if ROCHESS_BOT_NAMES[opponent] then return opponent end
+		local ok, players = pcall(function() return playersService:GetPlayers() end)
+		if not ok or type(players) ~= "table" then return nil end
+		for _, player in ipairs(players) do
+			local name, displayName = "", ""
+			pcall(function()
+				name = string.lower(tostring(player.Name or ""))
+				displayName = string.lower(tostring(player.DisplayName or ""))
+			end)
+			if opponent == name or opponent == displayName then return nil end
+		end
+		return opponent
+	end
+
+	local guiContextCache = { at = -math.huge, allowed = nil, reason = nil }
+	local function guiContext()
+		if os.clock() - guiContextCache.at < 1 then
+			return guiContextCache.allowed, guiContextCache.reason
+		end
+		local foundSafe = nil
+		local foundCompetitive = nil
+		local ok, descendants = pcall(function()
+			return playerGui:GetDescendants()
+		end)
+		if not ok then
+			return nil, nil
+		end
+		for index, object in ipairs(descendants) do
+			if index > 2500 then
+				break
+			end
+			local isText = false
+			pcall(function()
+				isText = object:IsA("TextLabel") or object:IsA("TextButton")
+			end)
+			if isText then
+				local visible, text = false, ""
+				pcall(function()
+					visible = isEffectivelyVisible(object)
+					text = string.lower(object.Text)
+				end)
+				if visible and text ~= "" then
+					local roChessBot = visibleRoChessBot(text)
+					if roChessBot then foundSafe = "bot de RoChess: " .. roChessBot end
+					if string.find(text, "ranked", 1, true) or string.find(text, "rated match", 1, true) then
+						foundCompetitive = "interfaz competitiva"
+					end
+					if string.find(text, "vs bot", 1, true)
+						or string.find(text, "bot (lvl", 1, true)
+						or string.find(text, "bot level", 1, true)
+						or string.find(text, "computer opponent", 1, true)
+						or string.find(text, "practice mode", 1, true)
+						or string.find(text, "training mode", 1, true)
+						or string.find(text, "private match", 1, true)
+					then
+						foundSafe = "contexto visible permitido"
+					end
+				end
+			end
+		end
+		guiContextCache.at = os.clock()
+		if foundCompetitive then
+			guiContextCache.allowed, guiContextCache.reason = false, foundCompetitive
+		elseif foundSafe then
+			guiContextCache.allowed, guiContextCache.reason = true, foundSafe
+		else
+			guiContextCache.allowed, guiContextCache.reason = nil, nil
+		end
+		return guiContextCache.allowed, guiContextCache.reason
+	end
+
+	local UNICODE_PIECES = {
+		["♙"] = "P", ["♘"] = "N", ["♗"] = "B", ["♖"] = "R", ["♕"] = "Q", ["♔"] = "K",
+		["♟"] = "p", ["♞"] = "n", ["♝"] = "b", ["♜"] = "r", ["♛"] = "q", ["♚"] = "k",
+	}
+	local PIECE_LETTERS = { pawn = "p", knight = "n", bishop = "b", rook = "r", queen = "q", king = "k" }
+
+	local function decodePiece(value)
+		if value == nil or value == false or value == 0 or value == "" or value == "." then
+			return nil, true
+		end
+		if type(value) == "string" then
+			if UNICODE_PIECES[value] then
+				return UNICODE_PIECES[value], true
+		end
+			if #value == 1 and string.match(value, "[prnbqkPRNBQK]") then
+				return value, true
+			end
+			local lowered = string.lower(value)
+			local compact = string.gsub(lowered, "[%s_%-%.]", "")
+			if compact == "empty" or compact == "none" or compact == "nil" or compact == "blank" then
+				return nil, true
+			end
+			local color = nil
+			if string.find(compact, "white", 1, true) == 1 or string.sub(compact, 1, 1) == "w" then
+				color = "w"
+			elseif string.find(compact, "black", 1, true) == 1 or string.sub(compact, 1, 1) == "b" then
+				color = "b"
+			elseif string.sub(compact, -5) == "white" then
+				color = "w"
+			elseif string.sub(compact, -5) == "black" then
+				color = "b"
+			end
+			for name, letter in pairs(PIECE_LETTERS) do
+				if string.find(compact, name, 1, true) then
+					if color then
+						return color == "w" and string.upper(letter) or letter, true
+					end
+					return nil, false
+				end
+			end
+			if #compact == 2 then
+				local first, second = string.sub(compact, 1, 1), string.sub(compact, 2, 2)
+				if (first == "w" or first == "b") and string.match(second, "[prnbqk]") then
+					return first == "w" and string.upper(second) or second, true
+				elseif (second == "w" or second == "b") and string.match(first, "[prnbqk]") then
+					return second == "w" and string.upper(first) or first, true
+				end
+			end
+			return nil, false
+		end
+		if typeof(value) == "Instance" then
+			local ok, name = pcall(function()
+				return value.Name
+			end)
+			if ok then return decodePiece(name) end
+			return nil, false
+		end
+		if type(value) == "table" then
+			local pieceValue = firstField(value, { "piece", "Piece", "pieceType", "PieceType", "type", "Type", "kind", "Kind", "name", "Name" })
+			local colorValue = firstField(value, { "color", "Color", "colour", "side", "Side", "team", "Team", "owner", "Owner" })
+			if pieceValue == nil then
+				return nil, false
+			end
+			local side = normalizeSide(colorValue)
+			if side then
+				local combined = (side == "w" and "white" or "black") .. tostring(pieceValue)
+				local combinedPiece, combinedKnown = decodePiece(combined)
+				if combinedKnown then return combinedPiece, true end
+			end
+			return decodePiece(pieceValue)
+		end
+		return nil, false
+	end
+
+	local function boardTableToFen(source)
+		if type(source) ~= "table" then
+			return nil
+		end
+		local board = firstField(source, { "board", "Board", "squares", "Squares", "position", "Position", "pieces", "Pieces" })
+		if type(board) ~= "table" then
+			return nil
+		end
+		-- Custom Roblox engines often expose either a flat 64-entry board or an
+		-- 8x8 array. Flatten the latter without assuming which side is at the top;
+		-- the orientation scoring below evaluates all four board directions.
+		local firstRow = rawget(board, 1) or rawget(board, 0)
+		if type(firstRow) == "table" then
+			local rowBase = rawget(board, 0) ~= nil and 0 or 1
+			local columnBase = rawget(firstRow, 0) ~= nil and 0 or 1
+			local flattened = {}
+			local complete = true
+			for row = 0, 7 do
+				local rowData = rawget(board, rowBase + row)
+				if type(rowData) ~= "table" then complete = false break end
+				for column = 0, 7 do
+					flattened[row * 8 + column + 1] = rawget(rowData, columnBase + column)
+				end
+			end
+			if complete then board = flattened end
+		end
+		local decoded = {}
+		local algebraic = false
+		for key, value in pairs(board) do
+			if type(key) == "string" and string.match(string.lower(key), "^[a-h][1-8]$") then
+				algebraic = true
+				local piece, known = decodePiece(value)
+				if not known then
+					return nil
+				end
+				if piece then
+					decoded[string.lower(key)] = piece
+				end
+			end
+		end
+
+		local candidates = {}
+		if algebraic then
+			local ranks = {}
+			for rank = 8, 1, -1 do
+				local row, empty = "", 0
+				for file = 1, 8 do
+					local square = string.char(96 + file) .. tostring(rank)
+					local piece = decoded[square]
+					if piece then
+						if empty > 0 then row, empty = row .. tostring(empty), 0 end
+						row = row .. piece
+					else
+						empty = empty + 1
+					end
+				end
+				if empty > 0 then row = row .. tostring(empty) end
+				table.insert(ranks, row)
+			end
+			table.insert(candidates, { board = table.concat(ranks, "/"), score = 100 })
+		else
+			local base = rawget(board, 0) ~= nil and 0 or 1
+			local pieces = {}
+			for offset = 0, 63 do
+				local value = rawget(board, base + offset)
+				local piece, known = decodePiece(value)
+				if not known then
+					return nil
+				end
+				pieces[offset + 1] = piece or false
+			end
+			local transforms = {
+				function(rank, file) return (rank - 1) * 8 + file end,
+				function(rank, file) return (8 - rank) * 8 + file end,
+				function(rank, file) return (rank - 1) * 8 + (9 - file) end,
+				function(rank, file) return (8 - rank) * 8 + (9 - file) end,
+			}
+			for _, transform in ipairs(transforms) do
+				local ranks, score = {}, 0
+				for rank = 1, 8 do
+					local row, empty = "", 0
+					for file = 1, 8 do
+						local piece = pieces[transform(rank, file)]
+						if piece then
+							if empty > 0 then row, empty = row .. tostring(empty), 0 end
+							row = row .. piece
+							if piece == "K" then score = score + (rank >= 7 and 8 or -4) end
+							if piece == "k" then score = score + (rank <= 2 and 8 or -4) end
+							if piece == "P" and rank >= 3 then score = score + 1 end
+							if piece == "p" and rank <= 6 then score = score + 1 end
+						else
+							empty = empty + 1
+						end
+					end
+					if empty > 0 then row = row .. tostring(empty) end
+					table.insert(ranks, row)
+				end
+				table.insert(candidates, { board = table.concat(ranks, "/"), score = score })
+			end
+		end
+		table.sort(candidates, function(a, b) return a.score > b.score end)
+		local best = candidates[1]
+		if not best then
+			return nil
+		end
+		local turn = normalizeSide(firstField(source, { "turn", "Turn", "currentTurn", "CurrentTurn", "sideToMove", "SideToMove", "activeColor", "ActiveColor", "activeSide" }))
+		if not turn then
+			return nil
+		end
+		local castling = firstField(source, { "castling", "Castling", "castlingRights", "CastlingRights", "castleRights" })
+		castling = type(castling) == "string" and castling or "-"
+		local enPassant = firstField(source, { "enPassant", "EnPassant", "enPassantSquare", "epSquare" })
+		enPassant = type(enPassant) == "string" and enPassant or "-"
+		local halfmove = tonumber(firstField(source, { "halfmove", "halfmoveClock", "halfMoveClock", "HalfmoveClock" })) or 0
+		local fullmove = tonumber(firstField(source, { "fullmove", "fullmoveNumber", "moveNumber", "MoveNumber" })) or 1
+		return normalizeFen(table.concat({ best.board, turn, castling, enPassant, tostring(halfmove), tostring(fullmove) }, " "))
+	end
+
+	local function classifyContext(...)
+		local privateServer = false
+		pcall(function()
+			privateServer = type(game.PrivateServerId) == "string" and game.PrivateServerId ~= ""
+		end)
+		if privateServer then
+			return true, "servidor privado"
+		end
+		local studio = false
+		pcall(function()
+			studio = runService:IsStudio()
+		end)
+		if studio then
+			return true, "Roblox Studio"
+		end
+
+		local safeReason = nil
+		for index = 1, select("#", ...) do
+			local allowed, reason = scanContextTable(select(index, ...))
+			if allowed == false then
+				return false, reason
+			elseif allowed == true then
+				safeReason = safeReason or reason
+			end
+		end
+		local guiAllowed, guiReason = guiContext()
+		if guiAllowed == false then
+			return false, guiReason
+		elseif guiAllowed == true then
+			safeReason = safeReason or guiReason
+		end
+		if safeReason then
+			return true, safeReason
+		end
+		return false, "contexto no confirmado"
+	end
+
+	local function snapshotFromTable(source, label)
+		if type(source) ~= "table" or rawField(source, "__zenithSnapshot") == true then
+			return nil
+		end
+		local fenValue = firstField(source, { "fen", "FEN", "Fen", "currentFen", "currentFEN", "CurrentFen", "CurrentFEN", "positionFen", "positionFEN" })
+		if type(fenValue) ~= "string" then
+			local getter = firstField(source, { "getFen", "getFEN", "GetFen", "GetFEN" })
+			if type(getter) == "function" then
+				local ok, value = pcall(getter, source)
+				if ok then fenValue = value end
+			end
+		end
+		local fen = normalizeFen(fenValue)
+		if not fen then
+			fen = boardTableToFen(source)
+		end
+		if not fen then
+			return nil
+		end
+
+		local ownTurnKeys = { "ownTurn", "OwnTurn", "isMyTurn", "IsMyTurn", "myTurn", "MyTurn", "yourTurn", "isYourTurn" }
+		local ownTurnValue = firstField(source, ownTurnKeys)
+		local ownTurn = truthyFlag(source, ownTurnKeys)
+		if ownTurn == nil and type(ownTurnValue) == "function" then
+			local ok, value = pcall(ownTurnValue, source)
+			if ok and type(value) == "boolean" then ownTurn = value end
+		end
+		if ownTurn == nil then
+			local turn = normalizeSide(firstField(source, { "turn", "Turn", "currentTurn", "CurrentTurn", "sideToMove", "SideToMove", "activeColor", "ActiveColor", "activeSide" })) or fenTurn(fen)
+			local ownSide = normalizeSide(firstField(source, { "myColor", "MyColor", "playerColor", "PlayerColor", "yourColor", "you", "mySide", "playerSide" }))
+			if ownSide and turn then
+				ownTurn = ownSide == turn
+			end
+		end
+		local ownSide = normalizeSide(firstField(source, { "myColor", "MyColor", "playerColor", "PlayerColor", "yourColor", "you", "mySide", "playerSide" }))
+		local overKeys = { "over", "Over", "gameOver", "GameOver", "isGameOver", "finished", "isFinished", "past", "review" }
+		local overValue = firstField(source, overKeys)
+		local over = truthyFlag(source, overKeys) == true
+		if not over and type(overValue) == "string" then
+			local value = string.lower(overValue)
+			over = value ~= "" and value ~= "false" and value ~= "active" and value ~= "playing" and value ~= "ongoing"
+		end
+		local statusValue = firstField(source, { "status", "Status", "gameStatus", "GameStatus", "result", "Result" })
+		if not over and type(statusValue) == "string" then
+			local value = string.lower(statusValue)
+			over = value == "checkmate" or value == "stalemate" or value == "draw" or value == "ended"
+				or value == "finished" or value == "resigned" or value == "timeout" or value == "aborted"
+		end
+		local allowed, reason = classifyContext(source)
+		if over then
+			allowed, reason = true, "análisis post-partida"
+		end
+		return {
+			fen = fen,
+			ownTurn = ownTurn,
+			ownSide = ownSide,
+			activeSide = fenTurn(fen),
+			over = over,
+			contextAllowed = allowed,
+			contextReason = reason,
+			source = label or "Estado del juego",
+		}
+	end
+
+	local function inspectNestedSnapshot(source, label)
+		local direct = snapshotFromTable(source, label)
+		if direct then return direct end
+		if type(source) ~= "table" then return nil end
+		for _, key in ipairs({ "session", "Session", "game", "Game", "currentGame", "CurrentGame", "match", "Match", "state", "State", "gameState", "GameState", "position", "Position", "data", "view" }) do
+			local nested = rawField(source, key)
+			if type(nested) == "table" then
+				local snapshot = snapshotFromTable(nested, label .. "." .. key)
+				if snapshot then
+					local allowed, reason = classifyContext(source, nested)
+					if snapshot.over then
+						snapshot.contextAllowed, snapshot.contextReason = true, "análisis post-partida"
+					elseif allowed ~= nil then
+						snapshot.contextAllowed, snapshot.contextReason = allowed, reason
+					end
+					return snapshot
+				end
+			end
+		end
+		return nil
+	end
+
+	local function describeTableSchema(source)
+		local fields = {}
+		if type(source) ~= "table" then return fields end
+		for key, value in pairs(source) do
+			if type(key) == "string" then
+				table.insert(fields, key .. ":" .. type(value))
+				if #fields >= 48 then break end
+			end
+		end
+		table.sort(fields)
+		return fields
+	end
+
+	local function instancePath(object)
+		local names = {}
+		local current = object
+		for _ = 1, 12 do
+			if not current then break end
+			table.insert(names, 1, tostring(current.Name))
+			current = current.Parent
+		end
+		return table.concat(names, ".")
+	end
+
+	local GenericAdapter = {
+		Name = "Play Chess scanner",
+		candidate = nil,
+		lastScan = -math.huge,
+		diagnostics = { scans = 0, tables = 0, instances = 0, fenCandidates = 0, schema = {}, source = nil },
+	}
+
+	local function snapshotRecencyScore(source, snapshot)
+		local score = 0
+		if truthyFlag(source, { "current", "isCurrent", "active", "isActive" }) == true then score = score + 1000000 end
+		if truthyFlag(source, { "past", "history", "archived" }) == true then score = score - 500000 end
+		for _, key in ipairs({ "ply", "moveIndex", "moveCount", "version", "revision", "updatedAt" }) do
+			local value = tonumber(rawField(source, key))
+			if value then score = score + math.min(math.max(value, 0), 1000000) end
+		end
+		local moves = firstField(source, { "moves", "Moves", "moveHistory", "history" })
+		if type(moves) == "table" then score = score + #moves * 10 end
+		local fields = splitWords(snapshot.fen)
+		local fullmove = tonumber(fields[6]) or 1
+		score = score + fullmove * 2 + (fields[2] == "b" and 1 or 0)
+		if snapshot.over then score = score - 100000 end
+		return score
+	end
+
+	function GenericAdapter:scanHeap()
+		if type(getGarbageCollected) ~= "function" then
+			return nil
+		end
+		local ok, objects = pcall(getGarbageCollected, true)
+		if not ok or type(objects) ~= "table" then
+			return nil
+		end
+		local inspected = 0
+		local bestObject, bestSnapshot, bestScore = nil, nil, -math.huge
+		for _, object in ipairs(objects) do
+			if type(object) == "table" then
+				inspected = inspected + 1
+				if inspected > 20000 then break end
+				self.diagnostics.tables = self.diagnostics.tables + 1
+				local snapshot = inspectNestedSnapshot(object, "memoria del cliente")
+				if snapshot then
+					self.diagnostics.fenCandidates = self.diagnostics.fenCandidates + 1
+					local score = snapshotRecencyScore(object, snapshot)
+					if object == self.candidate then score = score + 0.25 end
+					if score > bestScore then
+						bestObject, bestSnapshot, bestScore = object, snapshot, score
+					end
+				end
+			end
+		end
+		if bestSnapshot then
+			self.diagnostics.schema = describeTableSchema(bestObject)
+			self.diagnostics.source = bestSnapshot.source
+			self.candidate = bestObject
+		end
+		return bestSnapshot
+	end
+
+	function GenericAdapter:scanInstances()
+		local roots = { playerGui, replicatedStorage }
+		for _, root in ipairs(roots) do
+			local ok, descendants = pcall(function() return root:GetDescendants() end)
+			if ok then
+				for index, object in ipairs(descendants) do
+					if index > 3500 then break end
+					self.diagnostics.instances = self.diagnostics.instances + 1
+					local values = {}
+					pcall(function()
+						for _, key in ipairs({ "FEN", "Fen", "fen", "CurrentFEN", "CurrentFen" }) do
+							local value = object:GetAttribute(key)
+							if type(value) == "string" then table.insert(values, value) end
+						end
+						if object:IsA("StringValue") then table.insert(values, object.Value) end
+					end)
+					for _, value in ipairs(values) do
+						local fen = normalizeFen(value)
+						if fen then
+							self.diagnostics.fenCandidates = self.diagnostics.fenCandidates + 1
+							self.diagnostics.schema = { "instance:" .. tostring(object.ClassName) }
+							self.diagnostics.source = instancePath(object)
+							local allowed, reason = classifyContext()
+							return {
+								fen = fen,
+								activeSide = fenTurn(fen),
+								ownTurn = nil,
+								contextAllowed = allowed,
+								contextReason = reason,
+								source = "atributo FEN del juego",
+							}
+						end
+					end
+				end
+			end
+		end
+		return nil
+	end
+
+	function GenericAdapter:Read()
+		local cachedSnapshot = nil
+		if self.candidate then
+			cachedSnapshot = inspectNestedSnapshot(self.candidate, "memoria del cliente")
+			if not cachedSnapshot then self.candidate = nil end
+		end
+		if os.clock() - self.lastScan < 2 then return cachedSnapshot end
+		self.lastScan = os.clock()
+		self.diagnostics.scans = self.diagnostics.scans + 1
+		return self:scanHeap() or cachedSnapshot or self:scanInstances()
+	end
+
+	function GenericAdapter:Diagnostic()
+		return {
+			adapter = self.Name,
+			placeId = game.PlaceId,
+			scans = self.diagnostics.scans,
+			tablesInspected = self.diagnostics.tables,
+			instancesInspected = self.diagnostics.instances,
+			fenCandidates = self.diagnostics.fenCandidates,
+			schema = table.clone(self.diagnostics.schema),
+			source = self.diagnostics.source,
+			hasGetGc = type(getGarbageCollected) == "function",
+		}
+	end
+
+	local VisualBoardAdapter = { Name = "lector visual del tablero", lastRead = -math.huge, lastSnapshot = nil }
+
+	local function visibleTurnMetadata(board, bottomSide)
+		local activeSide, ownTurn = nil, nil
+		local ok, descendants = pcall(function() return playerGui:GetDescendants() end)
+		if not ok then return nil, nil end
+		for index, object in ipairs(descendants) do
+			if index > 3500 then break end
+			local isText = false
+			pcall(function() isText = object:IsA("TextLabel") or object:IsA("TextButton") end)
+			if isText and not isAssistantGui(object) and isEffectivelyVisible(object) then
+				local text = ""
+				pcall(function() text = string.lower(tostring(object.Text or "")) end)
+				if string.find(text, "white to move", 1, true) or string.find(text, "white's turn", 1, true)
+					or string.find(text, "turno de blanc", 1, true) then activeSide = "w" end
+				if string.find(text, "black to move", 1, true) or string.find(text, "black's turn", 1, true)
+					or string.find(text, "turno de negr", 1, true) then activeSide = "b" end
+				if string.find(text, "your turn", 1, true) or string.find(text, "tu turno", 1, true) then ownTurn = true end
+				if string.find(text, "opponent's turn", 1, true) or string.find(text, "turno del oponente", 1, true) then ownTurn = false end
+			end
+		end
+		if ownTurn == true and not activeSide then activeSide = bottomSide end
+		if ownTurn == false and not activeSide and bottomSide then activeSide = bottomSide == "w" and "b" or "w" end
+		if activeSide and bottomSide and ownTurn == nil then ownTurn = activeSide == bottomSide end
+		return activeSide, ownTurn
+	end
+
+	function VisualBoardAdapter:Read()
+		if os.clock() - self.lastRead < 0.8 then return self.lastSnapshot end
+		self.lastRead = os.clock()
+		local board = locateBoardGui(false)
+		if not board then self.lastSnapshot = nil return nil end
+		local ok, boardPosition, boardSize, descendants = pcall(function()
+			return board.AbsolutePosition, board.AbsoluteSize, board:GetDescendants()
+		end)
+		if not ok then return nil end
+		local visualBoard, whiteBottomPieces, blackBottomPieces = {}, 0, 0
+		local occupied = 0
+		for index, object in ipairs(descendants) do
+			if index > 1500 then break end
+			local guiObject = false
+			pcall(function() guiObject = object:IsA("GuiObject") end)
+			if guiObject and isEffectivelyVisible(object) then
+				local piece = nil
+				local attributes = {}
+				pcall(function() attributes = object:GetAttributes() end)
+				if type(attributes) == "table" and next(attributes) then piece = select(1, decodePiece(attributes)) end
+				if not piece then piece = select(1, decodePiece(object.Name)) end
+				if not piece then
+					pcall(function()
+						if object:IsA("TextLabel") or object:IsA("TextButton") then piece = select(1, decodePiece(object.Text)) end
+					end)
+				end
+				if piece then
+					local position, size = object.AbsolutePosition, object.AbsoluteSize
+					local centerX, centerY = position.X + size.X / 2, position.Y + size.Y / 2
+					local column = math.floor((centerX - boardPosition.X) / (boardSize.X / 8))
+					local row = math.floor((centerY - boardPosition.Y) / (boardSize.Y / 8))
+					if column >= 0 and column < 8 and row >= 0 and row < 8 then
+						local squareIndex = row * 8 + column + 1
+						if not visualBoard[squareIndex] then occupied = occupied + 1 end
+						visualBoard[squareIndex] = piece
+						if row >= 4 then
+							if string.upper(piece) == piece then whiteBottomPieces = whiteBottomPieces + 1 else blackBottomPieces = blackBottomPieces + 1 end
+						end
+					end
+				end
+			end
+		end
+		WordHelper.chess.visualPieces = occupied
+		if occupied < 4 then self.lastSnapshot = nil return nil end
+		local bottomSide = whiteBottomPieces >= blackBottomPieces and "w" or "b"
+		local activeSide, ownTurn = visibleTurnMetadata(board, bottomSide)
+		if not activeSide then
+			WordHelper.chess.visualPositionDetected = true
+			self.lastSnapshot = nil
+			return nil
+		end
+		local fen = boardTableToFen({ board = visualBoard, turn = activeSide })
+		if not fen then self.lastSnapshot = nil return nil end
+		local allowed, reason = classifyContext()
+		self.lastSnapshot = {
+			fen = fen,
+			ownTurn = ownTurn,
+			ownSide = bottomSide,
+			activeSide = activeSide,
+			over = false,
+			contextAllowed = allowed,
+			contextReason = reason,
+			source = self.Name,
+		}
+		return self.lastSnapshot
+	end
+
+	local function requireModule(module)
+		if not module then return nil end
+		local ok, result = pcall(require, module)
+		return ok and result or nil
+	end
+
+	local function findDescendant(parent, name)
+		if not parent then return nil end
+		local direct = parent:FindFirstChild(name)
+		if direct then return direct end
+		local ok, result = pcall(function() return parent:FindFirstChild(name, true) end)
+		return ok and result or nil
+	end
+
+	local function createChessDuelsAdapter()
+		local chessFolder = replicatedStorage:FindFirstChild("Chess")
+		local engine = requireModule(findDescendant(chessFolder, "Engine"))
+		if type(engine) ~= "table" then return nil end
+		local remotes = replicatedStorage:FindFirstChild("ChessRemotes")
+		local update = remotes and remotes:FindFirstChild("Update")
+		local adapter = { Name = "Chess Duels client", Engine = engine, payload = nil }
+
+		local function acceptPayload(payload)
+			if type(payload) == "table"
+				and (rawField(payload, "kind") == nil or rawField(payload, "kind") == "game")
+				and rawField(payload, "state") ~= nil
+			then
+				adapter.payload = payload
+			end
+		end
+		if update then
+			local ok, signal = pcall(function() return update.OnClientEvent end)
+			if ok and signal then
+				local connected, connection = pcall(function()
+					return signal:Connect(acceptPayload)
+				end)
+				if connected and connection then table.insert(WordHelper.connections, connection) end
+			end
+		end
+
+		function adapter:findPayload()
+			if self.payload or type(getGarbageCollected) ~= "function" then return self.payload end
+			local ok, objects = pcall(getGarbageCollected, true)
+			if not ok or type(objects) ~= "table" then return nil end
+			for _, object in ipairs(objects) do
+				if type(object) == "table"
+					and type(rawField(object, "ply")) == "number"
+					and type(rawField(object, "you")) == "number"
+					and rawField(object, "state") ~= nil
+					and type(rawField(object, "moves")) == "table"
+					and rawField(object, "id") ~= nil
+				then
+					self.payload = object
+					return object
+				end
+			end
+			return nil
+		end
+
+		function adapter:Read()
+			local payload = self:findPayload()
+			if type(payload) ~= "table" then return nil end
+			local serialized = rawField(payload, "state")
+			local state = nil
+			local deserialize = firstField(self.Engine, { "deserialize", "Deserialize" })
+			if type(deserialize) == "function" then
+				local ok, value = pcall(deserialize, serialized)
+				if not ok then ok, value = pcall(deserialize, self.Engine, serialized) end
+				if ok and type(value) == "table" then state = value end
+			end
+			if not state and type(serialized) == "table" then state = serialized end
+			if type(state) ~= "table" then return nil end
+			local toFen = firstField(self.Engine, { "toFEN", "toFen", "ToFEN" })
+			local rawFen = nil
+			if type(toFen) == "function" then
+				local ok, value = pcall(toFen, state)
+				if not ok then ok, value = pcall(toFen, self.Engine, state) end
+				if ok then rawFen = value end
+			end
+			local fen = normalizeFen(rawFen) or boardTableToFen(state)
+			if not fen then return nil end
+			local turnValue = firstField(state, { "turn", "currentTurn", "sideToMove" })
+			local you = rawField(payload, "you")
+			local ownTurn = you ~= nil and you ~= 0 and turnValue ~= nil and turnValue == you
+			local ownSide = normalizeSide(you)
+			local over = rawField(payload, "over") ~= nil and rawField(payload, "over") ~= false
+			local past = rawField(payload, "past") == true
+			local allowed, reason = classifyContext(payload, state)
+			if over or past then allowed, reason = true, "análisis post-partida" end
+			return {
+				fen = fen,
+				ownTurn = ownTurn,
+				ownSide = ownSide,
+				activeSide = fenTurn(fen),
+				over = over or past,
+				contextAllowed = allowed,
+				contextReason = reason,
+				source = self.Name,
+			}
+		end
+		return adapter
+	end
+
+	local function createRoChessAdapter()
+		local clientFolder = replicatedStorage:FindFirstChild("ChessClient")
+		local appModule = findDescendant(clientFolder, "App")
+		local app = requireModule(appModule)
+		if type(app) ~= "table" then return nil end
+		local adapter = { Name = "RoChess client", App = app }
+		function adapter:Read()
+			local session = rawField(self.App, "session")
+			if type(session) ~= "table" then return nil end
+			local engine = rawField(session, "engine")
+			local getter = type(engine) == "table" and firstField(engine, { "getFen", "getFEN" }) or nil
+			if type(getter) ~= "function" then return nil end
+			local ok, rawFen = pcall(getter, engine)
+			local fen = ok and normalizeFen(rawFen) or nil
+			if not fen then return nil end
+			local ownTurn = nil
+			local isMyTurn = firstField(session, { "isMyTurn", "IsMyTurn" })
+			if type(isMyTurn) == "function" then
+				local turnOk, value = pcall(isMyTurn, session)
+				if turnOk and type(value) == "boolean" then ownTurn = value end
+			end
+			local ownSide = normalizeSide(firstField(session, { "myColor", "color", "side" }))
+			if ownTurn == nil and ownSide then ownTurn = ownSide == fenTurn(fen) end
+			local overValue = rawField(session, "over")
+			local over = overValue ~= nil and overValue ~= false
+			local ucis = rawField(session, "ucis")
+			local viewPly = rawField(session, "viewPly")
+			local reviewing = type(ucis) == "table" and type(viewPly) == "number" and viewPly ~= #ucis
+			local allowed, reason = classifyContext(session)
+			if over or reviewing then allowed, reason = true, "análisis post-partida" end
+			return {
+				fen = fen,
+				ownTurn = ownTurn,
+				ownSide = ownSide,
+				activeSide = fenTurn(fen),
+				over = over or reviewing,
+				contextAllowed = allowed,
+				contextReason = reason,
+				source = self.Name,
+			}
+		end
+		return adapter
+	end
+
+	local function formatUci(move)
+		if type(move) ~= "string" then return nil end
+		move = string.lower(move)
+		if not string.match(move, "^[a-h][1-8][a-h][1-8][qrbn]?$") then return nil end
+		local formatted = string.sub(move, 1, 2) .. " → " .. string.sub(move, 3, 4)
+		if #move == 5 then formatted = formatted .. " = " .. string.upper(string.sub(move, 5, 5)) end
+		return formatted
+	end
+
+	local function setChessState(text, color)
+		chessStateLabel.Text = text
+		chessStateLabel.TextColor3 = color or Config.Secondary
+	end
+
+	local function clearChessRecommendation(line)
+		bestMoveLabel.Text = "—"
+		chessEvalLabel.Text = "EVAL —"
+		chessPonderLabel.Text = "RESPUESTA —"
+		chessLineLabel.Text = line or "Esperando una posición válida..."
+		chessMoveGuideLabel.Text = "Esperando el mejor movimiento..."
+		clearBoardMove()
+		WordHelper.chess.bestMove = nil
+		WordHelper.chess.ponder = nil
+		WordHelper.chess.evaluation = nil
+		WordHelper.chess.mate = nil
+	end
+
+	local PIECE_NAMES_ES = {
+		p = "Peón", n = "Caballo", b = "Alfil", r = "Torre", q = "Reina", k = "Rey",
+	}
+
+	local function pieceAtSquare(fen, square)
+		if type(fen) ~= "string" or type(square) ~= "string" then return nil end
+		local board = string.match(fen, "^(%S+)")
+		if not board then return nil end
+		local targetFile = string.byte(string.sub(square, 1, 1)) - string.byte("a") + 1
+		local targetRank = tonumber(string.sub(square, 2, 2))
+		if not targetRank or targetFile < 1 or targetFile > 8 then return nil end
+		local rowIndex = 0
+		for row in string.gmatch(board, "[^/]+") do
+			rowIndex = rowIndex + 1
+			if 9 - rowIndex == targetRank then
+				local file = 0
+				for index = 1, #row do
+					local symbol = string.sub(row, index, index)
+					local empty = tonumber(symbol)
+					if empty then
+						file = file + empty
+					else
+						file = file + 1
+						if file == targetFile then return string.lower(symbol) end
+					end
+				end
+			end
+		end
+		return nil
+	end
+
+	local function performChessApiRequest(fen, generation)
+		local payload = httpService:JSONEncode({
+			fen = fen,
+			variants = 1,
+			depth = Config.ChessApiDepth,
+			maxThinkingTime = Config.ChessApiThinkingTime,
+			taskId = "zenith-" .. tostring(generation) .. "-" .. tostring(math.floor(os.clock() * 1000)),
+		})
+		local body = nil
+		if type(executorRequest) == "function" then
+			local response = executorRequest({
+				Url = Config.ChessApiEndpoint,
+				Method = "POST",
+				Headers = { ["Content-Type"] = "application/json", Accept = "application/json" },
+				Body = payload,
+				Timeout = 12,
+			})
+			if type(response) == "table" then
+				local statusCode = tonumber(response.StatusCode or response.Status or response.status_code)
+				if statusCode and (statusCode < 200 or statusCode >= 300) then error("HTTP " .. tostring(statusCode), 0) end
+				body = response.Body or response.body or response.ResponseBody
+			elseif type(response) == "string" then
+				body = response
+			end
+		else
+			body = game:HttpPost(Config.ChessApiEndpoint, payload, Enum.HttpContentType.ApplicationJson, false)
+		end
+		if type(body) ~= "string" or body == "" then error("respuesta vacía", 0) end
+		local decoded = httpService:JSONDecode(body)
+		if type(decoded) ~= "table" then error("JSON inválido", 0) end
+		local best = tostring(decoded.move or decoded.lan or "")
+		if best == "" and type(decoded.from) == "string" and type(decoded.to) == "string" then
+			best = decoded.from .. decoded.to .. tostring(decoded.promotion or "")
+		end
+		best = string.lower(best)
+		if not string.match(best, "^[a-h][1-8][a-h][1-8][qrbn]?$") then
+			error(tostring(decoded.error or decoded.message or decoded.text or "Chess-API no devolvió un movimiento válido"), 0)
+		end
+		local continuation = {}
+		if type(decoded.continuationArr) == "table" then
+			for _, move in ipairs(decoded.continuationArr) do
+				if type(move) == "string" and string.match(string.lower(move), "^[a-h][1-8][a-h][1-8][qrbn]?$") then
+					table.insert(continuation, string.lower(move))
+				end
+			end
+		end
+		local ponder = nil
+		for _, move in ipairs(continuation) do
+			if move ~= best then ponder = move break end
+		end
+		return {
+			best = best,
+			from = tostring(decoded.from or string.sub(best, 1, 2)),
+			to = tostring(decoded.to or string.sub(best, 3, 4)),
+			piece = type(decoded.piece) == "string" and string.lower(decoded.piece) or nil,
+			san = decoded.san,
+			ponder = ponder,
+			evaluation = decoded.eval,
+			mate = decoded.mate,
+			depth = decoded.depth,
+			continuation = continuation,
+			text = decoded.text,
+		}
+	end
+
+	local startChessApiRequest
+	startChessApiRequest = function(snapshot)
+		if WordHelper.destroyed or not snapshot then return end
+		if WordHelper.chess.busy then
+			WordHelper.chess.requestGeneration = WordHelper.chess.requestGeneration + 1
+			WordHelper.chess.pendingSnapshot = snapshot
+			return
+		end
+		WordHelper.chess.busy = true
+		WordHelper.chess.pendingSnapshot = nil
+		WordHelper.chess.requestGeneration = WordHelper.chess.requestGeneration + 1
+		local generation = WordHelper.chess.requestGeneration
+		WordHelper.chess.lastRequestedFen = snapshot.fen
+		WordHelper.chess.lastError = nil
+		setChessState("Chess-API está analizando tu posición...", Config.White)
+		chessLineLabel.Text = "Consultando chess-api.com..."
+
+		task.spawn(function()
+			local ok, result = pcall(performChessApiRequest, snapshot.fen, generation)
+			local current = not WordHelper.destroyed and generation == WordHelper.chess.requestGeneration
+			if current and ok then
+				WordHelper.chess.bestMove = result.best
+				WordHelper.chess.ponder = result.ponder
+				WordHelper.chess.evaluation = result.evaluation
+				WordHelper.chess.mate = result.mate
+				WordHelper.chess.lastResult = result
+				bestMoveLabel.Text = formatUci(result.best) or string.upper(result.best)
+				if result.mate ~= nil and tostring(result.mate) ~= "" and tostring(result.mate) ~= "null" then
+					chessEvalLabel.Text = "MATE " .. tostring(result.mate)
+				elseif result.evaluation ~= nil then
+					local evaluation = tonumber(result.evaluation)
+					chessEvalLabel.Text = evaluation and string.format("EVAL %+.2f", evaluation) or ("EVAL " .. tostring(result.evaluation))
+				else
+					chessEvalLabel.Text = "EVAL —"
+				end
+				local depthText = result.depth and ("D" .. tostring(result.depth)) or ""
+				chessPonderLabel.Text = result.ponder and ("SIGUE " .. (formatUci(result.ponder) or result.ponder)) or depthText
+				local line = {}
+				for _, move in ipairs(result.continuation) do
+					local formatted = formatUci(move)
+					if formatted then table.insert(line, formatted) end
+					if #line >= 4 then break end
+				end
+				chessLineLabel.Text = #line > 0 and table.concat(line, "  •  ") or (result.text or "Análisis listo")
+				local piece = result.piece or pieceAtSquare(snapshot.fen, result.from) or "p"
+				local pieceName = PIECE_NAMES_ES[piece] or "Pieza"
+				chessMoveGuideLabel.Text = string.format("MUEVE %s  %s → %s", pieceName, result.from, result.to)
+				renderBoardMove(result.best, snapshot)
+				setChessState(snapshot.over and "Análisis post-partida listo." or "Tu turno • movimiento marcado en el tablero", Config.Secondary)
+			elseif current then
+				WordHelper.chess.lastError = tostring(result)
+				WordHelper.chess.retryAt = os.clock() + 4
+				WordHelper.chess.lastRequestedFen = nil
+				clearChessRecommendation("Chess-API no está disponible; se reintentará.")
+				setChessState("No se pudo consultar chess-api.com.", Config.Danger)
+			end
+			WordHelper.chess.busy = false
+			local pending = WordHelper.chess.pendingSnapshot
+			WordHelper.chess.pendingSnapshot = nil
+			if pending and not WordHelper.destroyed then startChessApiRequest(pending) end
+		end)
+	end
+
+	local function blockLiveAnalysis(signature, stateText, lineText)
+		if WordHelper.chess.gateSignature ~= signature then
+			WordHelper.chess.gateSignature = signature
+			WordHelper.chess.requestGeneration = WordHelper.chess.requestGeneration + 1
+			WordHelper.chess.pendingSnapshot = nil
+			WordHelper.chess.lastRequestedFen = nil
+			clearChessRecommendation(lineText)
+		end
+		setChessState(stateText, Config.Secondary)
+	end
+
+	local function handleChessSnapshot(snapshot)
+		if type(snapshot) == "table" then snapshot.__zenithSnapshot = true end
+		local fen = normalizeFen(snapshot and snapshot.fen)
+		if not fen then
+			blockLiveAnalysis("invalid", "La posición detectada todavía no es válida.", "Esperando que el tablero termine de actualizarse.")
+			return
+		end
+		snapshot.fen = fen
+		snapshot.activeSide = snapshot.activeSide or fenTurn(fen)
+		WordHelper.chess.lastFen = fen
+		WordHelper.chess.lastSnapshot = snapshot
+		chessModeLabel.Text = snapshot.over and "POST-PARTIDA • solo lectura"
+			or ((snapshot.source or "posición detectada") .. " • solo lectura")
+
+		if not snapshot.over and snapshot.contextAllowed ~= true then
+			blockLiveAnalysis(fen .. ":context", "Análisis en vivo bloqueado: " .. tostring(snapshot.contextReason or "contexto no confirmado") .. ".", "Disponible en bot, práctica, privado o post-partida.")
+			return
+		end
+		if not snapshot.over and snapshot.ownTurn ~= true then
+			local text = snapshot.ownTurn == false and "Turno del oponente. Zenith espera sin analizar."
+				or "Posición detectada; falta confirmar tu color y turno."
+			blockLiveAnalysis(fen .. ":turn:" .. tostring(snapshot.ownTurn), text, "Sin recomendación fuera de tu turno.")
+			return
+		end
+		if not snapshot.over and snapshot.ownSide and snapshot.activeSide and snapshot.ownSide ~= snapshot.activeSide then
+			blockLiveAnalysis(fen .. ":side", "El lado activo no coincide con tu color.", "Sin recomendación fuera de tu turno.")
+			return
+		end
+
+		WordHelper.chess.gateSignature = fen .. ":allowed"
+		if WordHelper.chess.lastRequestedFen ~= fen and os.clock() >= WordHelper.chess.retryAt then
+			startChessApiRequest(snapshot)
+		elseif not WordHelper.chess.busy and WordHelper.chess.bestMove then
+			renderBoardMove(WordHelper.chess.bestMove, snapshot)
+			setChessState(snapshot.over and "Análisis post-partida listo." or "Tu turno • movimiento marcado en el tablero", Config.Secondary)
+		end
+	end
+
+	function WordHelper:GetChessDiagnostics()
+		local generic = GenericAdapter:Diagnostic()
+		generic.game = self.chess.gameName
+		generic.activeAdapter = self.chess.adapter and self.chess.adapter.Name or nil
+		generic.positionDetected = self.chess.lastFen ~= nil
+		generic.ownTurn = self.chess.lastSnapshot and self.chess.lastSnapshot.ownTurn or nil
+		generic.contextAllowed = self.chess.lastSnapshot and self.chess.lastSnapshot.contextAllowed or nil
+		generic.contextReason = self.chess.lastSnapshot and self.chess.lastSnapshot.contextReason or nil
+		generic.boardPath = self.chess.boardPath
+		generic.visualPieces = self.chess.visualPieces
+		generic.visualPositionDetected = self.chess.visualPositionDetected
+		generic.overlayMove = self.chess.overlayMove
+		generic.api = Config.ChessApiEndpoint
+		generic.lastError = self.chess.lastError
+		return generic
+	end
+
+	local function initializeChessAdapter()
+		if WordHelper.chess.adapter or not WordHelper.chess.supported then return end
+		if game.PlaceId == 130878180532794 then
+			WordHelper.chess.adapter = createRoChessAdapter()
+		elseif game.PlaceId == 89083628291452 then
+			WordHelper.chess.adapter = createChessDuelsAdapter()
+		elseif game.PlaceId == 93365009198479 then
+			WordHelper.chess.adapter = GenericAdapter
+		end
+	end
+
+	local function pollChess()
+		if WordHelper.destroyed or not WordHelper.chess.supported then return end
+		if not WordHelper.chess.adapter and os.clock() >= (WordHelper.chess.nextAdapterAttempt or 0) then
+			WordHelper.chess.nextAdapterAttempt = os.clock() + 2
+			initializeChessAdapter()
+		end
+		local snapshot = nil
+		if WordHelper.chess.adapter then
+			local ok, result = pcall(function() return WordHelper.chess.adapter:Read() end)
+			if ok then snapshot = result end
+		end
+		if not snapshot and WordHelper.chess.adapter ~= GenericAdapter then
+			local ok, result = pcall(function() return GenericAdapter:Read() end)
+			if ok then snapshot = result end
+		end
+		if not snapshot then
+			local ok, result = pcall(function() return VisualBoardAdapter:Read() end)
+			if ok then snapshot = result end
+		end
+		if snapshot then
+			handleChessSnapshot(snapshot)
+		elseif not WordHelper.chess.lastFen then
+			chessModeLabel.Text = "READ-ONLY • lectura automática de pantalla/UI"
+			if WordHelper.chess.visualPositionDetected then
+				setChessState("Tablero visible detectado; confirmando color y turno...", Config.Secondary)
+			else
+				setChessState("Buscando tablero, piezas, color y turno...", Config.Secondary)
+			end
+		end
+	end
+
+	local function disconnectFocusedTextBox()
+		for _, connection in ipairs(WordHelper.focusConnections) do
+			if connection and connection.Connected then
+				connection:Disconnect()
+			end
+		end
+		table.clear(WordHelper.focusConnections)
+		WordHelper.activeExternalTextBox = nil
+	end
+
+	local function syncFromFocusedTextBox(textBox)
+		if WordHelper.destroyed or textBox ~= WordHelper.activeExternalTextBox then
+			return
+		end
+		local ok, text, cursorPosition = pcall(function()
+			return textBox.Text, textBox.CursorPosition
+		end)
+		if ok then
+			WordHelper:DetectText(text, cursorPosition)
+		end
+	end
+
+	local function bindFocusedTextBox(textBox)
+		if textBox == searchBox then
+			disconnectFocusedTextBox()
+			return
+		end
+		if textBox == WordHelper.activeExternalTextBox then
+			return
+		end
+		disconnectFocusedTextBox()
+		if not textBox then
+			return
+		end
+		local isTextBox = false
+		pcall(function()
+			isTextBox = textBox:IsA("TextBox")
+		end)
+		if not isTextBox then
+			return
+		end
+
+		WordHelper.activeExternalTextBox = textBox
+		local ok, textConnection = pcall(function()
+			return textBox:GetPropertyChangedSignal("Text"):Connect(function()
+				syncFromFocusedTextBox(textBox)
+			end)
+		end)
+		if ok and textConnection then
+			table.insert(WordHelper.focusConnections, textConnection)
+		end
+		local cursorOk, cursorConnection = pcall(function()
+			return textBox:GetPropertyChangedSignal("CursorPosition"):Connect(function()
+				syncFromFocusedTextBox(textBox)
+			end)
+		end)
+		if cursorOk and cursorConnection then
+			table.insert(WordHelper.focusConnections, cursorConnection)
+		end
+		syncFromFocusedTextBox(textBox)
+	end
+
+	function WordHelper:BindTextBox(textBox)
+		bindFocusedTextBox(textBox)
+	end
+
+	function WordHelper:Destroy()
+		if self.destroyed then
+			return
+		end
+		if searchBox:IsFocused() then
+			searchBox:ReleaseFocus()
+		end
+		self.destroyed = true
+		self.chess.requestGeneration = self.chess.requestGeneration + 1
+		self.chess.pendingSnapshot = nil
+		disconnectFocusedTextBox()
+		disconnectRows()
+		for _, connection in ipairs(self.connections) do
+			if connection and connection.Connected then
+				connection:Disconnect()
+			end
+		end
+		table.clear(self.connections)
+		if screenGui and screenGui.Parent then screenGui:Destroy() end
+		if chessScreenGui and chessScreenGui.Parent then chessScreenGui:Destroy() end
+		if moveOverlayGui and moveOverlayGui.Parent then moveOverlayGui:Destroy() end
+		local replacement = sharedEnvironment.ZenithVocabulary
+		if type(replacement) ~= "table" or replacement.destroyed then replacement = nil end
+		if sharedEnvironment.ZenithChess == self then sharedEnvironment.ZenithChess = nil end
+		if sharedEnvironment.ZenithAssistant == self then sharedEnvironment.ZenithAssistant = replacement end
+		if sharedEnvironment.ZenithWordHelper == self then sharedEnvironment.ZenithWordHelper = replacement end
+		if type(shared) == "table" then
+			local sharedReplacement = shared.ZenithVocabulary
+			if type(sharedReplacement) ~= "table" or sharedReplacement.destroyed then sharedReplacement = replacement end
+			if shared.ZenithChess == self then shared.ZenithChess = nil end
+			if shared.ZenithAssistant == self then shared.ZenithAssistant = sharedReplacement end
+			if shared.ZenithWordHelper == self then shared.ZenithWordHelper = sharedReplacement end
+		end
+	end
+
+	connect(searchBox:GetPropertyChangedSignal("Text"), function()
+		if synchronizingSearch then
+			return
+		end
+		local cleaned = normalizeLetters(searchBox.Text)
+		if searchBox.Text ~= cleaned then
+			synchronizingSearch = true
+			searchBox.Text = cleaned
+			synchronizingSearch = false
+		end
+		WordHelper.passiveBuffer = cleaned
+		applyDetectedQuery(cleaned, "manual", false)
+	end)
+	connect(searchBox.Focused, function()
+		disconnectFocusedTextBox()
+		tween(searchStroke, FAST_TWEEN, { Transparency = 0.38, Color = Config.White })
+	end)
+	connect(searchBox.FocusLost, function()
+		tween(searchStroke, FAST_TWEEN, { Transparency = 0.78, Color = Config.Line })
+	end)
+	local function bindHeaderHover(button, danger)
+		connect(button.MouseEnter, function()
+			tween(button, FAST_TWEEN, {
+				BackgroundTransparency = 0.1,
+				TextColor3 = danger and Config.Danger or Config.White,
+			})
+		end)
+		connect(button.MouseLeave, function()
+			tween(button, FAST_TWEEN, {
+				BackgroundTransparency = 1,
+				TextColor3 = Config.Secondary,
+			})
+		end)
+	end
+	bindHeaderHover(minimizeButton, false)
+	bindHeaderHover(closeButton, true)
+	bindHeaderHover(chessMinimizeButton, false)
+	bindHeaderHover(chessCloseButton, true)
+
+	connect(minimizeButton.Activated, function()
+		WordHelper:SetMinimized(not WordHelper.minimized)
+	end)
+	connect(chessMinimizeButton.Activated, function()
+		WordHelper:SetChessMinimized(not WordHelper.chess.minimized)
+	end)
+	connect(closeButton.Activated, function()
+		tween(windowScale, FAST_TWEEN, { Scale = windowScale.Scale * 0.92 })
+		task.delay(FAST_TWEEN.Time + 0.03, function() WordHelper:Destroy() end)
+	end)
+	connect(chessCloseButton.Activated, function()
+		tween(chessWindowScale, FAST_TWEEN, { Scale = chessWindowScale.Scale * 0.92 })
+		task.delay(FAST_TWEEN.Time + 0.03, function() WordHelper:Destroy() end)
+	end)
+
+	local function currentViewport()
+		local camera = workspaceService.CurrentCamera
+		return camera and camera.ViewportSize or Vector2.new(800, 600)
+	end
+
+	local function targetScale()
+		local viewport = currentViewport()
+		return math.clamp(math.min(
+			(viewport.X - 12) / Config.WindowWidth,
+			(viewport.Y - 12) / Config.WindowHeight,
+			1
+		), 0.68, 1)
+	end
+
+	local function clampWindowPosition(x, y)
+		local viewport = currentViewport()
+		local scale = windowScale.Scale
+		local width = Config.WindowWidth * scale
+		local height = (WordHelper.minimized and Config.CollapsedHeight or Config.WindowHeight) * scale
+		return math.clamp(x, 6, math.max(6, viewport.X - width - 6)),
+			math.clamp(y, 6, math.max(6, viewport.Y - height - 6))
+	end
+
+	local function updateResponsivePlacement()
+		if WordHelper.destroyed then return end
+		local viewport = currentViewport()
+		local scale = targetScale()
+		windowScale.Scale = scale
+		if not WordHelper.hasUserPosition then
+			local x = viewport.X - Config.WindowWidth * scale - 16
+			local y = (viewport.Y - Config.WindowHeight * scale) * 0.5
+			x, y = clampWindowPosition(x, y)
+			window.Position = UDim2.fromOffset(x, y)
+		else
+			local x, y = clampWindowPosition(window.Position.X.Offset, window.Position.Y.Offset)
+			window.Position = UDim2.fromOffset(x, y)
+		end
+	end
+
+	local function chessTargetScale()
+		local viewport = currentViewport()
+		return math.clamp(math.min(
+			(viewport.X - 12) / Config.ChessWindowWidth,
+			(viewport.Y - 12) / Config.ChessWindowHeight,
+			1
+		), 0.68, 1)
+	end
+
+	local function clampChessWindowPosition(x, y)
+		local viewport = currentViewport()
+		local scale = chessWindowScale.Scale
+		local width = Config.ChessWindowWidth * scale
+		local height = (WordHelper.chess.minimized and Config.CollapsedHeight or Config.ChessWindowHeight) * scale
+		return math.clamp(x, 6, math.max(6, viewport.X - width - 6)),
+			math.clamp(y, 6, math.max(6, viewport.Y - height - 6))
+	end
+
+	local function updateChessResponsivePlacement()
+		if WordHelper.destroyed then return end
+		local viewport = currentViewport()
+		local scale = chessTargetScale()
+		chessWindowScale.Scale = scale
+		if not WordHelper.chess.hasUserPosition then
+			local x = 16
+			local y = (viewport.Y - Config.ChessWindowHeight * scale) * 0.5
+			x, y = clampChessWindowPosition(x, y)
+			chessWindow.Position = UDim2.fromOffset(x, y)
+		else
+			local x, y = clampChessWindowPosition(chessWindow.Position.X.Offset, chessWindow.Position.Y.Offset)
+			chessWindow.Position = UDim2.fromOffset(x, y)
+		end
+	end
+
+	-- Dragging the compact header moves the assistant anywhere on screen. It no
+	-- longer rotates or takes over the game view.
+	connect(header.InputBegan, function(input)
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+		WordHelper.dragging = true
+		WordHelper.dragInput = input
+		WordHelper.dragStart = Vector2.new(input.Position.X, input.Position.Y)
+		-- Position offsets stay in the same coordinate space while dragging. Using
+		-- AbsolutePosition here caused the menu to jump upward on scaled/inset UIs.
+		WordHelper.dragWindowStart = Vector2.new(window.Position.X.Offset, window.Position.Y.Offset)
+	end)
+
+	connect(chessHeader.InputBegan, function(input)
+		if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
+		WordHelper.chess.dragging = true
+		WordHelper.chess.dragInput = input
+		WordHelper.chess.dragStart = Vector2.new(input.Position.X, input.Position.Y)
+		WordHelper.chess.dragWindowStart = Vector2.new(chessWindow.Position.X.Offset, chessWindow.Position.Y.Offset)
+	end)
+
+	connect(userInputService.InputChanged, function(input)
+		if not WordHelper.dragging and not WordHelper.chess.dragging then return end
+		if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
+		local position = Vector2.new(input.Position.X, input.Position.Y)
+		if WordHelper.dragging then
+			if WordHelper.dragInput.UserInputType == Enum.UserInputType.Touch and input ~= WordHelper.dragInput then return end
+			local delta = position - WordHelper.dragStart
+			local x, y = clampWindowPosition(WordHelper.dragWindowStart.X + delta.X, WordHelper.dragWindowStart.Y + delta.Y)
+			WordHelper.hasUserPosition = true
+			window.Position = UDim2.fromOffset(x, y)
+		elseif WordHelper.chess.dragging then
+			if WordHelper.chess.dragInput.UserInputType == Enum.UserInputType.Touch and input ~= WordHelper.chess.dragInput then return end
+			local delta = position - WordHelper.chess.dragStart
+			local x, y = clampChessWindowPosition(WordHelper.chess.dragWindowStart.X + delta.X, WordHelper.chess.dragWindowStart.Y + delta.Y)
+			WordHelper.chess.hasUserPosition = true
+			chessWindow.Position = UDim2.fromOffset(x, y)
+		end
+	end)
+
+	connect(userInputService.InputEnded, function(input)
+		if WordHelper.dragging then
+			local activeInput = WordHelper.dragInput
+			local matchingMouse = activeInput.UserInputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseButton1
+			local matchingTouch = activeInput.UserInputType == Enum.UserInputType.Touch and input == activeInput
+			if matchingMouse or matchingTouch then WordHelper.dragging, WordHelper.dragInput = false, nil end
+		end
+		if WordHelper.chess.dragging then
+			local activeInput = WordHelper.chess.dragInput
+			local matchingMouse = activeInput.UserInputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseButton1
+			local matchingTouch = activeInput.UserInputType == Enum.UserInputType.Touch and input == activeInput
+			if matchingMouse or matchingTouch then WordHelper.chess.dragging, WordHelper.chess.dragInput = false, nil end
+		end
+	end)
+
+	local LETTER_BY_KEYCODE = {
+		[Enum.KeyCode.A] = "a", [Enum.KeyCode.B] = "b", [Enum.KeyCode.C] = "c",
+		[Enum.KeyCode.D] = "d", [Enum.KeyCode.E] = "e", [Enum.KeyCode.F] = "f",
+		[Enum.KeyCode.G] = "g", [Enum.KeyCode.H] = "h", [Enum.KeyCode.I] = "i",
+		[Enum.KeyCode.J] = "j", [Enum.KeyCode.K] = "k", [Enum.KeyCode.L] = "l",
+		[Enum.KeyCode.M] = "m", [Enum.KeyCode.N] = "n", [Enum.KeyCode.O] = "o",
+		[Enum.KeyCode.P] = "p", [Enum.KeyCode.Q] = "q", [Enum.KeyCode.R] = "r",
+		[Enum.KeyCode.S] = "s", [Enum.KeyCode.T] = "t", [Enum.KeyCode.U] = "u",
+		[Enum.KeyCode.V] = "v", [Enum.KeyCode.W] = "w", [Enum.KeyCode.X] = "x",
+		[Enum.KeyCode.Y] = "y", [Enum.KeyCode.Z] = "z",
+	}
+
+	-- TextBoxFocused covers Roblox chat and normal game interfaces. The passive
+	-- gameProcessed fallback also catches custom interfaces that render text in a
+	-- label while consuming keyboard input instead of focusing a real TextBox.
+	connect(userInputService.TextBoxFocused, function(textBox)
+		bindFocusedTextBox(textBox)
+	end)
+	connect(userInputService.TextBoxFocusReleased, function(textBox)
+		if textBox == WordHelper.activeExternalTextBox then
+			disconnectFocusedTextBox()
+		end
+	end)
+
+	connect(userInputService.InputBegan, function(input, gameProcessed)
+		if input.KeyCode == Enum.KeyCode.RightShift then
+			WordHelper:Toggle()
+			return
+		end
+
+		local focusedTextBox = userInputService:GetFocusedTextBox()
+		if focusedTextBox then
+			bindFocusedTextBox(focusedTextBox)
+			return
+		end
+		if not gameProcessed then
+			return
+		end
+
+		local now = os.clock()
+		if now - WordHelper.lastPassiveInput > Config.PassiveResetSeconds then
+			WordHelper.passiveBuffer = ""
+		end
+		local letter = LETTER_BY_KEYCODE[input.KeyCode]
+		if letter then
+			WordHelper.passiveBuffer = string.sub(WordHelper.passiveBuffer .. letter, -32)
+			WordHelper.lastPassiveInput = now
+			applyDetectedQuery(WordHelper.passiveBuffer, "passive", true)
+		elseif input.KeyCode == Enum.KeyCode.Backspace then
+			WordHelper.passiveBuffer = string.sub(WordHelper.passiveBuffer, 1, math.max(0, #WordHelper.passiveBuffer - 1))
+			WordHelper.lastPassiveInput = now
+			applyDetectedQuery(WordHelper.passiveBuffer, "passive", true)
+		elseif input.KeyCode == Enum.KeyCode.Space
+			or input.KeyCode == Enum.KeyCode.Return
+			or input.KeyCode == Enum.KeyCode.KeypadEnter then
+			WordHelper.passiveBuffer = ""
+			WordHelper.lastPassiveInput = now
+			applyDetectedQuery("", "passive", true)
+		end
+	end)
+
+	local focusPollAccumulator = 0
+	connect(runService.Heartbeat, function(deltaTime)
+		focusPollAccumulator = focusPollAccumulator + deltaTime
+		if focusPollAccumulator < 0.1 then
+			return
+		end
+		focusPollAccumulator = 0
+		local focusedTextBox = userInputService:GetFocusedTextBox()
+		if focusedTextBox and focusedTextBox ~= searchBox then
+			bindFocusedTextBox(focusedTextBox)
+			-- Polling as well as listening makes detection survive protected/custom
+			-- TextBoxes whose property-changed signal cannot be connected to.
+			syncFromFocusedTextBox(focusedTextBox)
+		elseif not focusedTextBox and WordHelper.activeExternalTextBox then
+			disconnectFocusedTextBox()
+		end
+	end)
+
+	local function updateAllResponsivePlacement()
+		updateResponsivePlacement()
+		updateChessResponsivePlacement()
+	end
+	local function bindViewport()
+		local camera = workspaceService.CurrentCamera
+		if camera then connect(camera:GetPropertyChangedSignal("ViewportSize"), updateAllResponsivePlacement) end
+		updateAllResponsivePlacement()
+	end
+	connect(workspaceService:GetPropertyChangedSignal("CurrentCamera"), bindViewport)
+	bindViewport()
+
+	sharedEnvironment.ZenithChess = WordHelper
+	sharedEnvironment.ZenithAssistant = WordHelper
+	sharedEnvironment.ZenithWordHelper = WordHelper -- compatibility alias
+	if type(shared) == "table" then
+		shared.ZenithChess = WordHelper
+		shared.ZenithAssistant = WordHelper
+		shared.ZenithWordHelper = WordHelper
+	end
+
+	WordHelper:SetWords(parseDictionary(FALLBACK_WORDS))
+	WordHelper:SetMode(WordHelper.mode)
+	if WordHelper.chess.supported then
+		task.spawn(loadChessIcon)
+		task.spawn(function()
+			pollChess()
+			while not WordHelper.destroyed do
+				task.wait(Config.ChessPollSeconds)
+				pollChess()
+			end
+		end)
+	end
+
+	-- Upgrade Words only when its separate menu is the active product.
+	if not WordHelper.chess.supported then
+		task.spawn(function()
+			local content = nil
+			if readFile then
+				local ok, value = pcall(function()
+					if isFile and not isFile(Config.DictionaryFile) then
+						return nil
+					end
+					return readFile(Config.DictionaryFile)
+				end)
+				if ok and type(value) == "string" and #value > 1000 then
+					content = value
+					WordHelper.dictionaryLabel = "Cached dictionary"
+				end
+			end
+
+			if not content then
+				local ok, value = pcall(function()
+					return game:HttpGet(Config.DictionaryUrl, true)
+				end)
+				if ok and type(value) == "string" and #value > 1000 then
+					content = value
+					WordHelper.dictionaryLabel = "Full dictionary"
+					if writeFile then
+						pcall(function()
+							if makeFolder then pcall(makeFolder, "Zenith") end
+							writeFile(Config.DictionaryFile, value)
+						end)
+					end
+				end
+			end
+
+			if WordHelper.destroyed or not content then return end
+			local words = parseDictionary(content)
+			if #words > 0 then
+				installCleanWords(words)
+				scheduleRefresh()
+			end
+		end)
+	end
+
+	-- Keep the existing twelve-hour entitlement without adding a timer/stat panel.
+	standardExpiresAt = tonumber(standardExpiresAt) or (os.time() + ZenithKeyLog.DurationSeconds)
+	task.spawn(function()
+		while not WordHelper.destroyed do
+			if standardExpiresAt <= os.time() then
+				WordHelper:Destroy()
+				launchKeySystem(function(newExpiresAt)
+					launchWordHelper(newExpiresAt)
+				end)
+				return
+			end
+			task.wait(1)
+		end
+	end)
+
+	-- Small, non-blocking entrance; there is deliberately no BlurEffect.
+	updateAllResponsivePlacement()
+	if WordHelper.chess.supported then
+		local finalScale = chessTargetScale()
+		chessWindowScale.Scale = finalScale * 0.9
+		updateChessResponsivePlacement()
+		chessWindowScale.Scale = finalScale * 0.9
+		tween(chessWindowScale, OPEN_TWEEN, { Scale = finalScale })
+	else
+		local finalScale = targetScale()
+		windowScale.Scale = finalScale * 0.9
+		updateResponsivePlacement()
+		windowScale.Scale = finalScale * 0.9
+		tween(windowScale, OPEN_TWEEN, { Scale = finalScale })
+	end
+
+	return WordHelper
+end
+
+-- Bootstrap: skip the Key System while the logged key is still valid.
+local function startZenith()
+	local expiresAt = ZenithKeyLog.ReadExpiry()
+	if expiresAt and expiresAt > os.time() then
+		launchWordHelper(expiresAt)
+	else
+		launchKeySystem(function(newExpiresAt)
+			launchWordHelper(newExpiresAt)
+		end)
+	end
+end
+
+startZenith()
