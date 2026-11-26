@@ -45,3 +45,35 @@ No automatic word submission was added. Other games' remote protocols are unchan
 5. Focus chat and Zenith search: neither should be interpreted as game typing.
 6. If CurrentWord cannot be found, capture its current PlayerGui hierarchy and a
    short log of manual typing (including deletion), rather than guessing Packet IDs.
+
+## GUI/settings follow-up
+
+- Removed the W image/fallback and its asset resolution; reserved more trailing
+  space between the used count and save icon.
+- Added Enable Derivations (off by default): a small explicit list of rare forms,
+  not an arbitrary suffix generator. No promise of server dictionary acceptance.
+  Includes yesterdayness/selfness. Uses the existing contains/prefix and used filters.
+- Added Legit Auto Type toggle and separate Min/Max WPM sliders (mouse/touch,
+  integer values within 30–600, min cannot exceed max). Enabling it enables Auto
+  Type; disabling Auto Type also disables Legit. Normal typing and suggestion
+  clicks use the same timing helper. Legit samples a random WPM per character.
+  Input acknowledgment time is subtracted from the pacing delay; game latency
+  can still make actual speed slower than requested.
+- Fixed an earlier regression: the visible-entry early return swallowed the
+  submission key before recording it, so Used tracking never saw the action.
+  Activity is now recorded before yielding to the visual observer.
+- Used tracks observed submissions even outside the local dictionary and refreshes
+  filtered suggestions. This is not confirmation that a server accepted the word.
+  Word Battle still uses its existing server-confirmation handler.
+- Visual letters use left-to-right screen order instead of inconsistent mixed
+  LayoutOrder/position comparisons; a stable second sample suppresses transient
+  layout reversal. A root text field takes precedence over animated descendants.
+- Last Letter prefers virtual hardware input when available rather than assuming
+  firing Activated triggered a ContextAction controller. No binary protocol guessed.
+- Opening Settings cancels an ongoing generated sequence.
+
+Additional regression command:
+`python3 tools/test_zenith_gui_logic.py /path/to/luau`.
+Tests exercise production timing, used-memory and visual-reader helpers with mocks.
+All runtime GUI controls, mobile hit targets and the live remote/input integration
+still require an in-game check. Slider/UI appearance was not rendered in the sandbox.

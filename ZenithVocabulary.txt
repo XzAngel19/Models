@@ -2682,6 +2682,10 @@ zenith
 	local DEFAULT_SETTINGS = {
 		autoType = true,
 		wpm = Config.DefaultWPM,
+		legitAutoType = false,
+		legitMinWPM = 160,
+		legitMaxWPM = 180,
+		enableDerivations = false,
 		definitions = true,
 		allResults = false,
 		autoDetect = true,
@@ -2698,6 +2702,8 @@ zenith
 		Config.MinimumWPM,
 		Config.MaximumWPM
 	)
+	Settings.legitMinWPM = math.clamp(math.floor(Settings.legitMinWPM), Config.MinimumWPM, Config.MaximumWPM)
+	Settings.legitMaxWPM = math.clamp(math.floor(Settings.legitMaxWPM), Settings.legitMinWPM, Config.MaximumWPM)
 	sharedEnvironment.ZenithVocabularySettings = Settings
 	if type(shared) == "table" then shared.ZenithVocabularySettings = Settings end
 
@@ -3045,7 +3051,7 @@ zenith
 	end
 
 	local resolvedWordAssets = {
-		WordleLogo = resolveWordAsset("WordleLogo", "wordle-logo.png"),
+		WordleLogo = "", -- removed at user request; do not decode/write the PNG
 		SavedIcon = resolveWordAsset("SavedIcon", "saved-word.png"),
 		SettingsIcon = resolveWordAsset("SettingsIcon", "settings-icon.png"),
 	}
@@ -3154,7 +3160,7 @@ zenith
 		BorderSizePixel = 0,
 		Image = resolvedWordAssets.WordleLogo,
 		ScaleType = Enum.ScaleType.Fit,
-		Visible = resolvedWordAssets.WordleLogo ~= "",
+		Visible = false,
 		ZIndex = 7,
 	}, header)
 	WordHelper.references.WordleLogoFallback = makeText(header, {
@@ -3162,11 +3168,11 @@ zenith
 		Position = UDim2.fromOffset(70, 0),
 		Size = UDim2.fromOffset(23, Config.HeaderHeight),
 		Font = BOLD_FONT,
-		Text = "W",
+		Text = "",
 		TextColor3 = Config.Secondary,
 		TextSize = 16,
 		TextXAlignment = Enum.TextXAlignment.Center,
-		Visible = not wordleLogo.Visible,
+		Visible = false,
 		ZIndex = 7,
 	})
 	WordHelper.references.ProductLabel = makeText(header, {
@@ -3359,7 +3365,7 @@ zenith
 	usedChip.TextXAlignment = Enum.TextXAlignment.Left
 	create("UIPadding", {
 		PaddingLeft = UDim.new(0, 6),
-		PaddingRight = UDim.new(0, 19),
+		PaddingRight = UDim.new(0, 33),
 	}, usedChip)
 	local savedIcon = create("ImageLabel", {
 		Name = "SavedWordIcon",
@@ -3387,7 +3393,7 @@ zenith
 		ZIndex = 7,
 	})
 	local function updateUsedChip()
-		usedChip.Text = string.format("Usadas: %d", WordHelper.usedCount)
+		usedChip.Text = string.format("Usadas: %d   ", WordHelper.usedCount)
 	end
 
 	local detectionLabel = makeText(body, {
@@ -3708,7 +3714,62 @@ zenith
 	makeToggleSetting(3, "definitions", "Enable Definitions", "Cambridge Definitions")
 	makeToggleSetting(4, "allResults", "Enable All Results", "Might be laggy")
 	makeToggleSetting(5, "autoDetect", "Auto Detect Game Input", "Only watches local, active input")
-	makeToggleSetting(6, "hideUsed", "Hide Used Words", "Avoid repeated submissions")
+	makeToggleSetting(6, "hideUsed", "Hide Used Words", "Hide remembered submissions (not proof of acceptance)")
+	makeToggleSetting(7, "enableDerivations", "Enable Derivations", "Rare forms; the game may not accept them")
+	makeToggleSetting(8, "legitAutoType", "Legit Auto Type", "Random WPM inside your selected range")
+	-- Scoped builder avoids adding long-lived registers to the main GUI function.
+	WordHelper.UpdateLegitRange = (function()
+		local row = create("Frame", {
+			Name = "LegitWPMRange", LayoutOrder = 9, Size = UDim2.new(1, -4, 0, 102),
+			BackgroundColor3 = Config.Row, BorderSizePixel = 0, ZIndex = 23,
+		}, settingsList)
+		local title = makeText(row, {Position = UDim2.fromOffset(10, 3),
+			Size = UDim2.new(1, -20, 0, 22), Text = "", TextSize = 11,
+			TextColor3 = Config.Secondary, ZIndex = 24})
+		local knobs = {}
+		local refresh
+		for index, key in ipairs({"legitMinWPM", "legitMaxWPM"}) do
+			makeText(row, {Position = UDim2.fromOffset(10, 26 + (index - 1) * 34),
+				Size = UDim2.fromOffset(36, 22), Text = index == 1 and "Min" or "Max",
+				TextSize = 10, TextColor3 = Config.Secondary, ZIndex = 24})
+			local track = makeButton(row, {Name = key, Position = UDim2.new(0, 52, 0, 32 + (index - 1) * 34),
+				Size = UDim2.new(1, -70, 0, 10), Text = "", BackgroundColor3 = Config.Selected, ZIndex = 24})
+			local knob = create("Frame", {AnchorPoint = Vector2.new(0.5, 0.5),
+				Size = UDim2.fromOffset(16, 20), BackgroundColor3 = Config.Secondary,
+				BorderSizePixel = 0, ZIndex = 25}, track)
+			knobs[key] = knob
+			local dragging, touch = false, nil
+			local function move(x)
+				if track.AbsoluteSize.X <= 0 then return end
+				local fraction = math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
+				local value = math.floor(Config.MinimumWPM + fraction * (Config.MaximumWPM - Config.MinimumWPM) + 0.5)
+				if key == "legitMinWPM" then value = math.min(value, Settings.legitMaxWPM)
+				else value = math.max(value, Settings.legitMinWPM) end
+				Settings[key] = value
+				refresh()
+			end
+			connect(track.InputBegan, function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+					dragging, touch = true, input
+					move(input.Position.X)
+				end
+			end)
+			connect(userInputService.InputChanged, function(input)
+				if dragging and (input == touch or input.UserInputType == Enum.UserInputType.MouseMovement) then move(input.Position.X) end
+			end)
+			connect(userInputService.InputEnded, function(input)
+				if input == touch or input.UserInputType == Enum.UserInputType.MouseButton1 then dragging, touch = false, nil end
+			end)
+		end
+		refresh = function()
+			title.Text = string.format("Legit WPM: %d–%d", Settings.legitMinWPM, Settings.legitMaxWPM)
+			for key, knob in pairs(knobs) do
+				knob.Position = UDim2.new((Settings[key] - Config.MinimumWPM) / (Config.MaximumWPM - Config.MinimumWPM), 0, 0.5, 0)
+			end
+		end
+		refresh()
+		return refresh
+	end)()
 	local resetSettingsButton = makeButton(settingsPanel, {
 		Name = "ResetSettings",
 		AnchorPoint = Vector2.new(0, 1),
@@ -3731,6 +3792,7 @@ zenith
 			controls.knob.Position = UDim2.fromOffset(enabled and 20 or 2, 2)
 			controls.knob.BackgroundColor3 = enabled and Config.Panel or Config.Secondary
 		end
+		if WordHelper.UpdateLegitRange then WordHelper.UpdateLegitRange() end
 		wpmValue.Text = tostring(Settings.wpm)
 		wpmMinus.TextColor3 = Settings.wpm <= Config.MinimumWPM and Config.Muted or Config.Secondary
 		wpmPlus.TextColor3 = Settings.wpm >= Config.MaximumWPM and Config.Muted or Config.Secondary
@@ -4199,6 +4261,23 @@ zenith
 				end
 			end
 		end
+		if Settings.enableDerivations then
+			local seen = {}
+			for _, word in ipairs(matches) do seen[word] = true end
+			for _, word in ipairs({
+				"yesterdayness", "selfness", "otherness", "suchness", "thusness",
+				"nowness", "thereness", "hereness", "thisness", "thatness",
+				"thingness", "nothingness", "somewhereness", "everydayness",
+				"unselfconsciousness", "unworldliness", "unlikelihood", "unknowability",
+				"ineffability", "indescribability", "inexpressibility", "untranslatability",
+			}) do
+				if not seen[word] and (not Settings.hideUsed or not used[word])
+					and ((containsMode and string.find(word, query, 1, true))
+						or (not containsMode and string.sub(word, 1, #query) == query)) then
+					matches[#matches + 1] = word
+				end
+			end
+		end
 		local totalMatches = #matches
 
 		-- Sort: Comunes = most frequent first; Largas = longest first; Cortas = shortest first.
@@ -4324,13 +4403,15 @@ zenith
 	end
 
 	local function applySettingChange(key)
+		if key == "legitAutoType" and Settings.legitAutoType then Settings.autoType = true end
+		if key == "autoType" and not Settings.autoType then Settings.legitAutoType = false end
 		updateSettingsControls()
 		if key == "autoType" and not Settings.autoType then
 			cancelAutomaticTyping(true)
 			setStatus("Auto Type desactivado", Config.Muted)
 		elseif key == "definitions" then
 			updateDefinitionLayout()
-		elseif key == "allResults" or key == "hideUsed" then
+		elseif key == "allResults" or key == "hideUsed" or key == "enableDerivations" then
 			scheduleRefresh()
 		elseif key == "autoDetect" then
 			cancelAutomaticTyping(true)
@@ -4370,6 +4451,7 @@ zenith
 		if self.destroyed then return end
 		open = open == true
 		if open and self.minimized then self:SetMinimized(false) end
+		if open then cancelAutomaticTyping(true) end
 		self.settingsOpen = open
 		settingsOverlay.Visible = open
 		if searchBox:IsFocused() then searchBox:ReleaseFocus() end
@@ -4842,15 +4924,13 @@ zenith
 	markUsed = function(word)
 		word = normalizeLetters(word)
 		if #word < 2 or WordHelper.usedWords[word] then return end
-		if not (WordHelper.wordSet and WordHelper.wordSet[word]) then
-			-- Keep early submissions until the full dictionary replaces the fallback.
-			WordHelper.pendingUsedWords[word] = true
-			return
-		end
+		-- A submitted rare word must not disappear merely because our dictionary
+		-- is incomplete. "Used" means observed submission, not server acceptance.
 		WordHelper.pendingUsedWords[word] = nil
 		WordHelper.usedWords[word] = true
 		WordHelper.usedCount = WordHelper.usedCount + 1
 		updateUsedChip()
+		scheduleRefresh()
 	end
 
 	local function matchParticipantKey(player)
@@ -5278,10 +5358,6 @@ zenith
 			WordHelper.manualCaptureUntil = 0
 		end
 
-		-- Last Letter's visible entry is authoritative, even for an empty word.
-		-- Do not append a hardware fallback after a visual update was already read.
-		if currentPlaceId == LAST_LETTER_PLACE_ID and WordHelper.ReadVisibleGameWord
-			and WordHelper.ReadVisibleGameWord() ~= nil then return end
 		local letter = LETTER_BY_KEYCODE[input.KeyCode]
 		local action = letter
 			or (input.KeyCode == Enum.KeyCode.Backspace and "back")
@@ -5303,6 +5379,8 @@ zenith
 		local inputEpoch = WordHelper.inputEpoch
 		WordHelper.lastTypingActivity = pressedAt
 		WordHelper.lastTypedAction = action
+		if currentPlaceId == LAST_LETTER_PLACE_ID and WordHelper.ReadVisibleGameWord
+			and WordHelper.ReadVisibleGameWord() ~= nil then return end
 		local knownOwnTurn = WordHelper.localTurn == true
 			and (currentPlaceId == WORD_BATTLE_PLACE_ID or currentPlaceId == LAST_LETTER_PLACE_ID)
 		if not gameProcessed and not knownOwnTurn then return end
@@ -5395,14 +5473,14 @@ zenith
 			if WordHelper.isAutoTyping or isRobloxMenuOpen() then return end
 			local focused = userInputService:GetFocusedTextBox()
 			if focused and not isGameTextBox(focused) then return end
-			if currentPlaceId == LAST_LETTER_PLACE_ID and WordHelper.ReadVisibleGameWord
-				and WordHelper.ReadVisibleGameWord() ~= nil then return end
 			WordHelper.suppressGeneratedUntil = 0
 			if currentPlaceId == WORD_BATTLE_PLACE_ID and WordHelper.localTurn ~= true then return end
 			local pressedAt = os.clock()
 			local inputEpoch = WordHelper.inputEpoch
 			WordHelper.lastTypingActivity = pressedAt
 			WordHelper.lastTypedAction = action
+			if currentPlaceId == LAST_LETTER_PLACE_ID and WordHelper.ReadVisibleGameWord
+				and WordHelper.ReadVisibleGameWord() ~= nil then return end
 			-- Exact remote/visual text wins, preventing duplicate letters even when
 			-- Activated is delivered just after the game's outgoing remote.
 			local fallbackDelay = currentPlaceId == WORD_BATTLE_PLACE_ID and 0.5 or 0.25
@@ -5537,6 +5615,8 @@ zenith
 		if not root then root = playerGui:FindFirstChild("CurrentWord", true) end
 		if not root or not guiObjectVisible(root, playerGui) then return nil end
 
+		local rootText = visibleText(root)
+		if rootText ~= "" then return rootText end
 		local letters, wholeWords = {}, {}
 		local candidates = { root }
 		local ok, descendants = pcall(function() return root:GetDescendants() end)
@@ -5564,9 +5644,9 @@ zenith
 		end
 		if #letters > 0 then
 			table.sort(letters, function(a, b)
+				if a.position.X ~= b.position.X then return a.position.X < b.position.X end
 				if a.order ~= b.order then return a.order < b.order end
-				if math.abs(a.position.Y - b.position.Y) > 3 then return a.position.Y < b.position.Y end
-				return a.position.X < b.position.X
+				return a.position.Y < b.position.Y
 			end)
 			local output = table.create(#letters)
 			for index, record in ipairs(letters) do output[index] = record.text end
@@ -5591,6 +5671,12 @@ zenith
 				WordHelper.passiveBuffer = ""
 				applyDetectedQuery("", "visual", true)
 			end
+			return
+		end
+		-- Require a stable second sample: GUI layout can briefly place new letters
+		-- at the origin while its layout/animation is still updating.
+		if word ~= WordHelper.visualCandidate then
+			WordHelper.visualCandidate = word
 			return
 		end
 		if word == WordHelper.lastVisualWord then return end
@@ -6037,7 +6123,8 @@ zenith
 		WordHelper.suppressGeneratedUntil = os.clock() + 0.12
 		WordHelper.lastTypedAction = action
 		local button = WordHelper.keyboardByAction[action]
-		if WordHelper.MappedButtonUsable(button) then
+		if WordHelper.MappedButtonUsable(button)
+			and not (currentPlaceId == LAST_LETTER_PLACE_ID and virtualInputManager) then
 			-- Invoke the exact game key first when the executor supports signals. A
 			-- coordinate click can otherwise land on Zenith when its window overlaps
 			-- the mobile keyboard even though the mapped game button is underneath.
@@ -6081,6 +6168,11 @@ zenith
 		return false
 	end
 
+	WordHelper.TypingInterval = function()
+		local wpm = Settings.legitAutoType and math.random(Settings.legitMinWPM, Settings.legitMaxWPM) or Settings.wpm
+		return math.clamp(60 / (wpm * 5), 0.02, 0.4), wpm
+	end
+
 	WordHelper.BeginAutoTyping = function(actions, sender, word, method, validator)
 		WordHelper.autoTypeGeneration = WordHelper.autoTypeGeneration + 1
 		local generation = WordHelper.autoTypeGeneration
@@ -6094,14 +6186,16 @@ zenith
 					completed = false
 					break
 				end
+				local sentAt = os.clock()
 				local sentOk, sent = pcall(sender, action)
 				if not sentOk or sent ~= true then
 					completed = false
 					break
 				end
 				if index < #actions then
-					local secondsPerCharacter = math.clamp(60 / (Settings.wpm * 5), 0.02, 0.4)
-					task.wait(secondsPerCharacter)
+					local secondsPerCharacter = WordHelper.TypingInterval()
+					local remaining = secondsPerCharacter - (os.clock() - sentAt)
+					if remaining > 0 then task.wait(remaining) end
 				end
 			end
 			if WordHelper.autoTypeGeneration == generation then
